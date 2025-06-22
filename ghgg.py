@@ -1,10 +1,10 @@
 # Configure Streamlit page FIRST - before any other Streamlit commands
 import streamlit as st
 st.set_page_config(
-    page_title="🔥 Enhanced LangGraph + Snowflake Cortex Health Analysis + Interactive Chatbot",
-    page_icon="🔥",
+    page_title="Health Agent",
+    page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Now import other modules
@@ -298,61 +298,53 @@ def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
 # Initialize session state
 initialize_session_state()
 
-# Main Title with Enhanced LangGraph + Snowflake + Chatbot branding
-st.markdown('<h1 class="main-header">🔥 Enhanced LangGraph + Snowflake Cortex + Interactive Chatbot</h1>', unsafe_allow_html=True)
-st.markdown('<div class="langgraph-badge">🚀 Powered by Enhanced LangGraph v3.0 + Snowflake Cortex API</div>', unsafe_allow_html=True)
-st.markdown('<div class="snowflake-badge">❄️ Snowflake Cortex: llama3.1-70b</div>', unsafe_allow_html=True)
-st.markdown('<div class="chatbot-badge">💬 Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
-st.markdown('<div class="extraction-badge">🏥 Medical ICD-10 Extraction</div>', unsafe_allow_html=True)
-st.markdown('<div class="extraction-badge">💊 Pharmacy NDC Extraction</div>', unsafe_allow_html=True)
-st.markdown("**Advanced health analysis with Snowflake Cortex AI, comprehensive medical data extraction, and interactive chatbot for medical data Q&A**")
+# Main Title with Health Agent branding
+st.markdown('<h1 class="main-header">🏥 Health Agent</h1>', unsafe_allow_html=True)
+st.markdown("**Advanced health analysis with comprehensive medical data extraction and interactive chatbot for medical data Q&A**")
 
 # Display import status AFTER page config
 if AGENT_AVAILABLE:
-    st.success("✅ Enhanced LangGraph Health Analysis Agent with Interactive Chatbot imported successfully!")
+    st.success("✅ Health Agent imported successfully!")
 else:
-    st.error(f"❌ Failed to import Enhanced LangGraph Health Analysis Agent: {import_error}")
+    st.error(f"❌ Failed to import Health Agent: {import_error}")
     
-    with st.expander("🔧 Enhanced LangGraph + Snowflake + Chatbot Installation Guide"):
+    with st.expander("🔧 Health Agent Installation Guide"):
         st.markdown("""
-        **Install Enhanced LangGraph Requirements:**
+        **Install Health Agent Requirements:**
         ```bash
         pip install langgraph langchain-core streamlit requests urllib3 pandas
         ```
         
         **Required Files:**
-        - `langgraph_health_agent_proper.py` (the Enhanced LangGraph agent with Snowflake Cortex + Chatbot)
+        - `langgraph_health_agent_proper.py` (the Health Agent)
         - `streamlit_langgraph_ui.py` (this file)
         
-        **Enhanced LangGraph + Snowflake + Chatbot Features v3.0:**
+        **Health Agent Features:**
         - ✅ State management and persistence
         - ✅ Conditional workflow routing  
         - ✅ Automatic retry mechanisms
         - ✅ Error handling and recovery
         - ✅ Checkpointing for reliability
-        - 🆕 **Medical field extraction (hlth_srvc_cd, diag_1_50_cd)**
-        - 🆕 **Pharmacy field extraction (Ndc, lbl_nm)**
-        - 🆕 **Enhanced entity detection with ICD-10 codes**
-        - 🆕 **Snowflake Cortex API integration**
-        - 🆕 **llama3.1-70b model for health analysis**
-        - 🔥 **Interactive chatbot with medical data context**
+        - ✅ **Medical field extraction (hlth_srvc_cd, diag_1_50_cd)**
+        - ✅ **Pharmacy field extraction (Ndc, lbl_nm)**
+        - ✅ **Enhanced entity detection with ICD-10 codes**
+        - ✅ **Interactive chatbot with medical data context**
         """)
     st.stop()
 
 # Sidebar Configuration
 with st.sidebar:
-    st.header("⚙️ Enhanced LangGraph + Snowflake + Chatbot Configuration")
+    st.header("⚙️ Health Agent Configuration")
     
-    # Enhanced LangGraph + Snowflake + Chatbot Status
-    st.markdown("### 🔥 System Status")
-    st.markdown("✅ **LangGraph v3.0 Enabled**")
-    st.markdown("❄️ **Snowflake Cortex Enabled**")
-    st.markdown("💬 **Interactive Chatbot Enabled**")
+    # Health Agent Status
+    st.markdown("### 📊 System Status")
+    st.markdown("✅ **Health Agent Enabled**")
     st.markdown("🔄 **State Management:** Active")
     st.markdown("💾 **Checkpointing:** Enabled")
     st.markdown("🔁 **Retry Logic:** Configured")
     st.markdown("🏥 **Medical Extraction:** Active")
     st.markdown("💊 **Pharmacy Extraction:** Active")
+    st.markdown("💬 **Interactive Chatbot:** Ready")
     
     st.markdown("---")
     
@@ -360,11 +352,11 @@ with st.sidebar:
     st.subheader("🔌 API Settings")
     fastapi_url = st.text_input("FastAPI URL", value="http://localhost:8001")
     
-    # Snowflake Cortex API Configuration - Showing configured values
-    st.subheader("❄️ Snowflake Cortex API Settings")
-    st.info("💡 **Snowflake Cortex API is pre-configured.** All settings are optimized for health analysis and chatbot functionality.")
+    # API Configuration - Showing configured values
+    st.subheader("🔧 API Settings")
+    st.info("💡 **API settings are pre-configured.** All settings are optimized for health analysis.")
     
-    # Show current Snowflake configuration (read-only)
+    # Show current configuration (read-only)
     try:
         current_config = Config()
         st.text_input("API URL", value=current_config.api_url[:50] + "...", disabled=True)
@@ -375,13 +367,13 @@ with st.sidebar:
         st.text_area("Chatbot System Message", value=current_config.chatbot_sys_msg, disabled=True, height=80)
         
         # Only allow basic settings changes
-        st.markdown("**🔧 FastAPI URL can be modified. Snowflake Cortex settings are pre-configured.**")
+        st.markdown("**🔧 FastAPI URL can be modified. API settings are pre-configured.**")
     except Exception as e:
-        st.error(f"❌ Error loading Snowflake configuration: {e}")
+        st.error(f"❌ Error loading configuration: {e}")
         st.error("💡 There might be an issue with the Config class.")
 
-    # Enhanced LangGraph Settings
-    st.subheader("🔄 Enhanced LangGraph Settings")
+    # Settings
+    st.subheader("🔄 Agent Settings")
     max_retries = st.slider("Max Retries (per node)", 1, 5, 3)
     timeout = st.slider("Timeout (seconds)", 10, 60, 30)
     
@@ -395,7 +387,7 @@ with st.sidebar:
             )
             st.session_state.config = config
             st.session_state.agent = None  # Force reinitialization
-            st.success("✅ Configuration updated! Snowflake Cortex settings remain optimized.")
+            st.success("✅ Configuration updated! API settings remain optimized.")
             st.info("🔄 Agent will be reinitialized on next analysis")
             st.rerun()
         except Exception as e:
@@ -420,31 +412,31 @@ with st.sidebar:
         st.write(f"**Max Retries:** {current_config.max_retries}")
         st.write(f"**Timeout:** {current_config.timeout}")
         
-        # Show Snowflake Cortex settings
-        st.markdown("**❄️ Snowflake Cortex Settings:**")
+        # Show API settings
+        st.markdown("**🔧 API Settings:**")
         st.write(f"**API URL:** {current_config.api_url[:30]}...")
         st.write(f"**Model:** {current_config.model}")
         st.write(f"**App ID:** {current_config.app_id}")
         st.write(f"**Application Code:** {current_config.aplctn_cd}")
         
-        st.success("✅ Snowflake Cortex API is configured and ready!")
+        st.success("✅ API is configured and ready!")
         st.success("💬 Interactive chatbot is ready!")
         
-        # Test Snowflake Cortex Connection
-        if st.button("🧪 Test Snowflake Cortex Connection"):
+        # Test API Connection
+        if st.button("🧪 Test API Connection"):
             try:
                 test_config = Config()
                 test_agent = HealthAnalysisAgent(test_config)
                 
-                with st.spinner("Testing Snowflake Cortex API connection..."):
+                with st.spinner("Testing API connection..."):
                     test_result = test_agent.test_llm_connection()
                 
                 if test_result["success"]:
-                    st.success("✅ Snowflake Cortex API connection successful!")
+                    st.success("✅ API connection successful!")
                     st.info(f"📝 Response: {test_result['response']}")
                     st.info(f"🤖 Model: {test_result['model']}")
                 else:
-                    st.error("❌ Snowflake Cortex API connection failed!")
+                    st.error("❌ API connection failed!")
                     st.error(f"💥 Error: {test_result['error']}")
             except Exception as e:
                 st.error(f"❌ Test failed: {str(e)}")
@@ -456,8 +448,8 @@ with st.sidebar:
 # System status moved to sidebar only
 
 # Patient Input Form
-st.markdown('<div class="step-header">👤 Patient Information Input (→ Enhanced LangGraph + Snowflake Cortex + Chatbot)</div>', unsafe_allow_html=True)
-st.info("💡 Enter patient information below. This data will be processed through the Enhanced LangGraph workflow with Snowflake Cortex AI analysis and will be available for interactive chatbot queries.")
+st.markdown('<div class="step-header">👤 Patient Information Input</div>', unsafe_allow_html=True)
+st.info("💡 Enter patient information below. This data will be processed through the Health Agent workflow with AI analysis and will be available for interactive chatbot queries.")
 
 # Get today's date for default
 today_date = datetime.now().date()
@@ -501,14 +493,14 @@ with st.form("patient_input_form"):
     
     # Submit button
     submitted = st.form_submit_button(
-        "🔥 Execute Enhanced LangGraph + Snowflake Cortex + Chatbot Analysis", 
+        "🚀 Execute Health Agent Analysis", 
         use_container_width=True,
         disabled=st.session_state.analysis_running
     )
 
 # Analysis Status Section
 if st.session_state.analysis_running:
-    st.markdown('<div class="info-box">🔄 Enhanced LangGraph + Snowflake Cortex + Chatbot workflow executing... Please wait.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="info-box">🔄 Health Agent workflow executing... Please wait.</div>', unsafe_allow_html=True)
 
 # Run Enhanced LangGraph Analysis
 if submitted and not st.session_state.analysis_running:
@@ -525,8 +517,8 @@ if submitted and not st.session_state.analysis_running:
     # Calculate age
     calculated_age = calculate_age(date_of_birth)
     
-    # Display patient data being sent to Enhanced LangGraph
-    st.info(f"📤 Sending patient data to Enhanced LangGraph + Snowflake Cortex + Chatbot: {patient_data['first_name']} {patient_data['last_name']} (Age: {calculated_age})")
+    # Display patient data being sent to Health Agent
+    st.info(f"📤 Sending patient data to Health Agent: {patient_data['first_name']} {patient_data['last_name']} (Age: {calculated_age})")
     
     # Validate patient data
     is_valid, validation_errors = validate_patient_data(patient_data)
@@ -536,78 +528,78 @@ if submitted and not st.session_state.analysis_running:
         for error in validation_errors:
             st.error(f"• {error}")
     else:
-        # Initialize Enhanced LangGraph agent
+        # Initialize Health Agent
         if st.session_state.agent is None:
             try:
                 config = st.session_state.config or Config()
                 st.session_state.agent = HealthAnalysisAgent(config)
-                st.success(f"🔥 Enhanced LangGraph agent initialized with Snowflake Cortex + Interactive Chatbot")
-                st.info(f"❄️ Snowflake Model: {config.model}")
+                st.success(f"✅ Health Agent initialized")
+                st.info(f"🤖 Model: {config.model}")
                 st.info(f"🔑 App ID: {config.app_id}")
                 st.info(f"💬 Chatbot: Interactive mode ready")
             except Exception as e:
-                st.error(f"❌ Failed to initialize Enhanced LangGraph agent: {str(e)}")
+                st.error(f"❌ Failed to initialize Health Agent: {str(e)}")
                 st.stop()
         
         st.session_state.analysis_running = True
         
-        # Enhanced progress tracking for 7-node workflow
+        # Progress tracking for 7-node workflow
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Run Enhanced LangGraph analysis
-        with st.spinner("🔥 Executing Enhanced LangGraph + Snowflake Cortex + Chatbot workflow..."):
+        # Run Health Agent analysis
+        with st.spinner("🚀 Executing Health Agent workflow..."):
             try:
                 # Update progress
-                status_text.text("🚀 Initializing Enhanced LangGraph state machine...")
+                status_text.text("🚀 Initializing Health Agent state machine...")
                 progress_bar.progress(5)
                 time.sleep(0.5)
                 
-                status_text.text("📊 Node 1: Fetching API data...")
+                status_text.text("📊 Node 1: Data Retrieval...")
                 progress_bar.progress(15)
                 time.sleep(0.5)
                 
-                status_text.text("🔒 Node 2: Deidentifying data...")
+                status_text.text("🔒 Node 2: Data Deidentification...")
                 progress_bar.progress(25)
                 time.sleep(0.5)
                 
-                status_text.text("🔍 Node 3: Extracting medical & pharmacy fields...")
+                status_text.text("🔍 Node 3: Entity Extraction...")
                 progress_bar.progress(35)
                 time.sleep(0.5)
                 
-                status_text.text("🎯 Node 4: Enhanced entity extraction...")
+                status_text.text("🎯 Node 4: Enhanced Entity Extraction...")
                 progress_bar.progress(50)
                 time.sleep(0.5)
                 
-                status_text.text("📈 Node 5: Snowflake Cortex health trajectory analysis...")
+                status_text.text("📈 Node 5: Health Trajectory...")
                 progress_bar.progress(65)
                 time.sleep(0.5)
                 
-                status_text.text("📋 Node 6: Snowflake Cortex summary generation...")
+                status_text.text("📋 Node 6: Summary Generation...")
                 progress_bar.progress(80)
                 time.sleep(0.5)
                 
-                status_text.text("💬 Node 7: Initializing interactive chatbot...")
+                status_text.text("💬 Node 7: Chatbot Initialization...")
                 progress_bar.progress(95)
                 
-                # Execute the Enhanced LangGraph workflow
+                # Execute the Health Agent workflow
                 results = st.session_state.agent.run_analysis(patient_data)
                 
                 # Update progress based on completion
                 if results.get("success", False):
                     progress_bar.progress(100)
-                    status_text.text("✅ Enhanced LangGraph + Snowflake Cortex + Chatbot workflow completed successfully!")
+                    status_text.text("✅ Health Agent workflow completed successfully!")
                     
                     st.session_state.analysis_results = results
                     # Store chatbot context for interactive use
                     st.session_state.chatbot_context = results.get("chatbot_context", {})
-                    st.markdown('<div class="success-box">🔥 Enhanced LangGraph + Snowflake Cortex + Interactive Chatbot health analysis completed successfully!</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="success-box">✅ Health Agent analysis completed successfully!</div>', unsafe_allow_html=True)
                     
                     if results.get("chatbot_ready", False):
                         st.markdown('<div class="chatbot-box">💬 Interactive chatbot is ready! You can now ask questions about the medical data.</div>', unsafe_allow_html=True)
                 else:
                     progress_bar.progress(60)
-                    status_text.text("⚠️ Enhanced LangGraph workflow completed with errors")
+                    status_text.text("⚠️ Health Agent workflow completed with errors")
                     
                     st.session_state.analysis_results = results
                     st.warning("⚠️ Analysis completed but with some errors. Check results below.")
@@ -620,8 +612,8 @@ if submitted and not st.session_state.analysis_running:
                 
             except Exception as e:
                 progress_bar.progress(0)
-                status_text.text("❌ Enhanced LangGraph workflow failed")
-                st.error(f"❌ Error in Enhanced LangGraph execution: {str(e)}")
+                status_text.text("❌ Health Agent workflow failed")
+                st.error(f"❌ Error in Health Agent execution: {str(e)}")
                 
                 st.session_state.analysis_results = {
                     "success": False,
@@ -635,12 +627,12 @@ if submitted and not st.session_state.analysis_running:
             finally:
                 st.session_state.analysis_running = False
 
-# Display Enhanced LangGraph Results
+# Display Health Agent Results
 if st.session_state.analysis_results:
     results = st.session_state.analysis_results
     
-    # Enhanced Results Overview
-    st.markdown('<div class="step-header">🔥 Enhanced LangGraph + Snowflake Cortex + Chatbot Analysis Results</div>', unsafe_allow_html=True)
+    # Health Agent Results Overview
+    st.markdown('<div class="step-header">📊 Health Agent Analysis Results</div>', unsafe_allow_html=True)
     
     # Show patient info
     processed_patient = safe_get(results, 'patient_data', {})
@@ -727,7 +719,7 @@ if st.session_state.analysis_results:
     # Step 2: Deidentified Data
     deidentified_data = safe_get(results, 'deidentified_data', {})
     if deidentified_data:
-        st.markdown('<div class="step-header">🔒 LangGraph Node 2: Data Deidentification</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-header">🔒 Node 2: Data Deidentification</div>', unsafe_allow_html=True)
         
         deident_tabs = st.tabs(["🏥 Medical Deidentified", "💊 Pharmacy Deidentified"])
         
@@ -786,7 +778,7 @@ if st.session_state.analysis_results:
     # Step 3: Structured Extractions
     structured_extractions = safe_get(results, 'structured_extractions', {})
     if structured_extractions:
-        st.markdown('<div class="step-header">🔍 LangGraph Node 3: Structured Data Extraction</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-header">🔍 Node 3: Entity Extraction</div>', unsafe_allow_html=True)
         
         extraction_tabs = st.tabs(["🏥 Medical Extraction", "💊 Pharmacy Extraction"])
         
@@ -896,7 +888,7 @@ if st.session_state.analysis_results:
     # Step 4: Enhanced Entity Extraction
     entity_extraction = safe_get(results, 'entity_extraction', {})
     if entity_extraction:
-        st.markdown('<div class="step-header">🎯 LangGraph Node 4: Enhanced Entity Extraction</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-header">🎯 Node 4: Enhanced Entity Extraction</div>', unsafe_allow_html=True)
         
         # Enhanced entity display with cards
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -967,43 +959,43 @@ if st.session_state.analysis_results:
             mime="application/json"
         )
 
-    # Step 5: Snowflake Cortex Health Trajectory Analysis
+    # Step 5: Health Trajectory Analysis
     health_trajectory = safe_get(results, 'health_trajectory', '')
     if health_trajectory:
-        st.markdown('<div class="step-header">📈 LangGraph Node 5: Snowflake Cortex Health Trajectory Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-header">📈 Node 5: Health Trajectory</div>', unsafe_allow_html=True)
         
-        st.markdown("**❄️ Snowflake Cortex llama3.1-70b Analysis (with Structured Extractions):**")
+        st.markdown("**🤖 AI Analysis (with Structured Extractions):**")
         st.markdown(health_trajectory)
         
         st.download_button(
-            "📄 Download Snowflake Health Trajectory",
+            "📄 Download Health Trajectory",
             health_trajectory,
-            f"snowflake_health_trajectory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            f"health_trajectory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             mime="text/plain"
         )
     else:
-        st.warning("Snowflake Cortex health trajectory analysis not available")
+        st.warning("Health trajectory analysis not available")
 
-    # Step 6: Snowflake Cortex Final Summary
+    # Step 6: Final Summary
     final_summary = safe_get(results, 'final_summary', '')
     if final_summary:
-        st.markdown('<div class="step-header">📋 LangGraph Node 6: Snowflake Cortex Final Health Summary</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-header">📋 Node 6: Summary Generation</div>', unsafe_allow_html=True)
         
-        st.markdown("**❄️ Snowflake Cortex Executive Summary (with Medical & Pharmacy Extractions):**")
+        st.markdown("**🤖 AI Executive Summary (with Medical & Pharmacy Extractions):**")
         st.markdown(final_summary)
         
         st.download_button(
-            "📄 Download Snowflake Final Summary",
+            "📄 Download Final Summary",
             final_summary,
-            f"snowflake_final_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            f"final_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             mime="text/plain"
         )
     else:
-        st.warning("Snowflake Cortex final summary not available")
+        st.warning("Final summary not available")
 
     # Node 7: Interactive Chatbot Section (moved to after Node 6)
     if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-        st.markdown('<div class="chatbot-header">💬 LangGraph Node 7: Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
+        st.markdown('<div class="chatbot-header">💬 Node 7: Chatbot</div>', unsafe_allow_html=True)
         
         st.markdown('<div class="chatbot-box">🤖 Ask questions about the patient\'s medical data, analysis results, or request specific insights based on the deidentified records.</div>', unsafe_allow_html=True)
         
@@ -1098,24 +1090,24 @@ if st.session_state.analysis_results:
                     st.error(f"❌ Chatbot error: {str(e)}")
     
     elif not results.get("chatbot_ready", False):
-        st.markdown('<div class="chatbot-header">💬 LangGraph Node 7: Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
+        st.markdown('<div class="chatbot-header">💬 Node 7: Chatbot</div>', unsafe_allow_html=True)
         st.warning("⚠️ Chatbot initialization failed. Please check the workflow execution above.")
 
-    # Complete Enhanced LangGraph + Snowflake + Chatbot Report Download
-    st.markdown('<div class="step-header">💾 Complete Enhanced LangGraph + Snowflake + Chatbot Analysis Report</div>', unsafe_allow_html=True)
+    # Complete Health Agent Analysis Report Download
+    st.markdown('<div class="step-header">💾 Complete Health Agent Analysis Report</div>', unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Complete enhanced JSON report
+        # Complete JSON report
         complete_report = {
-            "enhanced_langgraph_snowflake_chatbot_metadata": {
+            "health_agent_metadata": {
                 "patient_info": processed_patient,
                 "timestamp": datetime.now().isoformat(),
                 "success": results.get("success", False),
                 "nodes_completed": results.get("processing_steps_completed", 0),
-                "workflow_engine": "Enhanced LangGraph v3.0",
-                "ai_engine": "Snowflake Cortex",
+                "workflow_engine": "Health Agent",
+                "ai_engine": "AI Analysis",
                 "ai_model": "llama3.1-70b",
                 "chatbot_enabled": True,
                 "chatbot_ready": results.get("chatbot_ready", False),
@@ -1137,15 +1129,15 @@ if st.session_state.analysis_results:
         
         patient_last_name = processed_patient.get('last_name', 'unknown')
         st.download_button(
-            "📊 Download Complete Enhanced + Snowflake + Chatbot Report",
+            "📊 Download Complete Health Agent Report",
             safe_json_dumps(complete_report),
-            f"enhanced_snowflake_chatbot_analysis_{patient_last_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            f"health_agent_analysis_{patient_last_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json",
             use_container_width=True
         )
     
     with col2:
-        # Enhanced text report with chatbot info
+        # Text report with chatbot info
         patient_name = f"{processed_patient.get('first_name', 'Unknown')} {processed_patient.get('last_name', 'Unknown')}"
         
         # Get extraction counts
@@ -1155,14 +1147,14 @@ if st.session_state.analysis_results:
         pharmacy_records = len(safe_get(pharmacy_extraction, 'ndc_records', []))
         
         text_report = f"""
-ENHANCED LANGGRAPH + SNOWFLAKE CORTEX + INTERACTIVE CHATBOT HEALTH ANALYSIS REPORT v3.0
-=========================================================================================
+HEALTH AGENT ANALYSIS REPORT
+============================
 Patient: {patient_name}
 Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 Status: {'Success' if results.get('success', False) else 'Failed'}
 Nodes Completed: {results.get('processing_steps_completed', 0)}/7
-Workflow Engine: Enhanced LangGraph v3.0
-AI Engine: Snowflake Cortex
+Workflow Engine: Health Agent
+AI Engine: AI Analysis
 AI Model: llama3.1-70b
 Interactive Chatbot: {'Ready' if results.get('chatbot_ready', False) else 'Failed'}
 Enhancement Version: {results.get('enhancement_version', 'v3.0')}
@@ -1178,12 +1170,12 @@ ENHANCED ENTITY EXTRACTION RESULTS:
 ===================================
 {safe_json_dumps(entity_extraction)}
 
-SNOWFLAKE CORTEX HEALTH TRAJECTORY ANALYSIS:
-============================================
+HEALTH TRAJECTORY ANALYSIS:
+===========================
 {health_trajectory}
 
-SNOWFLAKE CORTEX FINAL SUMMARY:
-===============================
+FINAL SUMMARY:
+==============
 {final_summary}
 
 INTERACTIVE CHATBOT SESSION:
@@ -1195,21 +1187,21 @@ CHAT HISTORY:
 =============
 {chr(10).join([f"{msg['role'].upper()}: {msg['content']}" for msg in st.session_state.chatbot_messages])}
 
-ENHANCED LANGGRAPH + SNOWFLAKE + CHATBOT ERRORS (if any):
-=========================================================
+HEALTH AGENT ERRORS (if any):
+=============================
 {chr(10).join(safe_get(results, 'errors', []))}
         """
         
         st.download_button(
-            "📝 Download Enhanced + Snowflake + Chatbot Text Report",
+            "📝 Download Health Agent Text Report",
             text_report,
-            f"enhanced_snowflake_chatbot_analysis_{patient_last_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            f"health_agent_analysis_{patient_last_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             mime="text/plain",
             use_container_width=True
         )
     
     with col3:
-        # Enhanced CSV summary with chatbot metrics
+        # CSV summary with chatbot metrics
         try:
             # Get extraction counts
             medical_extraction = safe_get(structured_extractions, 'medical', {})
@@ -1226,8 +1218,8 @@ ENHANCED LANGGRAPH + SNOWFLAKE + CHATBOT ERRORS (if any):
                 ],
                 "Value": [
                     safe_str("Success" if results.get("success", False) else "Failed"),
-                    safe_str("Enhanced LangGraph v3.0"),
-                    safe_str("Snowflake Cortex"),
+                    safe_str("Health Agent"),
+                    safe_str("AI Analysis"),
                     safe_str("llama3.1-70b"),
                     safe_str(results.get('enhancement_version', 'v3.0')),
                     safe_str(f"{results.get('processing_steps_completed', 0)}/7"),
@@ -1250,31 +1242,31 @@ ENHANCED LANGGRAPH + SNOWFLAKE + CHATBOT ERRORS (if any):
             csv_string = csv_df.to_csv(index=False)
             
             st.download_button(
-                "📊 Download Enhanced + Snowflake + Chatbot CSV",
+                "📊 Download Health Agent CSV",
                 csv_string,
-                f"enhanced_snowflake_chatbot_summary_{patient_last_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                f"health_agent_summary_{patient_last_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
         except Exception as e:
-            st.error(f"Error generating enhanced CSV: {str(e)}")
+            st.error(f"Error generating CSV: {str(e)}")
 
-# Enhanced Footer
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    🔥 <strong>Enhanced LangGraph + Snowflake Cortex + Interactive Chatbot Health Analysis Dashboard v3.0</strong><br>
-    Powered by Enhanced LangGraph State Machines + Medical/Pharmacy Extraction + Snowflake Cortex llama3.1-70b + Interactive Medical Data Chatbot<br>
-    🆕 <strong>NEW:</strong> Medical ICD-10 Code Extraction | Pharmacy NDC Data Extraction | Snowflake Cortex AI Analysis | Interactive Medical Data Q&A Chatbot<br>
+    🏥 <strong>Health Agent Dashboard</strong><br>
+    Powered by Advanced AI with Medical/Pharmacy Extraction and Interactive Medical Data Chatbot<br>
+    ✅ <strong>Features:</strong> Medical ICD-10 Code Extraction | Pharmacy NDC Data Extraction | AI Analysis | Interactive Medical Data Q&A Chatbot<br>
     ⚠️ <em>This analysis is for informational purposes only and should not replace professional medical advice.</em>
 </div>
 """, unsafe_allow_html=True)
 
-# Enhanced Debug information for LangGraph + Snowflake + Chatbot
-if st.sidebar.checkbox("🐛 Show Enhanced Debug Info"):
-    st.sidebar.markdown("### 🔥 Enhanced LangGraph + Snowflake + Chatbot Debug v3.0")
+# Debug information in sidebar
+if st.sidebar.checkbox("🐛 Show Debug Info"):
+    st.sidebar.markdown("### 🔧 Health Agent Debug")
     st.sidebar.write("Agent Available:", AGENT_AVAILABLE)
-    st.sidebar.write("Enhanced Agent Initialized:", st.session_state.agent is not None)
+    st.sidebar.write("Agent Initialized:", st.session_state.agent is not None)
     st.sidebar.write("Current Date:", today_date)
     
     # Configuration Debug
@@ -1287,8 +1279,8 @@ if st.sidebar.checkbox("🐛 Show Enhanced Debug Info"):
     else:
         st.sidebar.write("Custom Config:", "❌ No (using defaults)")
     
-    # Snowflake Cortex Debug
-    st.sidebar.markdown("**❄️ Snowflake Cortex Settings:**")
+    # API Debug
+    st.sidebar.markdown("**🔧 API Settings:**")
     try:
         default_config = Config()
         st.sidebar.write("API URL:", default_config.api_url[:40] + "...")
@@ -1316,7 +1308,7 @@ if st.sidebar.checkbox("🐛 Show Enhanced Debug Info"):
         st.sidebar.markdown("**Analysis Results:**")
         st.sidebar.write("Analysis Success:", st.session_state.analysis_results.get("success"))
         st.sidebar.write("Nodes Completed:", f"{st.session_state.analysis_results.get('processing_steps_completed', 0)}/7")
-        st.sidebar.write("Enhanced LangGraph Used:", st.session_state.analysis_results.get("langgraph_used"))
+        st.sidebar.write("Health Agent Used:", st.session_state.analysis_results.get("langgraph_used"))
         st.sidebar.write("Enhancement Version:", st.session_state.analysis_results.get("enhancement_version", "v1.0"))
         st.sidebar.write("Chatbot Ready:", st.session_state.analysis_results.get("chatbot_ready", False))
         
@@ -1328,18 +1320,18 @@ if st.sidebar.checkbox("🐛 Show Enhanced Debug Info"):
             st.sidebar.write("Medical Extractions:", medical_count)
             st.sidebar.write("Pharmacy Extractions:", pharmacy_count)
         
-        # Enhanced node status in sidebar
+        # Node status in sidebar
         step_status = st.session_state.analysis_results.get("step_status", {})
         if step_status:
             st.sidebar.markdown("**🔄 Node Execution Status:**")
             nodes = [
-                ("fetch_api_data", "📊 API Data Fetch"),
+                ("fetch_api_data", "📊 Data Retrieval"),
                 ("deidentify_data", "🔒 Data Deidentification"),
-                ("extract_medical_pharmacy_data", "🔍 Data Extraction"),
-                ("extract_entities", "🎯 Entity Extraction"),
-                ("analyze_trajectory", "📈 Snowflake Analysis"),
+                ("extract_medical_pharmacy_data", "🔍 Entity Extraction"),
+                ("extract_entities", "🎯 Enhanced Entity Extraction"),
+                ("analyze_trajectory", "📈 Health Trajectory"),
                 ("generate_summary", "📋 Summary Generation"),
-                ("initialize_chatbot", "💬 Interactive Chatbot")
+                ("initialize_chatbot", "💬 Chatbot")
             ]
             
             for node_key, node_name in nodes:
