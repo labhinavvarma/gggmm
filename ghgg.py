@@ -453,106 +453,7 @@ with st.sidebar:
         st.error(f"❌ Configuration error: {e}")
         st.code(f"Error details: {str(e)}")
 
-# Enhanced LangGraph Workflow Visualization (7 nodes including chatbot)
-st.markdown('<div class="step-header">🔄 Enhanced LangGraph Workflow (7 Nodes + Snowflake Cortex + Interactive Chatbot)</div>', unsafe_allow_html=True)
-
-# Create 7 columns for the 7 nodes
-col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-
-with col1:
-    st.markdown("""
-    <div class="langgraph-node">
-        <h4>📊 Node 1</h4>
-        <p><strong>API Data Fetch</strong></p>
-        <small>MCID, Medical, Pharmacy</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown("""
-    <div class="langgraph-node">
-        <h4>🔒 Node 2</h4>
-        <p><strong>Data Deidentification</strong></p>
-        <small>PII Removal & Standardization</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown("""
-    <div class="extraction-node">
-        <h4>🔍 Node 3</h4>
-        <p><strong>Data Extraction</strong></p>
-        <small>Medical & Pharmacy Fields</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col4:
-    st.markdown("""
-    <div class="langgraph-node">
-        <h4>🎯 Node 4</h4>
-        <p><strong>Entity Extraction</strong></p>
-        <small>Enhanced Health Analysis</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col5:
-    st.markdown("""
-    <div class="langgraph-node">
-        <h4>📈 Node 5</h4>
-        <p><strong>Snowflake Analysis</strong></p>
-        <small>❄️ llama3.1-70b</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col6:
-    st.markdown("""
-    <div class="langgraph-node">
-        <h4>📋 Node 6</h4>
-        <p><strong>Summary Generation</strong></p>
-        <small>❄️ Cortex Summary</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col7:
-    st.markdown("""
-    <div class="chatbot-node">
-        <h4>💬 Node 7</h4>
-        <p><strong>Interactive Chatbot</strong></p>
-        <small>🤖 Medical Data Q&A</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-# Enhanced System Status (updated to 7 nodes)
-st.subheader("📊 Enhanced System Status")
-col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-
-with col1:
-    agent_status = "🔥 Ready" if st.session_state.agent else "⚠️ Not Initialized"
-    st.metric("LangGraph Agent", agent_status)
-
-with col2:
-    config_status = "✅ Custom" if st.session_state.config else "⚠️ Default"
-    st.metric("Configuration", config_status)
-
-with col3:
-    import_status = "✅ Success" if AGENT_AVAILABLE else "❌ Failed"
-    st.metric("Agent Import", import_status)
-
-with col4:
-    workflow_status = "🔄 7-Node Ready" if AGENT_AVAILABLE else "❌ Unavailable"
-    st.metric("Workflow Engine", workflow_status)
-
-with col5:
-    extraction_status = "🆕 Active" if AGENT_AVAILABLE else "❌ Unavailable"
-    st.metric("Data Extraction", extraction_status)
-
-with col6:
-    snowflake_status = "❄️ Ready" if AGENT_AVAILABLE else "❌ Unavailable"
-    st.metric("Snowflake Cortex", snowflake_status)
-
-with col7:
-    chatbot_status = "💬 Ready" if AGENT_AVAILABLE else "❌ Unavailable"
-    st.metric("Interactive Chatbot", chatbot_status)
+# System status moved to sidebar only
 
 # Patient Input Form
 st.markdown('<div class="step-header">👤 Patient Information Input (→ Enhanced LangGraph + Snowflake Cortex + Chatbot)</div>', unsafe_allow_html=True)
@@ -741,11 +642,6 @@ if st.session_state.analysis_results:
     # Enhanced Results Overview
     st.markdown('<div class="step-header">🔥 Enhanced LangGraph + Snowflake Cortex + Chatbot Analysis Results</div>', unsafe_allow_html=True)
     
-    # Show enhancement version
-    enhancement_version = results.get("enhancement_version", "v1.0")
-    if enhancement_version:
-        st.markdown(f'<div class="snowflake-badge">📊 Analysis Version: {enhancement_version}</div>', unsafe_allow_html=True)
-    
     # Show patient info
     processed_patient = safe_get(results, 'patient_data', {})
     if processed_patient:
@@ -760,69 +656,6 @@ if st.session_state.analysis_results:
         
         age_display = f" (Age: {patient_age})" if patient_age is not None else ""
         st.info(f"📋 Enhanced analysis completed for: {processed_patient.get('first_name', 'Unknown')} {processed_patient.get('last_name', 'Unknown')}{age_display}")
-    
-    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-    
-    with col1:
-        success_status = "✅ Success" if results.get("success", False) else "⚠️ With Errors"
-        steps_completed = results.get('processing_steps_completed', 0)
-        st.metric("LangGraph Status", success_status, f"{steps_completed}/7 nodes")
-    
-    with col2:
-        st.metric("Workflow Engine", "🔥 Enhanced LG", "v3.0")
-    
-    with col3:
-        st.metric("AI Engine", "❄️ Snowflake", "llama3.1-70b")
-    
-    with col4:
-        api_outputs = safe_get(results, 'api_outputs', {})
-        api_count = len([k for k in api_outputs.keys() if api_outputs.get(k)]) if api_outputs else 0
-        st.metric("APIs Called", f"{api_count}/4", "Data Sources")
-    
-    with col5:
-        structured_extractions = safe_get(results, 'structured_extractions', {})
-        medical_records = len(safe_get(structured_extractions.get('medical', {}), 'hlth_srvc_records', []))
-        pharmacy_records = len(safe_get(structured_extractions.get('pharmacy', {}), 'ndc_records', []))
-        st.metric("Extracted Records", f"{medical_records + pharmacy_records}", f"Med:{medical_records} Rx:{pharmacy_records}")
-    
-    with col6:
-        entity_extraction = safe_get(results, 'entity_extraction', {})
-        entity_count = len([k for k, v in entity_extraction.items() 
-                           if k != 'analysis_details' and v not in ['no', 'unknown']]) if entity_extraction else 0
-        st.metric("Health Entities", entity_count, "Conditions")
-    
-    with col7:
-        chatbot_ready = results.get("chatbot_ready", False)
-        chatbot_status = "💬 Ready" if chatbot_ready else "❌ Failed"
-        st.metric("Interactive Chatbot", chatbot_status, "Medical Q&A")
-
-    # Show enhanced step status (7 nodes)
-    step_status = safe_get(results, 'step_status', {})
-    if step_status:
-        st.subheader("🔄 Enhanced LangGraph Node Execution Status")
-        status_cols = st.columns(7)
-        
-        nodes = [
-            ("fetch_api_data", "📊 API"),
-            ("deidentify_data", "🔒 Deidentify"),
-            ("extract_medical_pharmacy_data", "🔍 Extract"),
-            ("extract_entities", "🎯 Entities"),
-            ("analyze_trajectory", "📈 Snowflake"),
-            ("generate_summary", "📋 Summary"),
-            ("initialize_chatbot", "💬 Chatbot")
-        ]
-        
-        for i, (node_key, node_name) in enumerate(nodes):
-            with status_cols[i]:
-                status = step_status.get(node_key, "pending")
-                if status == "completed":
-                    st.success(f"✅ {node_name}")
-                elif status == "error":
-                    st.error(f"❌ {node_name}")
-                elif status == "running":
-                    st.info(f"🔄 {node_name}")
-                else:
-                    st.info(f"⏳ {node_name}")
 
     # Show errors if any
     errors = safe_get(results, 'errors', [])
@@ -830,106 +663,6 @@ if st.session_state.analysis_results:
         st.markdown('<div class="error-box">❌ Enhanced LangGraph workflow errors:</div>', unsafe_allow_html=True)
         for error in errors:
             st.error(f"• {error}")
-
-    # NEW: Interactive Chatbot Section (Node 7 Results)
-    if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-        st.markdown('<div class="chatbot-header">💬 LangGraph Node 7: Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
-        
-        st.markdown('<div class="chatbot-box">🤖 Ask questions about the patient\'s medical data, analysis results, or request specific insights based on the deidentified records.</div>', unsafe_allow_html=True)
-        
-        # Chatbot Interface
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            # Display chat history
-            if st.session_state.chatbot_messages:
-                st.subheader("💬 Chat History")
-                for message in st.session_state.chatbot_messages:
-                    if message["role"] == "user":
-                        st.markdown(f'<div class="chat-message user-message"><strong>👤 You:</strong> {message["content"]}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="chat-message assistant-message"><strong>🤖 Medical Assistant:</strong> {message["content"]}</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.subheader("📊 Chatbot Context")
-            context_summary = {
-                "Medical Records": "✅ Available" if st.session_state.chatbot_context.get("deidentified_medical") else "❌ None",
-                "Pharmacy Records": "✅ Available" if st.session_state.chatbot_context.get("deidentified_pharmacy") else "❌ None",
-                "Health Analysis": "✅ Available" if st.session_state.chatbot_context.get("health_trajectory") else "❌ None",
-                "Entity Extraction": "✅ Available" if st.session_state.chatbot_context.get("entity_extraction") else "❌ None"
-            }
-            
-            for key, value in context_summary.items():
-                if "✅" in value:
-                    st.success(f"{key}: {value}")
-                else:
-                    st.warning(f"{key}: {value}")
-        
-        # Chat input
-        user_question = st.chat_input("💬 Ask a question about the medical data...")
-        
-        if user_question:
-            # Add user message to chat history
-            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
-            
-            # Get response from chatbot
-            try:
-                with st.spinner("🤖 Analyzing medical data and generating response..."):
-                    chatbot_response = st.session_state.agent.chat_with_data(
-                        user_question, 
-                        st.session_state.chatbot_context, 
-                        st.session_state.chatbot_messages
-                    )
-                
-                # Add assistant response to chat history
-                st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
-                
-                # Rerun to display the new messages
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"❌ Chatbot error: {str(e)}")
-                st.session_state.chatbot_messages.append({"role": "assistant", "content": f"I apologize, but I encountered an error: {str(e)}"})
-        
-        # Clear chat history button
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.chatbot_messages = []
-            st.success("Chat history cleared!")
-            st.rerun()
-        
-        # Sample questions
-        st.markdown("**💡 Sample Questions You Can Ask:**")
-        sample_questions = [
-            "What medications was this patient prescribed?",
-            "Are there any chronic conditions indicated in the medical data?",
-            "What is the patient's overall health risk assessment?",
-            "Explain the significance of the ICD-10 diagnosis codes found",
-            "What drug interactions should be considered?",
-            "Summarize the key health insights from all the data"
-        ]
-        
-        for i, question in enumerate(sample_questions):
-            if st.button(f"💬 {question}", key=f"sample_q_{i}"):
-                # Use the sample question as if user typed it
-                st.session_state.chatbot_messages.append({"role": "user", "content": question})
-                
-                try:
-                    with st.spinner("🤖 Analyzing medical data and generating response..."):
-                        chatbot_response = st.session_state.agent.chat_with_data(
-                            question, 
-                            st.session_state.chatbot_context, 
-                            st.session_state.chatbot_messages
-                        )
-                    
-                    st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Chatbot error: {str(e)}")
-    
-    elif not results.get("chatbot_ready", False):
-        st.markdown('<div class="chatbot-header">💬 LangGraph Node 7: Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
-        st.warning("⚠️ Chatbot initialization failed. Please check the workflow execution above.")
 
     # Continue with the rest of the original results display...
     # (I'll continue with the API outputs, deidentified data, etc. - same as before but condensed due to length)
@@ -1268,6 +1001,106 @@ if st.session_state.analysis_results:
     else:
         st.warning("Snowflake Cortex final summary not available")
 
+    # Node 7: Interactive Chatbot Section (moved to after Node 6)
+    if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
+        st.markdown('<div class="chatbot-header">💬 LangGraph Node 7: Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
+        
+        st.markdown('<div class="chatbot-box">🤖 Ask questions about the patient\'s medical data, analysis results, or request specific insights based on the deidentified records.</div>', unsafe_allow_html=True)
+        
+        # Chatbot Interface
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            # Display chat history
+            if st.session_state.chatbot_messages:
+                st.subheader("💬 Chat History")
+                for message in st.session_state.chatbot_messages:
+                    if message["role"] == "user":
+                        st.markdown(f'<div class="chat-message user-message"><strong>👤 You:</strong> {message["content"]}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="chat-message assistant-message"><strong>🤖 Medical Assistant:</strong> {message["content"]}</div>', unsafe_allow_html=True)
+        
+        with col2:
+            st.subheader("📊 Chatbot Context")
+            context_summary = {
+                "Medical Records": "✅ Available" if st.session_state.chatbot_context.get("deidentified_medical") else "❌ None",
+                "Pharmacy Records": "✅ Available" if st.session_state.chatbot_context.get("deidentified_pharmacy") else "❌ None",
+                "Health Analysis": "✅ Available" if st.session_state.chatbot_context.get("health_trajectory") else "❌ None",
+                "Entity Extraction": "✅ Available" if st.session_state.chatbot_context.get("entity_extraction") else "❌ None"
+            }
+            
+            for key, value in context_summary.items():
+                if "✅" in value:
+                    st.success(f"{key}: {value}")
+                else:
+                    st.warning(f"{key}: {value}")
+        
+        # Chat input
+        user_question = st.chat_input("💬 Ask a question about the medical data...")
+        
+        if user_question:
+            # Add user message to chat history
+            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
+            
+            # Get response from chatbot
+            try:
+                with st.spinner("🤖 Analyzing medical data and generating response..."):
+                    chatbot_response = st.session_state.agent.chat_with_data(
+                        user_question, 
+                        st.session_state.chatbot_context, 
+                        st.session_state.chatbot_messages
+                    )
+                
+                # Add assistant response to chat history
+                st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
+                
+                # Rerun to display the new messages
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"❌ Chatbot error: {str(e)}")
+                st.session_state.chatbot_messages.append({"role": "assistant", "content": f"I apologize, but I encountered an error: {str(e)}"})
+        
+        # Clear chat history button
+        if st.button("🗑️ Clear Chat History"):
+            st.session_state.chatbot_messages = []
+            st.success("Chat history cleared!")
+            st.rerun()
+        
+        # Sample questions
+        st.markdown("**💡 Sample Questions You Can Ask:**")
+        sample_questions = [
+            "What medications was this patient prescribed?",
+            "Are there any chronic conditions indicated in the medical data?",
+            "What is the patient's overall health risk assessment?",
+            "Explain the significance of the ICD-10 diagnosis codes found",
+            "What drug interactions should be considered?",
+            "Summarize the key health insights from all the data"
+        ]
+        
+        for i, question in enumerate(sample_questions):
+            if st.button(f"💬 {question}", key=f"sample_q_{i}"):
+                # Use the sample question as if user typed it
+                st.session_state.chatbot_messages.append({"role": "user", "content": question})
+                
+                try:
+                    with st.spinner("🤖 Analyzing medical data and generating response..."):
+                        chatbot_response = st.session_state.agent.chat_with_data(
+                            question, 
+                            st.session_state.chatbot_context, 
+                            st.session_state.chatbot_messages
+                        )
+                    
+                    st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Chatbot error: {str(e)}")
+    
+    elif not results.get("chatbot_ready", False):
+        st.markdown('<div class="chatbot-header">💬 LangGraph Node 7: Interactive Medical Data Chatbot</div>', unsafe_allow_html=True)
+        st.warning("⚠️ Chatbot initialization failed. Please check the workflow execution above.")
+
     # Complete Enhanced LangGraph + Snowflake + Chatbot Report Download
     st.markdown('<div class="step-header">💾 Complete Enhanced LangGraph + Snowflake + Chatbot Analysis Report</div>', unsafe_allow_html=True)
     
@@ -1495,9 +1328,31 @@ if st.sidebar.checkbox("🐛 Show Enhanced Debug Info"):
             st.sidebar.write("Medical Extractions:", medical_count)
             st.sidebar.write("Pharmacy Extractions:", pharmacy_count)
         
+        # Enhanced node status in sidebar
         step_status = st.session_state.analysis_results.get("step_status", {})
         if step_status:
-            st.sidebar.write("Enhanced Node Status:", step_status)
+            st.sidebar.markdown("**🔄 Node Execution Status:**")
+            nodes = [
+                ("fetch_api_data", "📊 API Data Fetch"),
+                ("deidentify_data", "🔒 Data Deidentification"),
+                ("extract_medical_pharmacy_data", "🔍 Data Extraction"),
+                ("extract_entities", "🎯 Entity Extraction"),
+                ("analyze_trajectory", "📈 Snowflake Analysis"),
+                ("generate_summary", "📋 Summary Generation"),
+                ("initialize_chatbot", "💬 Interactive Chatbot")
+            ]
+            
+            for node_key, node_name in nodes:
+                status = step_status.get(node_key, "pending")
+                if status == "completed":
+                    st.sidebar.success(f"✅ {node_name}")
+                elif status == "error":
+                    st.sidebar.error(f"❌ {node_name}")
+                elif status == "running":
+                    st.sidebar.info(f"🔄 {node_name}")
+                else:
+                    st.sidebar.info(f"⏳ {node_name}")
+        
         errors = st.session_state.analysis_results.get("errors", [])
         if errors:
             st.sidebar.write("Errors:", len(errors))
