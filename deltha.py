@@ -1,531 +1,556 @@
 #!/usr/bin/env python3
 """
-Streamlit Web Interface for Milliman MCP Chatbot
-================================================
+Milliman MCP Client Chatbot with Snowflake Cortex Integration
+============================================================
 
-A professional web interface for the Milliman MCP chatbot with real-time 
-patient data processing and API integration.
+A comprehensive chatbot that uses MCP (Model Context Protocol) to interact with 
+Milliman healthcare APIs through natural language commands.
+
+Features:
+- Snowflake Cortex LLM integration (sfassist)
+- MCP client for Milliman API tools
+- Natural language to API command processing
+- Comprehensive error handling and retry mechanisms
+- Real-time patient data processing
+- HIPAA-compliant logging and data handling
 
 Usage:
-    streamlit run streamlit_mcp_chatbot.py
+    python milliman_mcp_chatbot.py
 """
 
-import streamlit as st
 import asyncio
 import json
-import pandas as pd
-from datetime import datetime
 import logging
-import traceback
-from typing import Dict, Any, List, Optional
+import re
 import sys
-import os
+import traceback
+from datetime import datetime
+from typing import Dict, Any, List, Optional, Union
+from dataclasses import dataclass, asdict
+import uuid
 
-# Add current directory to path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
-
-# Import the chatbot components
+# MCP and LangGraph imports
 try:
-    from milliman_mcp_chatbot import (
-        MillimanMCPChatbot, 
-        SnowflakeCortexConfig, 
-        MCPConfig, 
-        PatientData,
-        PatientDataExtractor
-    )
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+    from langgraph.prebuilt import create_react_agent
+    from langchain_core.messages import HumanMessage, AIMessage
 except ImportError as e:
-    st.error(f"❌ Could not import chatbot components: {e}")
-    st.stop()
+    print(f"❌ Missing required packages: {e}")
+    print("📦 Install with: pip install langchain-mcp-adapters langgraph langchain-core")
+    sys.exit(1)
 
-# Configure Streamlit page
-st.set_page_config(
-    page_title="Milliman MCP Chatbot",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# HTTP client for Snowflake Cortex
+import requests
+import urllib3
 
-# Custom CSS for professional healthcare styling
-st.markdown("""
-<style>
-.main-header {
-    font-size: 2.5rem;
-    color: #2E86C1;
-    text-align: center;
-    margin-bottom: 1.5rem;
-    font-weight: bold;
-}
+# Disable SSL warnings for development (remove in production)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-.mcp-badge {
-    background: linear-gradient(45deg, #2E86C1, #3498DB);
-    color: white;
-    padding: 0.3rem 0.8rem;
-    border-radius: 0.8rem;
-    font-weight: bold;
-    display: inline-block;
-    margin: 0.2rem;
-    font-size: 0.9rem;
-}
-
-.cortex-badge {
-    background: linear-gradient(45deg, #E67E22, #F39C12);
-    color: white;
-    padding: 0.3rem 0.8rem;
-    border-radius: 0.8rem;
-    font-weight: bold;
-    display: inline-block;
-    margin: 0.2rem;
-    font-size: 0.9rem;
-}
-
-.success-box {
-    background: linear-gradient(135deg, #d4edda, #c3e6cb);
-    border: 2px solid #28a745;
-    color: #155724;
-    padding: 1rem 1.5rem;
-    margin-bottom: 1rem;
-    border-radius: 0.5rem;
-    font-weight: bold;
-}
-
-.error-box {
-    background: linear-gradient(135deg, #f8d7da, #f5c6cb);
-    border: 2px solid #dc3545;
-    color: #721c24;
-    padding: 1rem 1.5rem;
-    margin-bottom: 1rem;
-    border-radius: 0.5rem;
-}
-
-.info-box {
-    background: linear-gradient(135deg, #cce7ff, #99d6ff);
-    border: 2px solid #007bff;
-    color: #004085;
-    padding: 1rem 1.5rem;
-    margin-bottom: 1rem;
-    border-radius: 0.5rem;
-}
-
-.chat-message {
-    padding: 1rem;
-    margin: 0.5rem 0;
-    border-radius: 0.5rem;
-    border-left: 4px solid;
-}
-
-.user-message {
-    background-color: #f0f8ff;
-    border-left-color: #2E86C1;
-}
-
-.assistant-message {
-    background-color: #f8fff0;
-    border-left-color: #28a745;
-}
-
-.patient-data-card {
-    background: linear-gradient(135deg, #fff3e0, #ffecb3);
-    border: 2px solid #ff9800;
-    border-radius: 0.8rem;
-    padding: 1.5rem;
-    margin: 1rem 0;
-}
-
-.api-response-card {
-    background: linear-gradient(135deg, #e3f2fd, #bbdefb);
-    border: 2px solid #2196f3;
-    border-radius: 0.8rem;
-    padding: 1.5rem;
-    margin: 1rem 0;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-def initialize_session_state():
-    """Initialize Streamlit session state variables"""
-    if 'chatbot' not in st.session_state:
-        st.session_state.chatbot = None
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'is_initialized' not in st.session_state:
-        st.session_state.is_initialized = False
-    if 'config_cortex' not in st.session_state:
-        st.session_state.config_cortex = None
-    if 'config_mcp' not in st.session_state:
-        st.session_state.config_mcp = None
-
-def safe_run_async(coro):
-    """Safely run async code in Streamlit"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(coro)
-
-# Initialize session state
-initialize_session_state()
-
-# Main title
-st.markdown('<h1 class="main-header">🏥 Milliman MCP Chatbot</h1>', unsafe_allow_html=True)
-st.markdown("**Advanced healthcare AI assistant with MCP integration and Snowflake Cortex LLM**")
-
-# Show system badges
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown('<div class="mcp-badge">🔌 MCP Client</div>', unsafe_allow_html=True)
-with col2:
-    st.markdown('<div class="cortex-badge">🧠 Snowflake Cortex</div>', unsafe_allow_html=True)
-with col3:
-    st.markdown('<div class="mcp-badge">🏥 Healthcare APIs</div>', unsafe_allow_html=True)
-
-# Sidebar configuration
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    # Snowflake Cortex Configuration
-    st.subheader("🧠 Snowflake Cortex Settings")
-    
-    cortex_api_url = st.text_input(
-        "API URL",
-        value="https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete",
-        help="Snowflake Cortex API endpoint"
-    )
-    
-    cortex_api_key = st.text_input(
-        "API Key",
-        value="78a799ea-a0f6-11ef-a0ce-15a449f7a8b0",
-        type="password",
-        help="Your Snowflake Cortex API key"
-    )
-    
-    cortex_model = st.selectbox(
-        "Model",
-        ["llama3.1-70b", "llama3.1-8b", "mixtral-8x7b"],
-        index=0,
-        help="Snowflake Cortex model to use"
-    )
-    
-    cortex_app_id = st.text_input("App ID", value="edadip")
-    cortex_aplctn_cd = st.text_input("Application Code", value="edagnai")
-    
-    # MCP Configuration
-    st.subheader("🔌 MCP Server Settings")
-    
-    mcp_server_url = st.text_input(
-        "MCP Server URL",
-        value="http://localhost:8000/sse",
-        help="URL of your Milliman MCP server"
-    )
-    
-    mcp_server_name = st.text_input("Server Name", value="MillimanServer")
-    
-    # Connection settings
-    st.subheader("🔧 Connection Settings")
-    timeout = st.slider("Timeout (seconds)", 10, 60, 30)
-    max_retries = st.slider("Max Retries", 1, 5, 3)
-    
-    # Initialize button
-    if st.button("🚀 Initialize Chatbot", use_container_width=True):
-        try:
-            # Create configurations
-            cortex_config = SnowflakeCortexConfig(
-                api_url=cortex_api_url,
-                api_key=cortex_api_key,
-                model=cortex_model,
-                app_id=cortex_app_id,
-                aplctn_cd=cortex_aplctn_cd,
-                timeout=timeout,
-                max_retries=max_retries
-            )
-            
-            mcp_config = MCPConfig(
-                server_name=mcp_server_name,
-                server_url=mcp_server_url,
-                max_retries=max_retries
-            )
-            
-            # Store in session state
-            st.session_state.config_cortex = cortex_config
-            st.session_state.config_mcp = mcp_config
-            
-            # Create chatbot
-            chatbot = MillimanMCPChatbot(cortex_config, mcp_config)
-            
-            # Initialize
-            with st.spinner("Initializing chatbot..."):
-                success = safe_run_async(chatbot.initialize())
-            
-            if success:
-                st.session_state.chatbot = chatbot
-                st.session_state.is_initialized = True
-                st.success("✅ Chatbot initialized successfully!")
-                st.rerun()
-            else:
-                st.error("❌ Failed to initialize chatbot. Check your settings and MCP server.")
-                
-        except Exception as e:
-            st.error(f"❌ Initialization error: {str(e)}")
-            st.code(traceback.format_exc())
-    
-    # Status display
-    st.subheader("📊 Status")
-    if st.session_state.is_initialized:
-        st.success("✅ Chatbot Active")
-        st.info(f"🤖 Model: {st.session_state.config_cortex.model if st.session_state.config_cortex else 'Unknown'}")
-        st.info(f"🔌 MCP Server: Connected")
-    else:
-        st.warning("⏳ Chatbot Not Initialized")
-    
-    # Clear chat button
-    if st.button("🗑️ Clear Chat History"):
-        st.session_state.chat_history = []
-        if st.session_state.chatbot:
-            st.session_state.chatbot.clear_chat_history()
-        st.success("Chat history cleared!")
-        st.rerun()
-
-# Main content area
-if not st.session_state.is_initialized:
-    st.markdown('<div class="info-box">🔧 Please configure and initialize the chatbot using the sidebar.</div>', unsafe_allow_html=True)
-    
-    # Show example configurations and usage
-    st.markdown("### 💡 Getting Started")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**📋 Prerequisites:**")
-        st.markdown("""
-        1. **MCP Server Running:** Ensure your Milliman MCP server is running on port 8000
-        2. **Snowflake Cortex Access:** Valid API key and endpoint
-        3. **Network Access:** Connection to both MCP server and Snowflake Cortex
-        """)
-    
-    with col2:
-        st.markdown("**🚀 Quick Start:**")
-        st.markdown("""
-        1. **Configure Settings:** Update API credentials in the sidebar
-        2. **Initialize Chatbot:** Click the "Initialize Chatbot" button
-        3. **Start Chatting:** Enter patient queries or commands
-        """)
-    
-    st.markdown("### 📖 Example Commands")
-    
-    examples = [
-        "Get medical data for John Smith, SSN 123456789, DOB 1980-01-15, Male, Zip 12345",
-        "Search MCID database for patient information",
-        "Get authentication token for API access",
-        "Retrieve comprehensive patient data including medical and pharmacy records"
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('milliman_chatbot.log'),
+        logging.StreamHandler(sys.stdout)
     ]
-    
-    for i, example in enumerate(examples, 1):
-        st.markdown(f"**{i}.** {example}")
+)
+logger = logging.getLogger(__name__)
 
-else:
-    # Chat interface
-    st.markdown("### 💬 Chat Interface")
+@dataclass
+class SnowflakeCortexConfig:
+    """Configuration for Snowflake Cortex API"""
+    api_url: str = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+    api_key: str = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+    app_id: str = "edadip"
+    aplctn_cd: str = "edagnai"
+    model: str = "llama3.1-70b"
+    sys_msg: str = "You are a healthcare AI assistant that helps users interact with Milliman medical APIs through natural language. You can process patient information, search medical records, and retrieve pharmacy data."
+    max_retries: int = 3
+    timeout: int = 30
+
+@dataclass
+class MCPConfig:
+    """Configuration for MCP server connection"""
+    server_name: str = "MillimanServer"
+    server_url: str = "http://localhost:8000/sse"
+    transport: str = "sse"
+    max_retries: int = 3
+    retry_delay: float = 1.0
+
+@dataclass
+class PatientData:
+    """Patient data structure for API calls"""
+    first_name: str
+    last_name: str
+    ssn: str
+    date_of_birth: str  # YYYY-MM-DD format
+    gender: str
+    zip_code: str
     
-    # Display chat history
-    if st.session_state.chat_history:
-        st.markdown("**Recent Conversation:**")
+    def to_dict(self) -> Dict[str, str]:
+        return asdict(self)
+    
+    def validate(self) -> tuple[bool, List[str]]:
+        """Validate patient data"""
+        errors = []
         
-        for msg in st.session_state.chat_history[-10:]:  # Show last 10 messages
-            if msg['role'] == 'user':
-                st.markdown(f"""
-                <div class="chat-message user-message">
-                    <strong>🗣️ You:</strong> {msg['content']}
-                    <br><small>⏰ {msg.get('timestamp', 'Unknown time')}</small>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="chat-message assistant-message">
-                    <strong>🤖 Assistant:</strong> {msg['content']}
-                    <br><small>⏰ {msg.get('timestamp', 'Unknown time')}</small>
-                </div>
-                """, unsafe_allow_html=True)
-    
-    # Chat input
-    user_input = st.chat_input("💬 Enter your message or patient query...")
-    
-    if user_input:
+        if not self.first_name or len(self.first_name.strip()) < 2:
+            errors.append("First name must be at least 2 characters")
+        
+        if not self.last_name or len(self.last_name.strip()) < 2:
+            errors.append("Last name must be at least 2 characters")
+        
+        if not self.ssn or len(re.sub(r'\D', '', self.ssn)) != 9:
+            errors.append("SSN must be exactly 9 digits")
+        
+        if not self.gender or self.gender.upper() not in ['M', 'F']:
+            errors.append("Gender must be 'M' or 'F'")
+        
+        if not self.zip_code or len(re.sub(r'\D', '', self.zip_code)) < 5:
+            errors.append("Zip code must be at least 5 digits")
+        
+        # Validate date format
         try:
-            # Add user message to history
-            st.session_state.chat_history.append({
-                'role': 'user',
-                'content': user_input,
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
+            datetime.strptime(self.date_of_birth, '%Y-%m-%d')
+        except ValueError:
+            errors.append("Date of birth must be in YYYY-MM-DD format")
+        
+        return len(errors) == 0, errors
+
+class SnowflakeCortexLLM:
+    """Snowflake Cortex LLM wrapper for MCP chatbot"""
+    
+    def __init__(self, config: SnowflakeCortexConfig):
+        self.config = config
+        logger.info(f"🔧 Initialized Snowflake Cortex LLM: {config.model}")
+    
+    async def agenerate(self, messages: List[Union[HumanMessage, AIMessage]]) -> str:
+        """Generate response from Snowflake Cortex API"""
+        try:
+            # Convert messages to text
+            user_message = ""
+            for msg in messages:
+                if isinstance(msg, HumanMessage):
+                    user_message += f"Human: {msg.content}\n"
+                elif isinstance(msg, AIMessage):
+                    user_message += f"Assistant: {msg.content}\n"
             
-            # Process with chatbot
-            with st.spinner("🤖 Processing your request..."):
-                response = safe_run_async(st.session_state.chatbot.process_command(user_input))
+            if not user_message:
+                user_message = str(messages[-1]) if messages else "Hello"
             
-            # Add assistant response to history
-            st.session_state.chat_history.append({
-                'role': 'assistant',
-                'content': response,
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            })
-            
-            st.rerun()
+            return await self._call_cortex_api(user_message.strip())
             
         except Exception as e:
-            st.error(f"❌ Error processing message: {str(e)}")
-            st.code(traceback.format_exc())
-
-# Patient Data Entry Form
-with st.expander("📝 Quick Patient Data Entry", expanded=False):
-    st.markdown("**Enter patient information for structured API calls:**")
+            logger.error(f"❌ Error in agenerate: {e}")
+            return f"I apologize, but I encountered an error: {str(e)}"
     
-    with st.form("patient_data_form"):
-        col1, col2 = st.columns(2)
+    async def _call_cortex_api(self, user_message: str) -> str:
+        """Call Snowflake Cortex API with retry logic"""
+        session_id = str(uuid.uuid4())
         
-        with col1:
-            first_name = st.text_input("First Name")
-            last_name = st.text_input("Last Name")
-            ssn = st.text_input("SSN (9 digits)")
+        payload = {
+            "query": {
+                "aplctn_cd": self.config.aplctn_cd,
+                "app_id": self.config.app_id,
+                "api_key": self.config.api_key,
+                "method": "cortex",
+                "model": self.config.model,
+                "sys_msg": self.config.sys_msg,
+                "limit_convs": "0",
+                "prompt": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": user_message
+                        }
+                    ]
+                },
+                "app_lvl_prefix": "",
+                "user_id": "",
+                "session_id": session_id
+            }
+        }
         
-        with col2:
-            date_of_birth = st.date_input("Date of Birth")
-            gender = st.selectbox("Gender", ["M", "F"])
-            zip_code = st.text_input("Zip Code")
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "Authorization": f'Snowflake Token="{self.config.api_key}"'
+        }
         
-        operation = st.selectbox(
-            "Operation",
-            ["get_all_data", "medical_submit", "mcid_search", "get_token"],
-            help="Select the API operation to perform"
-        )
-        
-        if st.form_submit_button("🚀 Submit Patient Data"):
+        for attempt in range(self.config.max_retries):
             try:
-                # Create patient data object
-                patient_data = PatientData(
-                    first_name=first_name,
-                    last_name=last_name,
-                    ssn=ssn,
-                    date_of_birth=date_of_birth.strftime('%Y-%m-%d'),
-                    gender=gender,
-                    zip_code=zip_code
+                logger.info(f"🤖 Calling Snowflake Cortex API (attempt {attempt + 1})")
+                
+                response = requests.post(
+                    self.config.api_url,
+                    headers=headers,
+                    json=payload,
+                    verify=False,
+                    timeout=self.config.timeout
                 )
                 
-                # Validate
-                is_valid, errors = patient_data.validate()
-                
-                if not is_valid:
-                    st.error("❌ Invalid patient data:")
-                    for error in errors:
-                        st.error(f"• {error}")
-                else:
-                    # Create structured command
-                    command = f"""
-                    Please use the {operation} API with this patient information:
+                if response.status_code == 200:
+                    raw_response = response.text
                     
-                    Patient: {first_name} {last_name}
-                    SSN: {ssn}
-                    Date of Birth: {date_of_birth.strftime('%Y-%m-%d')}
-                    Gender: {gender}
-                    Zip Code: {zip_code}
-                    
-                    Execute the {operation} operation and provide a detailed response.
-                    """
-                    
-                    if st.session_state.is_initialized:
-                        # Process command
-                        with st.spinner("🤖 Processing patient data..."):
-                            response = safe_run_async(st.session_state.chatbot.process_command(command))
-                        
-                        # Display response
-                        st.markdown('<div class="api-response-card">', unsafe_allow_html=True)
-                        st.markdown("**🔍 API Response:**")
-                        st.markdown(response)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # Add to chat history
-                        st.session_state.chat_history.extend([
-                            {
-                                'role': 'user',
-                                'content': f"Patient data form submission: {operation} for {first_name} {last_name}",
-                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            },
-                            {
-                                'role': 'assistant',
-                                'content': response,
-                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            }
-                        ])
+                    # Parse response - handle end_of_stream marker
+                    if "end_of_stream" in raw_response:
+                        answer, _, _ = raw_response.partition("end_of_stream")
+                        return answer.strip()
                     else:
-                        st.warning("⚠️ Please initialize the chatbot first using the sidebar.")
-                        
+                        return raw_response.strip()
+                
+                else:
+                    logger.warning(f"⚠️ API error {response.status_code}: {response.text}")
+                    if attempt == self.config.max_retries - 1:
+                        return f"API Error {response.status_code}: {response.text[:200]}"
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"⏱️ Timeout on attempt {attempt + 1}")
+                if attempt == self.config.max_retries - 1:
+                    return "Request timed out. Please try again."
+                    
             except Exception as e:
-                st.error(f"❌ Error processing patient data: {str(e)}")
+                logger.error(f"❌ Unexpected error on attempt {attempt + 1}: {e}")
+                if attempt == self.config.max_retries - 1:
+                    return f"Unexpected error: {str(e)}"
+                
+            # Wait before retry
+            if attempt < self.config.max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        return "Failed to get response after multiple attempts."
 
-# API Tools Information
-with st.expander("🔧 Available API Tools", expanded=False):
-    st.markdown("**Milliman API Tools accessible through the chatbot:**")
+class PatientDataExtractor:
+    """Extract patient data from natural language input"""
     
-    tools_info = [
-        {
-            "Tool": "get_token",
-            "Description": "Get authentication token for API access",
-            "Parameters": "None",
-            "Use Case": "Authentication and session management"
-        },
-        {
-            "Tool": "medical_submit",
-            "Description": "Submit medical record request",
-            "Parameters": "Patient information (name, SSN, DOB, gender, zip)",
-            "Use Case": "Retrieve medical records and health data"
-        },
-        {
-            "Tool": "mcid_search",
-            "Description": "Search MCID database",
-            "Parameters": "Patient information (name, SSN, DOB, gender, zip)",
-            "Use Case": "Patient identification and matching"
-        },
-        {
-            "Tool": "get_all_data",
-            "Description": "Get comprehensive patient data",
-            "Parameters": "Patient information (name, SSN, DOB, gender, zip)",
-            "Use Case": "Complete patient record retrieval"
-        }
-    ]
-    
-    df = pd.DataFrame(tools_info)
-    st.table(df)
+    @staticmethod
+    def extract_patient_data(text: str) -> Optional[PatientData]:
+        """Extract patient information from natural language text"""
+        try:
+            # Initialize patient data with defaults
+            patient_info = {
+                'first_name': '',
+                'last_name': '',
+                'ssn': '',
+                'date_of_birth': '',
+                'gender': '',
+                'zip_code': ''
+            }
+            
+            # Extract SSN (9 digits with optional formatting)
+            ssn_pattern = r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b'
+            ssn_match = re.search(ssn_pattern, text)
+            if ssn_match:
+                patient_info['ssn'] = re.sub(r'\D', '', ssn_match.group())
+            
+            # Extract date (YYYY-MM-DD or MM/DD/YYYY)
+            date_patterns = [
+                r'\b\d{4}-\d{2}-\d{2}\b',  # YYYY-MM-DD
+                r'\b\d{1,2}/\d{1,2}/\d{4}\b',  # MM/DD/YYYY
+                r'\b\d{1,2}-\d{1,2}-\d{4}\b'   # MM-DD-YYYY
+            ]
+            
+            for pattern in date_patterns:
+                date_match = re.search(pattern, text)
+                if date_match:
+                    date_str = date_match.group()
+                    # Convert to YYYY-MM-DD format
+                    if '/' in date_str:
+                        parts = date_str.split('/')
+                        if len(parts) == 3:
+                            patient_info['date_of_birth'] = f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+                    elif '-' in date_str and len(date_str.split('-')[0]) == 4:
+                        patient_info['date_of_birth'] = date_str
+                    elif '-' in date_str:
+                        parts = date_str.split('-')
+                        if len(parts) == 3:
+                            patient_info['date_of_birth'] = f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+                    break
+            
+            # Extract gender
+            gender_pattern = r'\b(male|female|M|F)\b'
+            gender_match = re.search(gender_pattern, text, re.IGNORECASE)
+            if gender_match:
+                gender = gender_match.group().upper()
+                patient_info['gender'] = 'M' if gender in ['MALE', 'M'] else 'F'
+            
+            # Extract zip code (5-9 digits)
+            zip_pattern = r'\b\d{5}(?:-\d{4})?\b'
+            zip_match = re.search(zip_pattern, text)
+            if zip_match:
+                patient_info['zip_code'] = zip_match.group()
+            
+            # Extract names (this is more complex and might need manual specification)
+            # For now, look for common patterns
+            name_pattern = r'\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b'
+            name_match = re.search(name_pattern, text)
+            if name_match:
+                patient_info['first_name'] = name_match.group(1)
+                patient_info['last_name'] = name_match.group(2)
+            
+            # Check if we have enough information
+            if patient_info['ssn'] and patient_info['date_of_birth']:
+                return PatientData(**patient_info)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error extracting patient data: {e}")
+            return None
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666;'>
-    🏥 <strong>Milliman MCP Chatbot</strong><br>
-    Powered by Snowflake Cortex LLM and Model Context Protocol<br>
-    ⚠️ <em>This system processes healthcare data. Ensure HIPAA compliance in production environments.</em>
-</div>
-""", unsafe_allow_html=True)
+class MillimanMCPChatbot:
+    """Main chatbot class integrating MCP client with Snowflake Cortex LLM"""
+    
+    def __init__(self, cortex_config: SnowflakeCortexConfig, mcp_config: MCPConfig):
+        self.cortex_config = cortex_config
+        self.mcp_config = mcp_config
+        self.llm = SnowflakeCortexLLM(cortex_config)
+        self.mcp_client = None
+        self.agent = None
+        self.chat_history: List[Dict[str, str]] = []
+        self.patient_extractor = PatientDataExtractor()
+        
+        logger.info("🤖 Milliman MCP Chatbot initialized")
+    
+    async def initialize(self):
+        """Initialize MCP client and agent"""
+        try:
+            logger.info("🔌 Connecting to MCP server...")
+            
+            # Initialize MCP client
+            self.mcp_client = MultiServerMCPClient({
+                self.mcp_config.server_name: {
+                    "url": self.mcp_config.server_url,
+                    "transport": self.mcp_config.transport,
+                }
+            })
+            
+            # Enter the client context
+            await self.mcp_client.__aenter__()
+            
+            # Get available tools
+            tools = self.mcp_client.get_tools()
+            logger.info(f"✅ Connected to MCP server. Available tools: {[tool.name for tool in tools]}")
+            
+            # Create ReAct agent with Snowflake Cortex LLM
+            self.agent = create_react_agent(
+                model=self.llm,
+                tools=tools
+            )
+            
+            logger.info("🚀 MCP Chatbot ready!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize MCP client: {e}")
+            traceback.print_exc()
+            return False
+    
+    async def cleanup(self):
+        """Clean up MCP client connection"""
+        try:
+            if self.mcp_client:
+                await self.mcp_client.__aexit__(None, None, None)
+                logger.info("🔌 MCP client disconnected")
+        except Exception as e:
+            logger.error(f"❌ Error during cleanup: {e}")
+    
+    async def process_command(self, user_input: str) -> str:
+        """Process user command and return response"""
+        try:
+            # Add to chat history
+            self.chat_history.append({
+                "role": "user",
+                "content": user_input,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Check if this is a patient data query
+            patient_data = self.patient_extractor.extract_patient_data(user_input)
+            
+            if patient_data:
+                # Validate patient data
+                is_valid, errors = patient_data.validate()
+                if not is_valid:
+                    error_msg = "❌ Invalid patient data:\n" + "\n".join(f"• {error}" for error in errors)
+                    self.chat_history.append({
+                        "role": "assistant", 
+                        "content": error_msg,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    return error_msg
+                
+                # Enhance prompt with patient context
+                enhanced_prompt = f"""
+I need to process this patient information using the Milliman API tools:
 
-# Debug information (only in development)
-if st.checkbox("🐛 Show Debug Information"):
-    st.subheader("Debug Information")
+Patient Information:
+- Name: {patient_data.first_name} {patient_data.last_name}
+- SSN: {patient_data.ssn}
+- Date of Birth: {patient_data.date_of_birth}
+- Gender: {patient_data.gender}
+- Zip Code: {patient_data.zip_code}
+
+User Request: {user_input}
+
+Please use the appropriate Milliman API tools (get_token, medical_submit, mcid_search, or get_all_data) to process this request and provide a comprehensive response with the results.
+"""
+            else:
+                enhanced_prompt = f"""
+User Request: {user_input}
+
+Please help the user with their healthcare data request. If they need to search medical records or pharmacy data, ask them to provide patient information including:
+- First name and last name
+- SSN (9 digits)
+- Date of birth (YYYY-MM-DD)
+- Gender (M/F)
+- Zip code
+
+Available tools:
+- get_token: Get authentication token
+- medical_submit: Submit medical record request
+- mcid_search: Search MCID database
+- get_all_data: Get comprehensive patient data
+
+How can I help you today?
+"""
+            
+            # Process with agent if available
+            if self.agent:
+                logger.info("🤖 Processing with MCP agent...")
+                response = await self.agent.ainvoke({"messages": [HumanMessage(content=enhanced_prompt)]})
+                
+                # Extract response content
+                if hasattr(response, 'messages') and response.messages:
+                    assistant_response = response.messages[-1].content
+                elif isinstance(response, dict) and 'messages' in response:
+                    assistant_response = response['messages'][-1].content
+                else:
+                    assistant_response = str(response)
+            else:
+                # Fallback to direct LLM
+                logger.info("🤖 Processing with direct LLM...")
+                assistant_response = await self.llm.agenerate([HumanMessage(content=enhanced_prompt)])
+            
+            # Add to chat history
+            self.chat_history.append({
+                "role": "assistant",
+                "content": assistant_response,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            return assistant_response
+            
+        except Exception as e:
+            error_msg = f"❌ Error processing command: {str(e)}"
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            
+            self.chat_history.append({
+                "role": "assistant",
+                "content": error_msg,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            return error_msg
     
-    debug_info = {
-        "Session State": {
-            "is_initialized": st.session_state.is_initialized,
-            "chat_history_length": len(st.session_state.chat_history),
-            "chatbot_exists": st.session_state.chatbot is not None
-        },
-        "Configuration": {
-            "cortex_config": st.session_state.config_cortex.__dict__ if st.session_state.config_cortex else None,
-            "mcp_config": st.session_state.config_mcp.__dict__ if st.session_state.config_mcp else None
-        },
-        "Environment": {
-            "python_version": sys.version,
-            "current_directory": current_dir
-        }
-    }
+    def get_chat_history(self) -> List[Dict[str, str]]:
+        """Get formatted chat history"""
+        return self.chat_history.copy()
     
-    st.json(debug_info)
+    def clear_chat_history(self):
+        """Clear chat history"""
+        self.chat_history = []
+        logger.info("🗑️ Chat history cleared")
+
+async def main():
+    """Main function to run the chatbot"""
+    print("🏥 Milliman MCP Chatbot with Snowflake Cortex")
+    print("=" * 50)
+    
+    # Initialize configurations
+    cortex_config = SnowflakeCortexConfig()
+    mcp_config = MCPConfig()
+    
+    # Create chatbot
+    chatbot = MillimanMCPChatbot(cortex_config, mcp_config)
+    
+    try:
+        # Initialize chatbot
+        if not await chatbot.initialize():
+            print("❌ Failed to initialize chatbot. Please check your MCP server is running.")
+            return
+        
+        print("\n✅ Chatbot initialized successfully!")
+        print("\n💡 Example commands:")
+        print("• 'Get medical data for John Smith, SSN 123456789, DOB 1980-01-15, Male, Zip 12345'")
+        print("• 'Search MCID for patient data'")
+        print("• 'Get authentication token'")
+        print("• 'Help' - Show available commands")
+        print("• 'History' - Show chat history")
+        print("• 'Clear' - Clear chat history")
+        print("• 'Exit' - Quit the chatbot")
+        print("\n" + "=" * 50)
+        
+        # Chat loop
+        while True:
+            try:
+                user_input = input("\n🗣️  You: ").strip()
+                
+                if not user_input:
+                    continue
+                
+                # Handle special commands
+                if user_input.lower() in ['exit', 'quit', 'bye']:
+                    print("👋 Goodbye!")
+                    break
+                elif user_input.lower() == 'clear':
+                    chatbot.clear_chat_history()
+                    print("🗑️ Chat history cleared!")
+                    continue
+                elif user_input.lower() == 'history':
+                    history = chatbot.get_chat_history()
+                    if history:
+                        print("\n📜 Chat History:")
+                        for msg in history[-10:]:  # Show last 10 messages
+                            role = "🗣️  You" if msg['role'] == 'user' else "🤖 Assistant"
+                            print(f"{role}: {msg['content'][:100]}{'...' if len(msg['content']) > 100 else ''}")
+                    else:
+                        print("📭 No chat history available")
+                    continue
+                elif user_input.lower() == 'help':
+                    print("\n🆘 Available Commands:")
+                    print("• Medical data requests - Include patient info (name, SSN, DOB, gender, zip)")
+                    print("• 'get token' - Get API authentication token")
+                    print("• 'search mcid' - Search MCID database")
+                    print("• 'get all data' - Get comprehensive patient data")
+                    print("• 'history' - Show recent chat history")
+                    print("• 'clear' - Clear chat history")
+                    print("• 'exit' - Quit the chatbot")
+                    continue
+                
+                # Process command
+                print("🤖 Assistant: ", end="", flush=True)
+                response = await chatbot.process_command(user_input)
+                print(response)
+                
+            except KeyboardInterrupt:
+                print("\n\n👋 Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Unexpected error: {e}")
+                logger.error(f"Unexpected error in main loop: {e}")
+    
+    finally:
+        # Cleanup
+        await chatbot.cleanup()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Chatbot stopped by user")
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
