@@ -13,6 +13,9 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
+# Heart Attack Model Configuration
+HEART_ATTACK_MODEL_PATH = "/path/to/your/heart_attack_model.pkl"  # UPDATE THIS PATH TO YOUR PICKLE FILE
+
 # Configure Streamlit page
 st.set_page_config(
     page_title="🫀 Healthcare Analysis Chatbot with Heart Attack Prediction",
@@ -552,9 +555,9 @@ with col1:
     if not st.session_state.agent:
         if st.button("🚀 Initialize Healthcare AI Agent with Heart Attack Prediction", key="init_agent"):
             try:
-                # You can customize the Config here to set your pickle file path
+                # Create custom config with heart attack model path
                 config = Config()
-                config.heart_attack_model_path = "/path/to/your/heart_attack_model.pkl"  # UPDATE THIS PATH
+                config.heart_attack_model_path = HEART_ATTACK_MODEL_PATH  # Use the configurable path
                 st.session_state.agent = ChatbotFirstHealthAgent(config)
                 add_system_message("""✅ **Healthcare AI Agent with Heart Attack Prediction Initialized!** 
 
@@ -566,8 +569,9 @@ I can analyze patient data through natural language commands and provide compreh
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Failed to initialize agent: {str(e)}")
-                if "heart_attack_model" in str(e).lower():
-                    st.info("💡 Make sure to update the heart attack model path in the code and ensure the pickle file exists.")
+                if "heart_attack_model" in str(e).lower() or "pickle" in str(e).lower():
+                    st.info(f"💡 Make sure to update the HEART_ATTACK_MODEL_PATH variable at the top of this file to point to your pickle file: {HEART_ATTACK_MODEL_PATH}")
+                    st.info("🔧 You can also create a dummy pickle file for testing or disable the heart attack prediction feature.")
 
 with col2:
     # Refresh button
