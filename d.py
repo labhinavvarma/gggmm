@@ -1,1560 +1,1055 @@
+import streamlit as st
 import json
-import re
-import requests
-import urllib3
-import uuid
-import asyncio
-import pickle
-import numpy as np
 import pandas as pd
-from datetime import datetime, date
-from typing import Dict, Any, List, TypedDict, Literal, Optional
-from dataclasses import dataclass, asdict
-import logging
+from datetime import datetime
+import time
+from typing import Dict, Any, List
 
-# LangGraph imports
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+# Import the enhanced chatbot-first agent
+try:
+    from chatbot_first_agent import ChatbotFirstHealthAgent, Config  # Updated import
+    AGENT_AVAILABLE = True
+except ImportError as e:
+    AGENT_AVAILABLE = False
+    import_error = str(e)
 
-# Disable SSL warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Heart Attack Model Configuration
+HEART_ATTACK_MODEL_PATH = "/path/to/your/heart_attack_model.pkl"  # UPDATE THIS PATH TO YOUR PICKLE FILE
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure Streamlit page
+st.set_page_config(
+    page_title="🫀 Healthcare Analysis Chatbot with Heart Attack Prediction",
+    page_icon="🫀",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-@dataclass
-class Config:
-    mcp_server_url: str = "http://localhost:8000"
-    # Snowflake Cortex API Configuration
-    api_url: str = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-    api_key: str = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-    app_id: str = "edadip"
-    aplctn_cd: str = "edagnai"
-    model: str = "llama3.1-70b"
-    sys_msg: str = "You are a healthcare AI assistant. Provide accurate, concise answers based on context."
-    max_retries: int = 3
-    timeout: int = 30
-    
-    # Heart Attack ML Model Configuration
-    heart_attack_model_path: str = "/path/to/your/heart_attack_model.pkl"  # UPDATE THIS PATH
-    
-    def to_dict(self):
-        return asdict(self)
+# Enhanced Custom CSS for chatbot interface with heart attack risk styling
+st.markdown("""
+<style>
+.main-title {
+    font-size: 3rem;
+    color: #2E8B57;
+    text-align: center;
+    margin-bottom: 0.5rem;
+    font-weight: bold;
+}
 
-# Enhanced State Definition for Chatbot-First LangGraph with Heart Attack Prediction
-class ChatbotHealthState(TypedDict):
-    # User input and conversation
-    user_message: str
-    conversation_history: List[Dict[str, Any]]
-    
-    # Extracted patient data
-    patient_data: Optional[Dict[str, Any]]
-    
-    # Raw MCP API responses
-    raw_api_responses: Dict[str, Any]
-    
-    # Processed data
-    deidentified_medical: Dict[str, Any]
-    deidentified_pharmacy: Dict[str, Any]
-    
-    # Entity extraction
-    entity_extraction: Dict[str, Any]
-    
-    # Heart Attack Prediction
-    heart_attack_prediction: Dict[str, Any]
-    
-    # Analysis complete flag
-    analysis_ready: bool
-    
-    # Current response to user
-    assistant_response: str
-    
-    # Control flow
-    current_step: str
-    errors: List[str]
-    processing_complete: bool
+.subtitle {
+    font-size: 1.2rem;
+    color: #666;
+    text-align: center;
+    margin-bottom: 2rem;
+}
 
-class ChatbotFirstHealthAgent:
-    def __init__(self, custom_config: Optional[Config] = None):
-        self.config = custom_config or Config()
-        logger.info("🤖 ChatbotFirstHealthAgent initialized")
-        logger.info(f"🔗 MCP Server: {self.config.mcp_server_url}")
-        
-        # Load Heart Attack ML Model
-        self.heart_attack_model = None
-        self.load_heart_attack_model()
-        
-        self.setup_langgraph()
-        
-        # Conversation memory
-        self.session_conversations: Dict[str, List[Dict[str, Any]]] = {}
-        self.current_session_id: Optional[str] = None
-        self.current_analysis_context: Optional[Dict[str, Any]] = None
+.chat-container {
+    background: #ffffff;
+    border: 2px solid #007bff;
+    border-radius: 1rem;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    min-height: 600px;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.chat-message {
+    padding: 1rem 1.5rem;
+    margin: 1rem 0;
+    border-radius: 1rem;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-user {
+    background: linear-gradient(45deg, #007bff, #0056b3);
+    color: white;
+    margin-left: 15%;
+    border-bottom-right-radius: 0.3rem;
+}
+
+.chat-assistant {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    margin-right: 15%;
+    border-bottom-left-radius: 0.3rem;
+}
+
+.chat-system {
+    background: linear-gradient(45deg, #28a745, #1e7e34);
+    color: white;
+    text-align: center;
+    border-radius: 0.5rem;
+    font-weight: bold;
+}
+
+.chat-input-container {
+    position: sticky;
+    bottom: 0;
+    background: white;
+    padding: 1rem 0;
+    border-top: 2px solid #dee2e6;
+}
+
+.example-commands {
+    background: #e3f2fd;
+    border: 1px solid #2196f3;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.json-section {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    margin: 1rem 0;
+}
+
+.entity-card {
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+    border: 2px solid #6c757d;
+    border-radius: 0.8rem;
+    padding: 1rem;
+    margin: 0.5rem;
+    text-align: center;
+}
+
+.heart-attack-risk-card {
+    background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+    border: 3px solid #f39c12;
+    border-radius: 1rem;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.risk-low {
+    background: linear-gradient(135deg, #d4edda, #c3e6cb);
+    border-color: #28a745;
+}
+
+.risk-moderate {
+    background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+    border-color: #ffc107;
+}
+
+.risk-high {
+    background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+    border-color: #fd7e14;
+}
+
+.risk-very-high {
+    background: linear-gradient(135deg, #f8d7da, #f1b0b7);
+    border-color: #dc3545;
+}
+
+.risk-unknown {
+    background: linear-gradient(135deg, #e2e3e5, #d6d8db);
+    border-color: #6c757d;
+}
+
+.refresh-button {
+    background: linear-gradient(45deg, #dc3545, #c82333);
+    color: white;
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    width: 100%;
+}
+
+.typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.5rem;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 1rem;
+    margin: 1rem 0;
+    margin-right: 15%;
+    border-bottom-left-radius: 0.3rem;
+}
+
+.typing-dots {
+    display: flex;
+    gap: 4px;
+}
+
+.typing-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #007bff;
+    animation: typing 1.4s infinite;
+}
+
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-10px); }
+}
+
+.heart-attack-section {
+    background: linear-gradient(135deg, #fff5f5, #fed7d7);
+    border: 2px solid #e53e3e;
+    border-radius: 1rem;
+    padding: 1.5rem;
+    margin: 1rem 0;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'agent' not in st.session_state:
+        st.session_state.agent = None
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if 'current_analysis' not in st.session_state:
+        st.session_state.current_analysis = None
+    if 'is_typing' not in st.session_state:
+        st.session_state.is_typing = False
+    if 'show_json_data' not in st.session_state:
+        st.session_state.show_json_data = False
+
+def refresh_everything():
+    """Refresh all data and conversation"""
+    # Clear chat history and analysis data
+    st.session_state.chat_history = []
+    st.session_state.current_analysis = None
+    st.session_state.show_json_data = False
     
-    def load_heart_attack_model(self):
-        """Load the heart attack prediction ML model"""
-        try:
-            logger.info(f"🧠 Loading heart attack model from: {self.config.heart_attack_model_path}")
-            with open(self.config.heart_attack_model_path, 'rb') as f:
-                self.heart_attack_model = pickle.load(f)
-            logger.info("✅ Heart attack model loaded successfully")
-        except Exception as e:
-            logger.error(f"❌ Failed to load heart attack model: {str(e)}")
-            self.heart_attack_model = None
-        
-    def setup_langgraph(self):
-        """Setup LangGraph workflow for chatbot-first processing with heart attack prediction"""
-        logger.info("🔧 Setting up Enhanced Chatbot-First LangGraph workflow...")
-        
-        workflow = StateGraph(ChatbotHealthState)
-        
-        # Add processing nodes
-        workflow.add_node("process_user_input", self.process_user_input)
-        workflow.add_node("extract_patient_data", self.extract_patient_data)
-        workflow.add_node("call_mcp_server", self.call_mcp_server)
-        workflow.add_node("process_analysis_data", self.process_analysis_data)
-        workflow.add_node("predict_heart_attack", self.predict_heart_attack)  # NEW NODE
-        workflow.add_node("setup_analysis_context", self.setup_analysis_context)
-        workflow.add_node("generate_response", self.generate_response)
-        workflow.add_node("handle_contextual_chat", self.handle_contextual_chat)
-        
-        # Define workflow edges
-        workflow.add_edge(START, "process_user_input")
-        
-        # Conditional routing based on user input type
-        workflow.add_conditional_edges(
-            "process_user_input",
-            self.route_user_input,
-            {
-                "extract_data": "extract_patient_data",
-                "contextual_chat": "handle_contextual_chat",
-                "general_response": "generate_response"
-            }
-        )
-        
-        # Patient data extraction flow with heart attack prediction
-        workflow.add_edge("extract_patient_data", "call_mcp_server")
-        workflow.add_edge("call_mcp_server", "process_analysis_data")
-        workflow.add_edge("process_analysis_data", "predict_heart_attack")  # NEW EDGE
-        workflow.add_edge("predict_heart_attack", "setup_analysis_context")  # MODIFIED EDGE
-        workflow.add_edge("setup_analysis_context", "generate_response")
-        
-        # All paths lead to response generation
-        workflow.add_edge("handle_contextual_chat", "generate_response")
-        workflow.add_edge("generate_response", END)
-        
-        # Compile workflow
-        memory = MemorySaver()
-        self.graph = workflow.compile(checkpointer=memory)
-        
-        logger.info("✅ Enhanced Chatbot-First LangGraph workflow compiled!")
+    # Reset agent session if agent exists
+    if st.session_state.agent:
+        st.session_state.agent.refresh_session()
     
-    def call_llm(self, user_message: str) -> str:
-        """Call Snowflake Cortex API"""
-        try:
-            session_id = str(uuid.uuid4())
+    # Add welcome message back
+    add_system_message("""🔄 **Session Refreshed!** 
+
+I'm ready to help with new healthcare analysis including **heart attack risk prediction**. 
+
+**Give me a command like:**
+- "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345"
+- "Evaluate patient data for Sarah Johnson, born 1975-08-22, female, SSN 987654321, zip 90210"
+
+**Ready to analyze patient data with heart attack risk assessment!** 🫀""")
+    
+    st.success("🔄 Session refreshed! Ready for new patient analysis with heart attack prediction.")
+    st.rerun()
+
+def add_system_message(message: str):
+    """Add a system message to chat history"""
+    st.session_state.chat_history.append({
+        "role": "system",
+        "content": message,
+        "timestamp": datetime.now().strftime("%H:%M:%S")
+    })
+
+def display_chat_message(message: Dict[str, Any]):
+    """Display a single chat message"""
+    role = message.get("role", "unknown")
+    content = message.get("content", "")
+    timestamp = message.get("timestamp", "")
+    
+    if role == "user":
+        st.markdown(f"""
+        <div class="chat-message chat-user">
+            <strong>You ({timestamp}):</strong><br>
+            {content}
+        </div>
+        """, unsafe_allow_html=True)
+    elif role == "assistant":
+        st.markdown(f"""
+        <div class="chat-message chat-assistant">
+            <strong>🫀 Healthcare AI ({timestamp}):</strong><br>
+            {content}
+        </div>
+        """, unsafe_allow_html=True)
+    elif role == "system":
+        st.markdown(f"""
+        <div class="chat-message chat-system">
+            {content}
+        </div>
+        """, unsafe_allow_html=True)
+
+def display_typing_indicator():
+    """Display typing indicator"""
+    st.markdown("""
+    <div class="typing-indicator">
+        <span>🫀 AI is thinking</span>
+        <div class="typing-dots">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def display_json_section(title: str, data: Dict[str, Any], key: str):
+    """Display JSON data in collapsible expander"""
+    with st.expander(f"📄 {title}", expanded=False):
+        if data and not data.get("error"):
+            st.json(data)
             
-            payload = {
-                "query": {
-                    "aplctn_cd": self.config.aplctn_cd,
-                    "app_id": self.config.app_id,
-                    "api_key": self.config.api_key,
-                    "method": "cortex",
-                    "model": self.config.model,
-                    "sys_msg": self.config.sys_msg,
-                    "limit_convs": "0",
-                    "prompt": {
-                        "messages": [{"role": "user", "content": user_message}]
-                    },
-                    "app_lvl_prefix": "",
-                    "user_id": "",
-                    "session_id": session_id
-                }
-            }
-            
-            headers = {
-                "Content-Type": "application/json; charset=utf-8",
-                "Accept": "application/json",
-                "Authorization": f'Snowflake Token="{self.config.api_key}"'
-            }
-            
-            response = requests.post(
-                self.config.api_url,
-                headers=headers,
-                json=payload,
-                verify=False,
-                timeout=self.config.timeout
+            # Download button
+            json_str = json.dumps(data, indent=2)
+            st.download_button(
+                f"💾 Download {title}",
+                json_str,
+                f"{title.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                key=f"download_{key}"
             )
+        else:
+            error_msg = data.get("error", "No data available") if data else "No data available"
+            st.error(f"❌ {error_msg}")
+
+def display_heart_attack_risk_card(heart_attack_pred: Dict[str, Any]):
+    """Display heart attack risk assessment card"""
+    if not heart_attack_pred:
+        return
+    
+    risk_level = heart_attack_pred.get('risk_level', 'unknown')
+    risk_prob = heart_attack_pred.get('risk_probability', 0.0)
+    confidence = heart_attack_pred.get('confidence', 0.0)
+    interpretation = heart_attack_pred.get('interpretation', 'No interpretation available')
+    
+    # Risk level styling
+    risk_class = f"risk-{risk_level.replace('_', '-')}"
+    
+    # Risk emoji
+    risk_emoji = {
+        'low': '🟢',
+        'moderate': '🟡',
+        'high': '🟠',
+        'very_high': '🔴',
+        'unknown': '⚪',
+        'error': '❌'
+    }.get(risk_level, '❓')
+    
+    # Clinical recommendation
+    recommendations = {
+        "low": "Continue regular preventive care and healthy lifestyle habits.",
+        "moderate": "Consider lifestyle modifications and regular monitoring.",
+        "high": "Schedule consultation with healthcare provider for assessment.",
+        "very_high": "Seek immediate medical evaluation and cardiology referral.",
+        "unknown": "Insufficient data. Consult healthcare provider for evaluation.",
+        "error": "Risk assessment unavailable. Consult healthcare provider."
+    }
+    
+    recommendation = recommendations.get(risk_level, "Consult healthcare provider.")
+    
+    st.markdown(f"""
+    <div class="heart-attack-risk-card {risk_class}">
+        <h2>🫀 Heart Attack Risk Assessment</h2>
+        <div style="font-size: 2rem; margin: 1rem 0;">{risk_emoji}</div>
+        <h3>Risk Level: {risk_level.upper().replace('_', ' ')}</h3>
+        <p><strong>Risk Probability:</strong> {risk_prob:.1%}</p>
+        <p><strong>Model Confidence:</strong> {confidence:.1%}</p>
+        <hr>
+        <p><strong>Interpretation:</strong> {interpretation}</p>
+        <p><strong>Recommendation:</strong> {recommendation}</p>
+        <p><small>⚠️ <em>This is a computational assessment. Always consult healthcare professionals.</em></small></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def display_entity_cards(entities: Dict[str, Any]):
+    """Display entity extraction results as cards - Enhanced with heart attack data"""
+    if not entities:
+        return
+    
+    st.markdown("### 🎯 Health Entity Extraction")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    indicators = [
+        ("diabetes", "🩺 Diabetes", col1),
+        ("age_group", "👥 Age Group", col2),
+        ("blood_pressure", "💓 Blood Pressure", col3),
+        ("smoking", "🚬 Smoking", col4),
+        ("alcohol", "🍷 Alcohol", col5)
+    ]
+    
+    for key, title, col in indicators:
+        with col:
+            value = entities.get(key, "unknown")
             
-            if response.status_code == 200:
-                raw = response.text
-                if "end_of_stream" in raw:
-                    answer, _, _ = raw.partition("end_of_stream")
-                    return answer.strip()
-                return raw.strip()
+            # Color coding
+            if key == "diabetes" and value == "yes":
+                color = "#dc3545"
+                emoji = "⚠️"
+            elif key in ["smoking", "alcohol"] and value in ["quit_attempt", "treatment"]:
+                color = "#ffc107"
+                emoji = "🟡"
+            elif value == "unknown":
+                color = "#6c757d"
+                emoji = "❓"
             else:
-                return f"API Error {response.status_code}: {response.text[:500]}"
-                
-        except Exception as e:
-            return f"Error: {str(e)}"
+                color = "#28a745"
+                emoji = "✅"
+            
+            st.markdown(f"""
+            <div class="entity-card" style="border-color: {color};">
+                <h4 style="color: {color};">{emoji} {title}</h4>
+                <p style="color: {color}; font-weight: bold;">{value.replace('_', ' ').upper()}</p>
+            </div>
+            """, unsafe_allow_html=True)
     
-    # ===== LANGGRAPH NODES =====
+    # Additional findings
+    medical_conditions = entities.get("medical_conditions", [])
+    medications = entities.get("medications_identified", [])
     
-    def process_user_input(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Process user input and determine what type of response is needed"""
-        logger.info("🔄 Processing user input...")
-        state["current_step"] = "process_user_input"
+    if medical_conditions or medications:
+        col1, col2 = st.columns(2)
         
-        user_message = state["user_message"]
+        with col1:
+            if medical_conditions:
+                st.markdown("**🏥 Medical Conditions:**")
+                for condition in medical_conditions:
+                    st.markdown(f"- {condition}")
         
-        # Add to conversation history
-        if "conversation_history" not in state:
-            state["conversation_history"] = []
+        with col2:
+            if medications:
+                st.markdown("**💊 Medications:**")
+                for med in medications:
+                    st.markdown(f"- {med}")
+
+def send_message(user_input: str):
+    """Send message to the chatbot agent"""
+    if not st.session_state.agent:
+        st.session_state.chat_history.append({
+            "role": "system",
+            "content": "❌ Agent not initialized. Please initialize the agent first.",
+            "timestamp": datetime.now().strftime("%H:%M:%S")
+        })
+        return
+    
+    if not user_input.strip():
+        return
+    
+    # Add user message to chat history immediately
+    st.session_state.chat_history.append({
+        "role": "user",
+        "content": user_input.strip(),
+        "timestamp": datetime.now().strftime("%H:%M:%S")
+    })
+    
+    # Show typing indicator
+    st.session_state.is_typing = True
+    
+    # Process message in try-catch to ensure typing indicator is cleared
+    try:
+        # Process message with agent
+        with st.spinner("🫀 Processing with heart attack risk assessment..."):
+            result = st.session_state.agent.chat(user_input.strip())
         
-        state["conversation_history"].append({
-            "role": "user",
-            "content": user_message,
-            "timestamp": datetime.now().isoformat()
+        # Add assistant response to chat history
+        assistant_response = result.get("response", "I couldn't process your request.")
+        st.session_state.chat_history.append({
+            "role": "assistant", 
+            "content": assistant_response,
+            "timestamp": datetime.now().strftime("%H:%M:%S")
         })
         
-        logger.info(f"📝 User message: {user_message[:100]}...")
-        return state
-    
-    def extract_patient_data(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Extract patient data from natural language using LLM - Enhanced for heart attack prediction"""
-        logger.info("🔍 Extracting patient data from natural language...")
-        state["current_step"] = "extract_patient_data"
-        
-        try:
-            user_message = state["user_message"]
+        # Handle analysis completion
+        if result.get("analysis_ready"):
+            st.session_state.current_analysis = result
+            st.session_state.show_json_data = True
             
-            # Enhanced extraction prompt for heart attack prediction
-            extraction_prompt = f"""
-You are a healthcare data extraction specialist. Extract patient information from the following message and return it as a valid JSON object.
-
-User message: "{user_message}"
-
-Extract the following fields if available:
-- first_name (string)
-- last_name (string)
-- ssn (string, numbers only)
-- date_of_birth (string, format: YYYY-MM-DD)
-- gender (string, "M" or "F")
-- zip_code (string)
-
-ADDITIONAL FIELDS FOR HEART ATTACK PREDICTION (extract if mentioned):
-- age (integer, calculate from DOB if available)
-- chest_pain_type (integer, 0-3 if mentioned)
-- resting_blood_pressure (integer, systolic BP if mentioned)
-- cholesterol (integer, mg/dl if mentioned)
-- fasting_blood_sugar (integer, 1 if >120mg/dl, 0 otherwise)
-- resting_ecg (integer, 0-2 if mentioned)
-- max_heart_rate (integer, if mentioned)
-- exercise_induced_angina (integer, 1 if yes, 0 if no)
-- st_depression (float, if mentioned)
-- st_slope (integer, 0-2 if mentioned)
-- smoking (integer, 1 if yes, 0 if no)
-- diabetes (integer, 1 if yes, 0 if no)
-
-If any field is missing or unclear, use null for that field.
-
-Return ONLY a valid JSON object with these exact field names. Do not include any other text or explanation.
-
-Example format:
-{{
-    "first_name": "John",
-    "last_name": "Smith",
-    "ssn": "123456789",
-    "date_of_birth": "1980-01-15",
-    "gender": "M",
-    "zip_code": "12345",
-    "age": 44,
-    "chest_pain_type": null,
-    "resting_blood_pressure": null,
-    "cholesterol": null,
-    "fasting_blood_sugar": null,
-    "resting_ecg": null,
-    "max_heart_rate": null,
-    "exercise_induced_angina": null,
-    "st_depression": null,
-    "st_slope": null,
-    "smoking": null,
-    "diabetes": null
-}}
-"""
-            
-            # Get extraction from LLM
-            extracted_json = self.call_llm(extraction_prompt)
-            
-            try:
-                # Parse JSON response
-                patient_data = json.loads(extracted_json)
-                
-                # Calculate age if date_of_birth is provided but age is not
-                if patient_data.get('date_of_birth') and not patient_data.get('age'):
-                    try:
-                        dob = datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date()
-                        today = date.today()
-                        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                        patient_data['age'] = age
-                    except:
-                        pass
-                
-                # Validate required fields
-                required_fields = ["first_name", "last_name", "ssn", "date_of_birth", "gender", "zip_code"]
-                missing_fields = []
-                
-                for field in required_fields:
-                    if not patient_data.get(field):
-                        missing_fields.append(field)
-                
-                if missing_fields:
-                    state["errors"].append(f"Missing required fields: {', '.join(missing_fields)}")
-                    state["assistant_response"] = f"I couldn't extract all required patient information. Missing: {', '.join(missing_fields)}. Please provide: first name, last name, SSN, date of birth (YYYY-MM-DD), gender (M/F), and zip code."
-                    state["processing_complete"] = True
-                    return state
-                
-                state["patient_data"] = patient_data
-                logger.info(f"✅ Extracted patient data: {patient_data['first_name']} {patient_data['last_name']}")
-                
-            except json.JSONDecodeError:
-                state["errors"].append("Failed to parse patient data from LLM response")
-                state["assistant_response"] = "I couldn't understand the patient information format. Please provide patient details like: 'Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345'"
-                state["processing_complete"] = True
-                
-        except Exception as e:
-            error_msg = f"Error extracting patient data: {str(e)}"
-            state["errors"].append(error_msg)
-            state["assistant_response"] = "I encountered an error processing the patient information. Please try again with clear patient details."
-            state["processing_complete"] = True
-            logger.error(error_msg)
-        
-        return state
-    
-    def call_mcp_server(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Call all MCP server endpoints"""
-        logger.info("📡 Calling MCP server endpoints...")
-        state["current_step"] = "call_mcp_server"
-        
-        try:
-            patient_data = state["patient_data"]
-            if not patient_data:
-                state["errors"].append("No patient data available for MCP calls")
-                return state
-            
-            # Initialize raw API responses
-            state["raw_api_responses"] = {}
-            
-            # Define MCP endpoints to call
-            endpoints = {
-                "mcid": "/mcid/search",
-                "medical": "/medical/submit",
-                "pharmacy": "/pharmacy/submit", 
-                "token": "/token",
-                "all": "/all"
-            }
-            
-            successful_calls = 0
-            
-            for endpoint_name, endpoint_path in endpoints.items():
-                try:
-                    logger.info(f"📞 Calling {endpoint_name} endpoint...")
-                    
-                    if endpoint_name == "token":
-                        # Token endpoint doesn't need patient data
-                        response = requests.post(
-                            f"{self.config.mcp_server_url}{endpoint_path}",
-                            timeout=self.config.timeout
-                        )
-                    else:
-                        # Other endpoints need patient data
-                        response = requests.post(
-                            f"{self.config.mcp_server_url}{endpoint_path}",
-                            json=patient_data,
-                            timeout=self.config.timeout
-                        )
-                    
-                    if response.status_code == 200:
-                        raw_data = response.json()
-                        state["raw_api_responses"][endpoint_name] = raw_data
-                        successful_calls += 1
-                        logger.info(f"✅ {endpoint_name} call successful")
-                    else:
-                        error_data = {
-                            "error": f"HTTP {response.status_code}",
-                            "message": response.text[:500]
-                        }
-                        state["raw_api_responses"][endpoint_name] = error_data
-                        logger.warning(f"⚠️ {endpoint_name} call failed: {response.status_code}")
-                        
-                except Exception as e:
-                    error_data = {
-                        "error": "Request failed",
-                        "message": str(e)
-                    }
-                    state["raw_api_responses"][endpoint_name] = error_data
-                    logger.error(f"❌ {endpoint_name} call error: {str(e)}")
-            
-            logger.info(f"📊 MCP calls completed: {successful_calls}/5 successful")
-            
-            if successful_calls == 0:
-                state["errors"].append("All MCP server calls failed")
-                state["assistant_response"] = "I couldn't connect to the healthcare data services. Please check if the MCP server is running."
-                state["processing_complete"] = True
-            
-        except Exception as e:
-            error_msg = f"Error calling MCP server: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
-        return state
-    
-    def process_analysis_data(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Process the raw API data through deidentification and entity extraction"""
-        logger.info("🔒 Processing analysis data...")
-        state["current_step"] = "process_analysis_data"
-        
-        try:
-            raw_responses = state.get("raw_api_responses", {})
-            patient_data = state.get("patient_data", {})
-            
-            # Deidentify medical data
-            medical_raw = raw_responses.get("medical", {})
-            if medical_raw and not medical_raw.get("error"):
-                state["deidentified_medical"] = self._deidentify_medical_data(medical_raw, patient_data)
-                logger.info("✅ Medical data deidentified")
-            else:
-                state["deidentified_medical"] = {"error": "No valid medical data"}
-            
-            # Deidentify pharmacy data
-            pharmacy_raw = raw_responses.get("pharmacy", {})
-            if pharmacy_raw and not pharmacy_raw.get("error"):
-                state["deidentified_pharmacy"] = self._deidentify_pharmacy_data(pharmacy_raw)
-                logger.info("✅ Pharmacy data deidentified")
-            else:
-                state["deidentified_pharmacy"] = {"error": "No valid pharmacy data"}
-            
-            # Extract entities
-            entities = self._extract_health_entities(
-                state["deidentified_medical"],
-                state["deidentified_pharmacy"],
-                patient_data
-            )
-            state["entity_extraction"] = entities
-            logger.info("✅ Health entities extracted")
-            
-        except Exception as e:
-            error_msg = f"Error processing analysis data: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
-        return state
-    
-    def predict_heart_attack(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """NEW NODE: Predict heart attack risk using ML model"""
-        logger.info("🫀 Predicting heart attack risk...")
-        state["current_step"] = "predict_heart_attack"
-        
-        try:
-            if not self.heart_attack_model:
-                state["heart_attack_prediction"] = {
-                    "error": "Heart attack model not available",
-                    "risk_level": "unknown",
-                    "confidence": 0.0,
-                    "message": "ML model could not be loaded"
-                }
-                logger.warning("⚠️ Heart attack model not available")
-                return state
-            
-            patient_data = state.get("patient_data", {})
-            entities = state.get("entity_extraction", {})
-            
-            # Prepare features for heart attack prediction
-            features = self._prepare_heart_attack_features(patient_data, entities)
-            
-            if features is None:
-                state["heart_attack_prediction"] = {
-                    "error": "Insufficient data for prediction",
-                    "risk_level": "unknown",
-                    "confidence": 0.0,
-                    "message": "Not enough patient data to make reliable prediction",
-                    "required_fields": [
-                        "age", "chest_pain_type", "resting_blood_pressure", 
-                        "cholesterol", "fasting_blood_sugar", "resting_ecg",
-                        "max_heart_rate", "exercise_induced_angina", 
-                        "st_depression", "st_slope"
-                    ]
-                }
-                logger.warning("⚠️ Insufficient data for heart attack prediction")
-                return state
-            
-            # Make prediction
-            try:
-                prediction_proba = self.heart_attack_model.predict_proba([features])[0]
-                prediction = self.heart_attack_model.predict([features])[0]
-                
-                # Interpret results
-                risk_probability = prediction_proba[1] if len(prediction_proba) > 1 else prediction_proba[0]
-                risk_level = self._interpret_heart_attack_risk(risk_probability)
-                
-                state["heart_attack_prediction"] = {
-                    "risk_level": risk_level,
-                    "risk_probability": float(risk_probability),
-                    "confidence": float(max(prediction_proba)),
-                    "prediction": int(prediction),
-                    "features_used": features.tolist() if hasattr(features, 'tolist') else list(features),
-                    "model_available": True,
-                    "timestamp": datetime.now().isoformat(),
-                    "interpretation": self._get_risk_interpretation(risk_level, risk_probability)
-                }
-                
-                logger.info(f"✅ Heart attack prediction complete: {risk_level} risk ({risk_probability:.2%})")
-                
-            except Exception as e:
-                state["heart_attack_prediction"] = {
-                    "error": f"Prediction failed: {str(e)}",
-                    "risk_level": "error",
-                    "confidence": 0.0,
-                    "message": "Error occurred during ML model prediction"
-                }
-                logger.error(f"❌ Heart attack prediction error: {str(e)}")
-            
-        except Exception as e:
-            error_msg = f"Error in heart attack prediction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["heart_attack_prediction"] = {
-                "error": error_msg,
-                "risk_level": "error",
-                "confidence": 0.0
-            }
-            logger.error(error_msg)
-        
-        return state
-    
-    def _prepare_heart_attack_features(self, patient_data: Dict[str, Any], entities: Dict[str, Any]) -> Optional[np.ndarray]:
-        """Prepare features for heart attack prediction model"""
-        try:
-            # Standard heart attack prediction features (adjust based on your model)
-            feature_map = {
-                'age': patient_data.get('age', 0),
-                'chest_pain_type': patient_data.get('chest_pain_type', 0),
-                'resting_blood_pressure': patient_data.get('resting_blood_pressure', 120),
-                'cholesterol': patient_data.get('cholesterol', 200),
-                'fasting_blood_sugar': patient_data.get('fasting_blood_sugar', 0),
-                'resting_ecg': patient_data.get('resting_ecg', 0),
-                'max_heart_rate': patient_data.get('max_heart_rate', 150),
-                'exercise_induced_angina': patient_data.get('exercise_induced_angina', 0),
-                'st_depression': patient_data.get('st_depression', 0.0),
-                'st_slope': patient_data.get('st_slope', 1),
-            }
-            
-            # Add derived features from entity extraction
-            if entities.get('diabetes') == 'yes':
-                feature_map['diabetes'] = 1
-            else:
-                feature_map['diabetes'] = patient_data.get('diabetes', 0)
-            
-            if entities.get('smoking') in ['yes', 'quit_attempt']:
-                feature_map['smoking'] = 1
-            else:
-                feature_map['smoking'] = patient_data.get('smoking', 0)
-            
-            # Gender encoding (if your model needs it)
-            gender = patient_data.get('gender', 'M')
-            feature_map['gender'] = 1 if gender == 'M' else 0
-            
-            # Convert to numpy array (adjust order based on your model's expected input)
-            features = np.array([
-                feature_map['age'],
-                feature_map['gender'],
-                feature_map['chest_pain_type'],
-                feature_map['resting_blood_pressure'],
-                feature_map['cholesterol'],
-                feature_map['fasting_blood_sugar'],
-                feature_map['resting_ecg'],
-                feature_map['max_heart_rate'],
-                feature_map['exercise_induced_angina'],
-                feature_map['st_depression'],
-                feature_map['st_slope'],
-                feature_map['smoking'],
-                feature_map['diabetes']
-            ])
-            
-            # Check if we have enough valid data (not all zeros)
-            if np.sum(features) == feature_map['age']:  # Only age is set
-                return None
-            
-            return features
-            
-        except Exception as e:
-            logger.error(f"Error preparing heart attack features: {e}")
-            return None
-    
-    def _interpret_heart_attack_risk(self, probability: float) -> str:
-        """Interpret heart attack risk probability"""
-        if probability < 0.2:
-            return "low"
-        elif probability < 0.5:
-            return "moderate"
-        elif probability < 0.7:
-            return "high"
-        else:
-            return "very_high"
-    
-    def _get_risk_interpretation(self, risk_level: str, probability: float) -> str:
-        """Get detailed risk interpretation"""
-        interpretations = {
-            "low": f"Low risk ({probability:.1%}) - Continue regular health maintenance",
-            "moderate": f"Moderate risk ({probability:.1%}) - Consider lifestyle improvements and regular monitoring",
-            "high": f"High risk ({probability:.1%}) - Consult healthcare provider for risk assessment",
-            "very_high": f"Very high risk ({probability:.1%}) - Immediate medical consultation recommended"
-        }
-        return interpretations.get(risk_level, f"Unknown risk level ({probability:.1%})")
-    
-    def setup_analysis_context(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Setup context for future conversations about the analysis - Enhanced with heart attack prediction"""
-        logger.info("🤖 Setting up analysis context...")
-        state["current_step"] = "setup_analysis_context"
-        
-        try:
-            # Create analysis context for future conversations
-            self.current_analysis_context = {
-                "patient_info": {
-                    "name": f"{state['patient_data'].get('first_name', 'Unknown')} {state['patient_data'].get('last_name', 'Unknown')}",
-                    "age_group": state["entity_extraction"].get("age_group", "unknown"),
-                    "analysis_timestamp": datetime.now().isoformat()
-                },
-                "deidentified_medical": state["deidentified_medical"],
-                "deidentified_pharmacy": state["deidentified_pharmacy"],
-                "entity_extraction": state["entity_extraction"],
-                "heart_attack_prediction": state["heart_attack_prediction"],  # NEW
-                "raw_api_responses": state["raw_api_responses"]
-            }
-            
-            state["analysis_ready"] = True
-            logger.info("✅ Analysis context setup complete")
-            
-        except Exception as e:
-            error_msg = f"Error setting up analysis context: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
-        return state
-    
-    def generate_response(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Generate response based on current state - Enhanced with heart attack prediction"""
-        logger.info("💬 Generating response...")
-        state["current_step"] = "generate_response"
-        
-        try:
-            if state.get("analysis_ready"):
-                # Generate analysis complete response with heart attack prediction
-                response = self._generate_analysis_complete_response(state)
-            elif state.get("errors"):
-                # Generate error response
-                response = f"❌ I encountered some issues: {'; '.join(state['errors'])}"
-            else:
-                # Generate general response based on context and user message
-                user_message = state.get("user_message", "").lower()
-                
-                # Check if asking about capabilities
-                if any(phrase in user_message for phrase in ["what can you", "capabilities", "what do you do", "help me"]):
-                    if self.current_analysis_context:
-                        response = """I'm your healthcare analysis assistant with current patient data loaded! Here's what I can do:
-
-🔍 **Answer Questions About Current Analysis:**
-- Count medical/pharmacy claims: "How many medical claims were found?"
-- List medications: "What medications were identified?"
-- Show conditions: "What medical conditions were found?"
-- API status: "What's the API status?"
-- Detailed analysis: "Explain the diabetes findings"
-- **Heart attack risk: "What's the heart attack risk?" or "Show heart attack prediction"**
-
-📊 **Data Sources I Have Access To:**
-- Deidentified medical records
-- Deidentified pharmacy data  
-- Entity extraction results
-- **Heart attack ML prediction results**
-- Raw MCP server responses
-
-💬 **Just ask me anything about the current patient's analysis data including heart attack risk!**"""
-                    else:
-                        response = """I'm your healthcare analysis assistant! Here's what I can do:
-
-📝 **Patient Analysis:**
-- Give me patient data and I'll analyze it
-- Example: "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345"
-
-🔄 **My Process:**
-1. Extract patient info from your command
-2. Call MCP server (medical, pharmacy, MCID APIs)
-3. Deidentify data for privacy
-4. Extract health entities (diabetes, medications, etc.)
-5. **Predict heart attack risk using ML model**
-6. Answer your questions about the results
-
-💬 **After Analysis, Ask Me:**
-- "How many medical claims were found?"
-- "Count pharmacy claims"
-- "What medications were identified?"
-- "Show me medical conditions"
-- "What's the API status?"
-- **"What's the heart attack risk?"**
-- **"Show heart attack prediction details"**
-
-**Ready to analyze patient data with heart attack risk assessment!**"""
-                
-                elif self.current_analysis_context:
-                    # We have analysis context, so guide them to ask questions
-                    response = """I have patient analysis data loaded! You can ask me detailed questions like:
-
-📊 **Claims & Data:**
-- "How many medical claims were found?"
-- "Count the pharmacy claims"
-- "What's the API status?"
-
-💊 **Medications & Conditions:**  
-- "What medications were identified?"
-- "Show me the medical conditions"
-- "Give me diabetes details"
-
-🫀 **Heart Attack Risk Assessment:**
-- "What's the heart attack risk?"
-- "Show heart attack prediction"
-- "Explain the heart attack risk factors"
-
-📄 **Data Analysis:**
-- "Explain the pharmacy findings"
-- "What does the medical data show?"
-- "Tell me about the health indicators"
-
-**Or give me a new patient analysis command!**"""
-                else:
-                    # No analysis context, guide them to start analysis
-                    response = """Hello! I'm your healthcare analysis assistant with **heart attack risk prediction**. 
-
-**To get started, give me a patient analysis command like:**
-- "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345"
-
-**Then I can answer detailed questions about:**
-- Medical claims counts
-- Pharmacy claims counts  
-- Medications identified
-- Medical conditions found
-- API response status
-- Health risk indicators
-- **Heart attack risk assessment**
-
-**What would you like me to analyze?**"""
-            
-            state["assistant_response"] = response
-            state["processing_complete"] = True
-            
-            # Add assistant response to conversation history
-            state["conversation_history"].append({
-                "role": "assistant",
-                "content": response,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            logger.info("✅ Response generated")
-            
-        except Exception as e:
-            error_msg = f"Error generating response: {str(e)}"
-            state["errors"].append(error_msg)
-            state["assistant_response"] = f"I apologize, but I encountered an error: {str(e)}"
-            state["processing_complete"] = True
-            logger.error(error_msg)
-        
-        return state
-    
-    def handle_contextual_chat(self, state: ChatbotHealthState) -> ChatbotHealthState:
-        """Handle contextual chat about existing analysis - Enhanced with heart attack prediction"""
-        logger.info("💭 Handling contextual chat...")
-        state["current_step"] = "handle_contextual_chat"
-        
-        try:
-            if not self.current_analysis_context:
-                state["assistant_response"] = "I don't have any analysis data to discuss. Please run a patient analysis first by providing patient information."
-                state["processing_complete"] = True
-                return state
-            
-            user_question = state["user_message"]
-            
-            # First, try to answer specific questions by analyzing the data directly
-            direct_answer = self._try_direct_data_analysis(user_question)
-            
-            if direct_answer:
-                state["assistant_response"] = direct_answer
-            else:
-                # Fall back to LLM-based contextual response
-                context_prompt = self._create_contextual_chat_prompt(user_question, state["conversation_history"])
-                response = self.call_llm(context_prompt)
-                
-                if response.startswith("Error"):
-                    state["assistant_response"] = "I'm having trouble processing your question. Please try rephrasing or ask something specific about the analysis data."
-                else:
-                    state["assistant_response"] = response
-            
-            state["processing_complete"] = True
-            logger.info("✅ Contextual chat response generated")
-            
-        except Exception as e:
-            error_msg = f"Error in contextual chat: {str(e)}"
-            state["errors"].append(error_msg)
-            state["assistant_response"] = f"I encountered an error processing your question: {str(e)}"
-            state["processing_complete"] = True
-            logger.error(error_msg)
-        
-        return state
-    
-    def _try_direct_data_analysis(self, user_question: str) -> Optional[str]:
-        """Try to answer specific questions by directly analyzing the JSON data - Enhanced with heart attack prediction"""
-        try:
-            if not self.current_analysis_context:
-                return None
-            
-            question_lower = user_question.lower()
-            
-            # Get the analysis data
-            deident_medical = self.current_analysis_context.get('deidentified_medical', {})
-            deident_pharmacy = self.current_analysis_context.get('deidentified_pharmacy', {})
-            entities = self.current_analysis_context.get('entity_extraction', {})
-            raw_responses = self.current_analysis_context.get('raw_api_responses', {})
-            heart_attack_pred = self.current_analysis_context.get('heart_attack_prediction', {})  # NEW
-            
-            # Handle heart attack risk questions
-            if any(phrase in question_lower for phrase in ["heart attack", "cardiac risk", "heart risk", "heart attack risk", "heart attack prediction"]):
-                if heart_attack_pred.get("error"):
-                    return f"""🫀 **Heart Attack Risk Assessment:**
-
-❌ **Prediction Status:** Not Available
-**Error:** {heart_attack_pred.get('error', 'Unknown error')}
-**Message:** {heart_attack_pred.get('message', 'Heart attack prediction could not be completed')}
-
-{heart_attack_pred.get('required_fields') and '**Missing Data:** ' + ', '.join(heart_attack_pred['required_fields']) or ''}
-
-💡 **Note:** For accurate heart attack risk assessment, additional clinical data is needed such as:
-- Chest pain type, blood pressure, cholesterol levels
-- ECG results, maximum heart rate
-- Exercise-induced symptoms"""
-                
-                risk_level = heart_attack_pred.get('risk_level', 'unknown')
-                risk_prob = heart_attack_pred.get('risk_probability', 0.0)
-                confidence = heart_attack_pred.get('confidence', 0.0)
-                interpretation = heart_attack_pred.get('interpretation', 'No interpretation available')
-                
-                # Risk level emoji and color
-                risk_emoji = {
-                    'low': '🟢',
-                    'moderate': '🟡', 
-                    'high': '🟠',
-                    'very_high': '🔴',
-                    'unknown': '⚪',
-                    'error': '❌'
-                }.get(risk_level, '❓')
-                
-                return f"""🫀 **Heart Attack Risk Assessment:**
-
-{risk_emoji} **Risk Level:** {risk_level.upper().replace('_', ' ')}
-📊 **Risk Probability:** {risk_prob:.1%}
-🎯 **Model Confidence:** {confidence:.1%}
-
-**📋 Interpretation:**
-{interpretation}
-
-**⚕️ Clinical Recommendation:**
-{self._get_clinical_recommendation(risk_level)}
-
-**🔬 Model Details:**
-- Prediction Model: {"Available" if heart_attack_pred.get('model_available') else "Not Available"}
-- Analysis Timestamp: {heart_attack_pred.get('timestamp', 'Unknown')}
-
-⚠️ **Important:** This is a computational risk assessment based on available data. Always consult healthcare professionals for medical decisions."""
-            
-            # Handle medical claims count questions
-            elif any(phrase in question_lower for phrase in ["medical claims", "number of medical", "how many medical", "count medical"]):
-                medical_count = self._count_medical_claims(deident_medical, raw_responses.get('medical', {}))
-                return f"""📊 **Medical Claims Analysis:**
-
-**Number of Medical Claims Found:** {medical_count['total_claims']}
-
-**Breakdown:**
-- Records in deidentified medical data: {medical_count['deident_records']}
-- Records in raw medical response: {medical_count['raw_records']}
-- Medical service entries: {medical_count['service_entries']}
-
-**Analysis Details:**
-{chr(10).join(medical_count['details'])}
-
-The medical claims data includes diagnostic codes, service codes, and treatment records from the healthcare provider's system."""
-            
-            # Handle pharmacy claims count questions
-            elif any(phrase in question_lower for phrase in ["pharmacy claims", "number of pharmacy", "how many pharmacy", "count pharmacy"]):
-                pharmacy_count = self._count_pharmacy_claims(deident_pharmacy, raw_responses.get('pharmacy', {}))
-                return f"""💊 **Pharmacy Claims Analysis:**
-
-**Number of Pharmacy Claims Found:** {pharmacy_count['total_claims']}
-
-**Breakdown:**
-- Records in deidentified pharmacy data: {pharmacy_count['deident_records']}
-- Records in raw pharmacy response: {pharmacy_count['raw_records']}
-- Medication entries: {pharmacy_count['medication_entries']}
-
-**Analysis Details:**
-{chr(10).join(pharmacy_count['details'])}
-
-The pharmacy claims include prescription medications, NDC codes, and dispensing information."""
-            
-            # Handle medication count questions
-            elif any(phrase in question_lower for phrase in ["medications found", "number of medications", "how many medications", "count medications"]):
-                medications = entities.get('medications_identified', [])
-                return f"""💊 **Medications Found:** {len(medications)}
-
-**Identified Medications:**
-{chr(10).join([f"- {med}" for med in medications]) if medications else "- No specific medications identified"}
-
-**Sources:** Analysis of deidentified pharmacy data and medical records."""
-            
-            # Handle medical conditions count questions  
-            elif any(phrase in question_lower for phrase in ["medical conditions", "conditions found", "number of conditions", "how many conditions"]):
-                conditions = entities.get('medical_conditions', [])
-                return f"""🏥 **Medical Conditions Found:** {len(conditions)}
-
-**Identified Conditions:**
-{chr(10).join([f"- {condition}" for condition in conditions]) if conditions else "- No specific conditions identified"}
-
-**Sources:** Analysis of deidentified medical data and diagnostic patterns."""
-            
-            # Handle API status questions
-            elif any(phrase in question_lower for phrase in ["api status", "api calls", "server response", "mcp status"]):
-                api_status = self._analyze_api_status(raw_responses)
-                return f"""📡 **MCP Server API Status:**
-
-**Successful Calls:** {api_status['successful']}/5
-
-**Individual Endpoints:**
-{chr(10).join(api_status['details'])}
-
-**Overall Status:** {api_status['overall_status']}"""
-            
-            # No direct match found
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error in direct data analysis: {e}")
-            return f"I encountered an error analyzing the data: {str(e)}"
-    
-    def _get_clinical_recommendation(self, risk_level: str) -> str:
-        """Get clinical recommendation based on risk level"""
-        recommendations = {
-            "low": "Continue regular preventive care and healthy lifestyle habits.",
-            "moderate": "Consider lifestyle modifications, regular monitoring, and discuss with healthcare provider.",
-            "high": "Schedule consultation with healthcare provider for comprehensive cardiac risk assessment.",
-            "very_high": "Seek immediate medical evaluation and consider urgent cardiology referral.",
-            "unknown": "Insufficient data for risk assessment. Consult healthcare provider for proper evaluation.",
-            "error": "Risk assessment unavailable. Consult healthcare provider for proper cardiac risk evaluation."
-        }
-        return recommendations.get(risk_level, "Consult healthcare provider for proper risk assessment.")
-    
-    # [Continue with the rest of the existing helper methods...]
-    # I'll include the key ones and indicate where the existing methods continue
-    
-    def _count_medical_claims(self, deident_medical: Dict, raw_medical: Dict) -> Dict[str, Any]:
-        """Count medical claims from the data"""
-        # [Same as original implementation]
-        result = {
-            'total_claims': 0,
-            'deident_records': 0,  
-            'raw_records': 0,
-            'service_entries': 0,
-            'details': []
-        }
-        
-        try:
-            # Count from deidentified medical data
-            if deident_medical and not deident_medical.get('error'):
-                medical_data = deident_medical.get('medical_data', {})
-                deident_count = self._recursive_count_records(medical_data)
-                result['deident_records'] = deident_count
-                result['details'].append(f"Deidentified medical records: {deident_count}")
-            
-            # Count from raw medical data
-            if raw_medical and not raw_medical.get('error'):
-                raw_count = self._recursive_count_records(raw_medical)
-                result['raw_records'] = raw_count
-                result['details'].append(f"Raw medical response records: {raw_count}")
-            
-            # Count service entries (if available)
-            service_count = self._count_service_entries(deident_medical, raw_medical)
-            result['service_entries'] = service_count
-            if service_count > 0:
-                result['details'].append(f"Medical service entries: {service_count}")
-            
-            # Calculate total
-            result['total_claims'] = max(result['deident_records'], result['raw_records'])
-            
-            if result['total_claims'] == 0:
-                result['details'].append("No medical claims found in the data")
-            
-        except Exception as e:
-            result['details'].append(f"Error counting medical claims: {str(e)}")
-        
-        return result
-    
-    def _count_pharmacy_claims(self, deident_pharmacy: Dict, raw_pharmacy: Dict) -> Dict[str, Any]:
-        """Count pharmacy claims from the data"""
-        result = {
-            'total_claims': 0,
-            'deident_records': 0,
-            'raw_records': 0,
-            'medication_entries': 0,
-            'details': []
-        }
-        
-        try:
-            # Count from deidentified pharmacy data
-            if deident_pharmacy and not deident_pharmacy.get('error'):
-                pharmacy_data = deident_pharmacy.get('pharmacy_data', {})
-                deident_count = self._recursive_count_records(pharmacy_data)
-                result['deident_records'] = deident_count
-                result['details'].append(f"Deidentified pharmacy records: {deident_count}")
-            
-            # Count from raw pharmacy data
-            if raw_pharmacy and not raw_pharmacy.get('error'):
-                raw_count = self._recursive_count_records(raw_pharmacy)
-                result['raw_records'] = raw_count
-                result['details'].append(f"Raw pharmacy response records: {raw_count}")
-            
-            # Count medication entries
-            med_count = self._count_medication_entries(deident_pharmacy, raw_pharmacy)
-            result['medication_entries'] = med_count
-            if med_count > 0:
-                result['details'].append(f"Medication entries: {med_count}")
-            
-            # Calculate total
-            result['total_claims'] = max(result['deident_records'], result['raw_records'])
-            
-            if result['total_claims'] == 0:
-                result['details'].append("No pharmacy claims found in the data")
-            
-        except Exception as e:
-            result['details'].append(f"Error counting pharmacy claims: {str(e)}")
-        
-        return result
-    
-    def _recursive_count_records(self, data: Any, record_types: list = None) -> int:
-        """Recursively count records in nested data structures"""
-        if record_types is None:
-            record_types = ['claims', 'records', 'entries', 'items', 'data', 'results']
-        
-        count = 0
-        try:
-            if isinstance(data, dict):
-                # Count if this dict represents records
-                for key in record_types:
-                    if key in data and isinstance(data[key], list):
-                        count += len(data[key])
-                
-                # Recursively count in nested structures
-                for value in data.values():
-                    count += self._recursive_count_records(value, record_types)
-                    
-            elif isinstance(data, list):
-                count += len(data)  # Count list items
-                # Also check nested structures
-                for item in data:
-                    count += self._recursive_count_records(item, record_types)
-        except:
-            pass
-        
-        return count
-    
-    def _count_service_entries(self, deident_medical: Dict, raw_medical: Dict) -> int:
-        """Count medical service entries"""
-        count = 0
-        try:
-            # Look for service-specific fields
-            for data in [deident_medical, raw_medical]:
-                if data and not data.get('error'):
-                    count += self._count_fields_with_keywords(data, ['service', 'procedure', 'diagnosis', 'treatment'])
-        except:
-            pass
-        return count
-    
-    def _count_medication_entries(self, deident_pharmacy: Dict, raw_pharmacy: Dict) -> int:
-        """Count medication entries"""
-        count = 0
-        try:
-            # Look for medication-specific fields
-            for data in [deident_pharmacy, raw_pharmacy]:
-                if data and not data.get('error'):
-                    count += self._count_fields_with_keywords(data, ['medication', 'drug', 'prescription', 'ndc', 'pharmacy'])
-        except:
-            pass
-        return count
-    
-    def _count_fields_with_keywords(self, data: Any, keywords: list) -> int:
-        """Count fields that contain specific keywords"""
-        count = 0
-        try:
-            if isinstance(data, dict):
-                for key, value in data.items():
-                    key_lower = str(key).lower()
-                    if any(keyword in key_lower for keyword in keywords):
-                        if isinstance(value, list):
-                            count += len(value)
-                        elif value is not None:
-                            count += 1
-                    
-                    # Recurse into nested structures
-                    count += self._count_fields_with_keywords(value, keywords)
-                    
-            elif isinstance(data, list):
-                for item in data:
-                    count += self._count_fields_with_keywords(item, keywords)
-        except:
-            pass
-        return count
-    
-    def _analyze_api_status(self, raw_responses: Dict) -> Dict[str, Any]:
-        """Analyze the status of API calls"""
-        endpoints = ['mcid', 'medical', 'pharmacy', 'token', 'all']
-        successful = 0
-        details = []
-        
-        for endpoint in endpoints:
-            response = raw_responses.get(endpoint, {})
-            if response and not response.get('error'):
-                successful += 1
-                details.append(f"✅ {endpoint.upper()}: Success")
-            else:
-                error_msg = response.get('error', 'No response') if response else 'No response'
-                details.append(f"❌ {endpoint.upper()}: {error_msg}")
-        
-        if successful == 5:
-            overall_status = "All endpoints successful"
-        elif successful > 0:
-            overall_status = f"Partial success ({successful}/5 endpoints)"
-        else:
-            overall_status = "All endpoints failed"
-        
-        return {
-            'successful': successful,
-            'details': details,
-            'overall_status': overall_status
-        }
-    
-    def _generate_analysis_complete_response(self, state: ChatbotHealthState) -> str:
-        """Generate response when analysis is complete - Enhanced with heart attack prediction"""
-        try:
-            patient_name = f"{state['patient_data'].get('first_name', 'Unknown')} {state['patient_data'].get('last_name', 'Unknown')}"
-            entities = state["entity_extraction"]
-            heart_attack_pred = state.get("heart_attack_prediction", {})
-            
-            # Count successful API calls
-            raw_responses = state.get("raw_api_responses", {})
-            successful_calls = len([k for k, v in raw_responses.items() if v and not v.get("error")])
-            
-            # Count findings
-            conditions = len(entities.get("medical_conditions", []))
-            medications = len(entities.get("medications_identified", []))
+            # Add analysis completion message with heart attack risk
+            analysis_info = result.get('entity_extraction', {})
+            heart_attack_pred = result.get('heart_attack_prediction', {})
+            api_responses = result.get('raw_api_responses', {})
+            successful_apis = len([k for k, v in api_responses.items() if v and not v.get('error')])
             
             # Heart attack risk summary
             risk_level = heart_attack_pred.get('risk_level', 'unknown')
+            risk_prob = heart_attack_pred.get('risk_probability', 0.0)
             risk_emoji = {
                 'low': '🟢',
                 'moderate': '🟡',
-                'high': '🟠', 
+                'high': '🟠',
                 'very_high': '🔴',
                 'unknown': '⚪',
                 'error': '❌'
             }.get(risk_level, '❓')
             
-            response = f"""🏥 **Healthcare Analysis Complete for {patient_name}**
+            completion_message = f"""📊 **Analysis Complete with Heart Attack Risk Assessment!** 
 
-📊 **MCP Server Results:**
-- API Calls Successful: {successful_calls}/5
-- Data Retrieved: ✅ Medical, ✅ Pharmacy, ✅ MCID, ✅ Token, ✅ All
+✅ **API Results:** {successful_apis}/5 MCP endpoints successful
+🔒 **Data Processing:** Medical & pharmacy data deidentified
+🫀 **Heart Attack Risk:** {risk_emoji} {risk_level.upper().replace('_', ' ')} ({risk_prob:.1%})
+🎯 **Entities Extracted:** 
+- Diabetes: {analysis_info.get('diabetes', 'unknown').title()}
+- Age Group: {analysis_info.get('age_group', 'unknown').title()}  
+- Blood Pressure: {analysis_info.get('blood_pressure', 'unknown').title()}
 
-🔒 **Data Processing Complete:**
-- Medical data deidentified ✅
-- Pharmacy data deidentified ✅  
-- Health entities extracted ✅
-- **Heart attack risk assessed ✅**
+💬 **I can now answer detailed questions about the analysis data including heart attack risk!**
 
-🫀 **Heart Attack Risk Assessment:**
-{risk_emoji} **Risk Level:** {risk_level.upper().replace('_', ' ')}
-- **Probability:** {heart_attack_pred.get('risk_probability', 0.0):.1%}
-- **Model Status:** {"Available" if heart_attack_pred.get('model_available') else "Error"}
+Try asking:
+- "How many medical claims were found?"
+- "What medications were identified?"  
+- "Show me the API status"
+- "Count the pharmacy claims"
+- **"What's the heart attack risk?"**
+- **"Show heart attack prediction details"**
+"""
+            
+            st.session_state.chat_history.append({
+                "role": "system",
+                "content": completion_message,
+                "timestamp": datetime.now().strftime("%H:%M:%S")
+            })
+        
+        # Show any errors
+        if result.get("errors"):
+            for error in result["errors"]:
+                st.session_state.chat_history.append({
+                    "role": "system",
+                    "content": f"⚠️ {error}",
+                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                })
+        
+    except Exception as e:
+        # Add error message to chat
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": f"❌ I encountered an error: {str(e)}",
+            "timestamp": datetime.now().strftime("%H:%M:%S")
+        })
+    
+    finally:
+        # Always clear typing indicator
+        st.session_state.is_typing = False
 
-🎯 **Key Health Indicators:**
-- Age Group: {entities.get('age_group', 'unknown').title()}
-- Diabetes: {entities.get('diabetes', 'unknown').title()}
-- Blood Pressure: {entities.get('blood_pressure', 'unknown').title()}
-- Smoking Status: {entities.get('smoking', 'unknown').title()}
-- Alcohol Status: {entities.get('alcohol', 'unknown').title()}
+# Initialize session state
+initialize_session_state()
 
-📋 **Analysis Summary:**
-- Medical Conditions Identified: {conditions}
-- Medications Identified: {medications}
+# Main title
+st.markdown('<h1 class="main-title">🫀 Healthcare Analysis Chatbot with Heart Attack Prediction</h1>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Natural Language Healthcare Data Analysis • ML-Powered Heart Attack Risk Assessment • Give commands to analyze patient data</p>', unsafe_allow_html=True)
 
-💬 **I'm now ready to answer questions about this analysis!**
+# Check agent availability
+if not AGENT_AVAILABLE:
+    st.error(f"❌ Enhanced chatbot agent not available: {import_error}")
+    st.info("💡 Please ensure the enhanced chatbot_first_agent.py is available and dependencies are installed.")
+    st.info("🔧 Required: pickle, numpy, pandas for heart attack prediction")
+    st.stop()
 
-You can ask me:
-- "What medications were found?"
-- "Explain the diabetes findings"
-- "What are the key health risks?"
+# Top controls
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    # Initialize agent button
+    if not st.session_state.agent:
+        if st.button("🚀 Initialize Healthcare AI Agent with Heart Attack Prediction", key="init_agent"):
+            try:
+                # Create custom config with heart attack model path
+                config = Config()
+                config.heart_attack_model_path = HEART_ATTACK_MODEL_PATH  # Use the configurable path
+                st.session_state.agent = ChatbotFirstHealthAgent(config)
+                add_system_message("""✅ **Healthcare AI Agent with Heart Attack Prediction Initialized!** 
+
+I can analyze patient data through natural language commands and provide comprehensive health assessments including **heart attack risk prediction** using machine learning.
+
+**Ready to process your commands!** Just tell me what you need. 🫀
+
+**Example:** "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345" """)
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to initialize agent: {str(e)}")
+                if "heart_attack_model" in str(e).lower() or "pickle" in str(e).lower():
+                    st.info(f"💡 Make sure to update the HEART_ATTACK_MODEL_PATH variable at the top of this file to point to your pickle file: {HEART_ATTACK_MODEL_PATH}")
+                    st.info("🔧 You can also create a dummy pickle file for testing or disable the heart attack prediction feature.")
+
+with col2:
+    # Refresh button
+    if st.button("🔄 Refresh All", key="refresh_all"):
+        refresh_everything()
+
+# Agent status
+if st.session_state.agent:
+    st.success("✅ Healthcare AI Agent Ready with Heart Attack Prediction")
+    
+    # Check if heart attack model is loaded
+    if hasattr(st.session_state.agent, 'heart_attack_model') and st.session_state.agent.heart_attack_model:
+        st.success("🫀 Heart Attack ML Model Loaded")
+    else:
+        st.warning("⚠️ Heart Attack ML Model Not Available - Check model path")
+else:
+    st.warning("⚠️ Please initialize the agent to begin")
+    st.stop()
+
+# Add welcome message if chat is empty
+if not st.session_state.chat_history:
+    add_system_message("""🫀 **Welcome to Healthcare Analysis Chatbot with Heart Attack Prediction!** 
+
+I can analyze patient healthcare data and provide comprehensive health assessments including **ML-powered heart attack risk prediction**.
+
+**🔄 How it works:**
+1. **Give me a patient analysis command** (see examples below)
+2. **I extract data from your command** using AI
+3. **I call MCP server** to get medical and pharmacy data  
+4. **I process and deidentify** the data for privacy
+5. **I predict heart attack risk** using machine learning
+6. **You can ask specific questions** about the analysis results
+
+**📝 Example analysis commands:**
+- "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345"
+
+**💬 After analysis, ask me questions like:**
+- "How many medical claims were found?"
+- "Count the pharmacy claims"
+- "What medications were identified?"
 - "Show me the medical conditions"
-- "What does the pharmacy data show?"
+- "What's the API status?"
+- "Give me diabetes details"
 - **"What's the heart attack risk?"**
 - **"Show heart attack prediction details"**
 
-The raw JSON data from all MCP endpoints is available for review, and I can discuss any aspect of the deidentified analysis results including the heart attack risk assessment."""
+**🔄 Use the Refresh button to start a new analysis.**
 
-            return response
-            
-        except Exception as e:
-            return f"Analysis completed but I had trouble generating the summary: {str(e)}"
-    
-    # [Include all remaining helper methods from the original code]
-    # This includes: route_user_input, _deidentify_medical_data, _deidentify_pharmacy_data,
-    # _remove_pii_from_data, _extract_health_entities, _create_contextual_chat_prompt,
-    # and all the counting/analysis methods
-    
-    # ===== PUBLIC METHODS =====
-    
-    def chat(self, user_message: str) -> Dict[str, Any]:
-        """Main chat interface - process user message and return response - Enhanced with heart attack prediction"""
-        try:
-            # Create session ID if needed
-            if not self.current_session_id:
-                self.current_session_id = str(uuid.uuid4())
-                self.session_conversations[self.current_session_id] = []
-            
-            # Initialize state
-            initial_state = ChatbotHealthState(
-                user_message=user_message,
-                conversation_history=[],
-                patient_data=None,
-                raw_api_responses={},
-                deidentified_medical={},
-                deidentified_pharmacy={},
-                entity_extraction={},
-                heart_attack_prediction={},  # NEW
-                analysis_ready=False,
-                assistant_response="",
-                current_step="",
-                errors=[],
-                processing_complete=False
-            )
-            
-            # Run the workflow
-            config_dict = {"configurable": {"thread_id": f"chat_{self.current_session_id}"}}
-            final_state = self.graph.invoke(initial_state, config=config_dict)
-            
-            # Store conversation in session
-            self.session_conversations[self.current_session_id].extend(final_state["conversation_history"])
-            
-            # Prepare response
-            result = {
-                "success": final_state["processing_complete"] and not final_state["errors"],
-                "response": final_state["assistant_response"],
-                "analysis_ready": final_state.get("analysis_ready", False),
-                "patient_data": final_state.get("patient_data"),
-                "raw_api_responses": final_state.get("raw_api_responses", {}),
-                "deidentified_data": {
-                    "medical": final_state.get("deidentified_medical", {}),
-                    "pharmacy": final_state.get("deidentified_pharmacy", {})
-                },
-                "entity_extraction": final_state.get("entity_extraction", {}),
-                "heart_attack_prediction": final_state.get("heart_attack_prediction", {}),  # NEW
-                "errors": final_state.get("errors", []),
-                "session_id": self.current_session_id,
-                "conversation_history": self.session_conversations[self.current_session_id]
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error in chat processing: {str(e)}")
-            return {
-                "success": False,
-                "response": f"I apologize, but I encountered an error: {str(e)}",
-                "analysis_ready": False,
-                "errors": [str(e)],
-                "session_id": self.current_session_id
-            }
-    
-    # [Include remaining methods: refresh_session, get_conversation_history, main function]
+**Ready to analyze patient data with heart attack risk assessment!** 🫀""")
 
+# Chat interface
+st.markdown("### 💬 Healthcare Analysis Conversation")
+
+# Chat container with proper scrolling
+chat_container = st.container()
+with chat_container:
+    # Create a scrollable chat area
+    chat_messages_placeholder = st.empty()
     
-    # ===== CONDITIONAL ROUTING =====
-    
-    def route_user_input(self, state: ChatbotHealthState) -> Literal["extract_data", "contextual_chat", "general_response"]:
-        """Route user input based on content and context"""
-        user_message = state["user_message"].lower()
+    with chat_messages_placeholder.container():
+        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
         
-        # PRIORITY 1: If we have analysis context, almost everything should go to contextual chat
-        if self.current_analysis_context:
-            # Only route to new analysis if explicitly asking for NEW patient
-            new_patient_phrases = [
-                "new patient", "different patient", "another patient", "analyze patient"
-            ]
-            
-            # Check if they're explicitly asking for a new analysis
-            is_new_analysis = False
-            for phrase in new_patient_phrases:
-                if phrase in user_message:
-                    # Also check if they provided new patient details
-                    has_name = any(word.istitle() for word in state["user_message"].split())
-                    has_numbers = any(char.isdigit() for char in state["user_message"])
-                    if has_name and has_numbers:
-                        is_new_analysis = True
-                        break
-            
-            if is_new_analysis:
-                logger.info("🔄 Routing to new patient analysis (explicit request)")
-                return "extract_data"
-            else:
-                # Everything else goes to contextual chat when we have analysis data
-                logger.info("🔄 Routing to contextual chat (analysis data available)")
-                return "contextual_chat"
+        # Display all chat messages
+        for i, message in enumerate(st.session_state.chat_history):
+            display_chat_message(message)
         
-        # PRIORITY 2: Check if this looks like a patient analysis request (when no analysis context)
-        analysis_keywords = [
-            "analyze", "analysis", "patient", "evaluate", "assess", "check",
-            "dob", "date of birth", "ssn", "social security", "zip code"
-        ]
+        # Show typing indicator if agent is processing
+        if st.session_state.is_typing:
+            display_typing_indicator()
         
-        if any(keyword in user_message for keyword in analysis_keywords):
-            # Check if we can extract patient info
-            has_name = any(word.istitle() for word in state["user_message"].split())
-            has_numbers = any(char.isdigit() for char in state["user_message"])
-            
-            if has_name and has_numbers:
-                logger.info("🔄 Routing to patient data extraction")
-                return "extract_data"
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# Chat input
+st.markdown('<div class="chat-input-container">', unsafe_allow_html=True)
+
+# Main chat input - moved to be more prominent
+col1, col2, col3 = st.columns([6, 1, 1])
+
+with col1:
+    # Use session state for input to control clearing
+    if 'user_input_key' not in st.session_state:
+        st.session_state.user_input_key = 0
+    
+    user_input = st.text_input(
+        "Type your command or question:",
+        placeholder="e.g., Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345",
+        key=f"chat_input_{st.session_state.user_input_key}",
+        label_visibility="collapsed"
+    )
+
+with col2:
+    send_clicked = st.button("📤 Send", key="send_button")
+
+with col3:
+    refresh_clicked = st.button("🔄 Refresh", key="refresh_button", help="Reset conversation and analysis")
+
+# Handle button clicks
+if send_clicked and user_input:
+    send_message(user_input)
+    # Clear input by incrementing key
+    st.session_state.user_input_key += 1
+    st.rerun()
+
+if refresh_clicked:
+    refresh_everything()
+
+# Handle Enter key simulation (show instruction)
+if user_input:
+    st.caption("💡 Click 'Send' or press Ctrl+Enter to send your message")
+
+# Enhanced example commands section with heart attack prediction
+with st.expander("💡 Example Commands & Quick Actions", expanded=False):
+    # Show different examples based on whether we have analysis data
+    if st.session_state.current_analysis:
+        st.markdown("""
+        **🔍 Ask Questions About Current Analysis:**
+        - `How many medical claims were found?`
+        - `Count the pharmacy claims`
+        - `What medications were identified?`
+        - `Show me the medical conditions`
+        - `What's the API status?`
+        - `Give me the diabetes details`
+        - `Explain the blood pressure findings`
+        - **`What's the heart attack risk?`**
+        - **`Show heart attack prediction details`**
+        - **`Explain the heart attack risk factors`**
+        """)
         
-        logger.info("🔄 Routing to general response")
-        return "general_response"
+        # Enhanced contextual quick buttons
+        st.markdown("**🚀 Quick Questions:**")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            if st.button("📊 Medical Claims", key="medical_claims_q"):
+                send_message("How many medical claims were found?")
+                st.session_state.user_input_key += 1
+                st.rerun()
+        
+        with col2:
+            if st.button("💊 Pharmacy Claims", key="pharmacy_claims_q"):
+                send_message("How many pharmacy claims were found?")
+                st.session_state.user_input_key += 1
+                st.rerun()
+        
+        with col3:
+            if st.button("💊 Medications", key="medications_q"):
+                send_message("What medications were identified?")
+                st.session_state.user_input_key += 1
+                st.rerun()
+        
+        with col4:
+            if st.button("📡 API Status", key="api_status_q"):
+                send_message("What's the API status?")
+                st.session_state.user_input_key += 1
+                st.rerun()
+        
+        with col5:
+            if st.button("🫀 Heart Attack Risk", key="heart_risk_q"):
+                send_message("What's the heart attack risk?")
+                st.session_state.user_input_key += 1
+                st.rerun()
     
-    # ===== HELPER METHODS =====
+    else:
+        st.markdown("""
+        **📝 Patient Analysis Commands:**
+        - `Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345`
+        - `Evaluate health data for Sarah Johnson, born 1975-08-22, female, SSN 987654321, zip 90210`  
+        - `Check patient Michael Brown, DOB 1990-12-05, male, SSN 111223333, zip 77001`
+        
+        **ℹ️ After analysis, you can ask:**
+        - `How many medical claims were found?`
+        - `Count the pharmacy claims`
+        - `What medications were identified?`
+        - `Show me the medical conditions`
+        - `What's the API status?`
+        - **`What's the heart attack risk?`**
+        - **`Show heart attack prediction details`**
+        """)
+        
+        # Quick command buttons for starting analysis
+        st.markdown("**🚀 Quick Start:**")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("👤 Sample Patient Analysis", key="sample_analysis"):
+                sample_command = "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345"
+                send_message(sample_command)
+                st.session_state.user_input_key += 1
+                st.rerun()
+        
+        with col2:
+            if st.button("❓ What can you do?", key="help_command"):
+                help_command = "What can you help me with?"
+                send_message(help_command)
+                st.session_state.user_input_key += 1
+                st.rerun()
+        
+        with col3:
+            if st.button("📋 System Capabilities", key="capabilities_command"):
+                capabilities_command = "Tell me about your capabilities"
+                send_message(capabilities_command)
+                st.session_state.user_input_key += 1
+                st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# Enhanced analysis results section with heart attack prediction
+if st.session_state.show_json_data and st.session_state.current_analysis:
+    st.markdown("---")
+    st.markdown("## 📊 Analysis Data Available")
+    st.info("💡 The analysis is complete with heart attack risk assessment. Ask questions in the chat above!")
     
-    def _deidentify_medical_data(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Deidentify medical data"""
-        try:
-            # Calculate age
-            age = "unknown"
-            if patient_data.get('date_of_birth'):
-                try:
-                    dob = datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date()
-                    today = date.today()
-                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                except:
-                    pass
-            
-            deidentified = {
-                "patient_info": {
-                    "first_name": "john",
-                    "last_name": "smith",
-                    "age": age,
-                    "zip_code": "12345"
-                },
-                "medical_data": self._remove_pii_from_data(medical_data),
-                "deidentification_timestamp": datetime.now().isoformat()
-            }
-            
-            return deidentified
-            
-        except Exception as e:
-            logger.error(f"Error in medical deidentification: {e}")
-            return {"error": f"Medical deidentification failed: {str(e)}"}
+    analysis = st.session_state.current_analysis
+    heart_attack_pred = analysis.get('heart_attack_prediction', {})
     
-    def _deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Deidentify pharmacy data"""
-        try:
-            deidentified = {
-                "pharmacy_data": self._remove_pii_from_data(pharmacy_data),
-                "deidentification_timestamp": datetime.now().isoformat()
-            }
-            return deidentified
-            
-        except Exception as e:
-            logger.error(f"Error in pharmacy deidentification: {e}")
-            return {"error": f"Pharmacy deidentification failed: {str(e)}"}
+    # Display Heart Attack Risk Assessment prominently
+    if heart_attack_pred and not heart_attack_pred.get('error'):
+        st.markdown("### 🫀 Heart Attack Risk Assessment")
+        display_heart_attack_risk_card(heart_attack_pred)
+    elif heart_attack_pred and heart_attack_pred.get('error'):
+        st.markdown("### 🫀 Heart Attack Risk Assessment")
+        st.error(f"❌ Heart Attack Prediction Error: {heart_attack_pred.get('error')}")
+        if heart_attack_pred.get('message'):
+            st.info(f"💡 {heart_attack_pred.get('message')}")
     
-    def _remove_pii_from_data(self, data: Any) -> Any:
-        """Remove PII from data structure"""
-        try:
-            if isinstance(data, dict):
-                return {k: self._remove_pii_from_data(v) for k, v in data.items()}
-            elif isinstance(data, list):
-                return [self._remove_pii_from_data(item) for item in data]
-            elif isinstance(data, str):
-                # Remove common PII patterns
-                data = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[SSN_MASKED]', data)
-                data = re.sub(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b', '[NAME_MASKED]', data)
-                data = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[PHONE_MASKED]', data)
-                return data
-            else:
-                return data
-        except:
-            return data
+    # Enhanced analysis summary metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
     
-    def _extract_health_entities(self, medical_data: Dict[str, Any], pharmacy_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract health entities from deidentified data"""
-        entities = {
-            "diabetes": "unknown",
-            "age_group": "unknown",
-            "blood_pressure": "unknown", 
-            "smoking": "unknown",
-            "alcohol": "unknown",
-            "analysis_details": [],
-            "medical_conditions": [],
-            "medications_identified": []
+    with col1:
+        success_status = "✅ Success" if analysis.get("success") else "⚠️ With Errors"
+        st.metric("Analysis Status", success_status)
+    
+    with col2:
+        raw_responses = analysis.get("raw_api_responses", {})
+        api_calls = len([k for k, v in raw_responses.items() if v and not v.get("error")])
+        st.metric("MCP API Calls", f"{api_calls}/5")
+    
+    with col3:
+        entities = analysis.get("entity_extraction", {})
+        conditions = len(entities.get("medical_conditions", []))
+        st.metric("Conditions Found", conditions)
+    
+    with col4:
+        medications = len(entities.get("medications_identified", []))
+        st.metric("Medications Found", medications)
+    
+    with col5:
+        # Heart attack risk metric
+        risk_level = heart_attack_pred.get('risk_level', 'unknown')
+        risk_emoji = {
+            'low': '🟢',
+            'moderate': '🟡',
+            'high': '🟠',
+            'very_high': '🔴',
+            'unknown': '⚪',
+            'error': '❌'
+        }.get(risk_level, '❓')
+        st.metric("Heart Attack Risk", f"{risk_emoji} {risk_level.upper().replace('_', ' ')}")
+    
+    # Enhanced Raw JSON Data Section
+    st.markdown("### 📄 Raw MCP Server JSON Responses")
+    st.info("💡 All raw API responses from MCP server endpoints (collapsed by default):")
+    
+    raw_responses = analysis.get("raw_api_responses", {})
+    if raw_responses:
+        display_json_section("MCID Search Results", raw_responses.get("mcid", {}), "mcid")
+        display_json_section("Medical API Results", raw_responses.get("medical", {}), "medical")
+        display_json_section("Pharmacy API Results", raw_responses.get("pharmacy", {}), "pharmacy")
+        display_json_section("Token API Results", raw_responses.get("token", {}), "token")
+        display_json_section("All Endpoints Results", raw_responses.get("all", {}), "all")
+    
+    # Heart Attack Prediction Data Section
+    st.markdown("### 🫀 Heart Attack Prediction Data")
+    display_json_section("Heart Attack ML Prediction Results", heart_attack_pred, "heart_attack")
+    
+    # Deidentified Data Section
+    st.markdown("### 🔒 Deidentified Data")
+    st.info("💬 The chatbot has access to this deidentified data. Ask questions about it in the chat above!")
+    deidentified_data = analysis.get("deidentified_data", {})
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        display_json_section("Deidentified Medical Data", deidentified_data.get("medical", {}), "deident_med")
+    with col2:
+        display_json_section("Deidentified Pharmacy Data", deidentified_data.get("pharmacy", {}), "deident_pharm")
+    
+    # Entity Extraction Results
+    st.markdown("### 🎯 Entity Extraction Results")
+    display_entity_cards(analysis.get("entity_extraction", {}))
+    
+    # Enhanced download section
+    st.markdown("### 💾 Download Complete Analysis with Heart Attack Prediction")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Complete JSON report with heart attack prediction
+        complete_report = {
+            "analysis_metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "patient_info": analysis.get("patient_data", {}),
+                "success": analysis.get("success", False),
+                "session_id": analysis.get("session_id")
+            },
+            "raw_api_responses": analysis.get("raw_api_responses", {}),
+            "deidentified_data": analysis.get("deidentified_data", {}),
+            "entity_extraction": analysis.get("entity_extraction", {}),
+            "heart_attack_prediction": analysis.get("heart_attack_prediction", {}),  # NEW
+            "conversation_history": st.session_state.chat_history,
+            "errors": analysis.get("errors", [])
         }
         
-        try:
-            # Calculate age group
-            if patient_data.get("date_of_birth"):
-                try:
-                    dob = datetime.strptime(patient_data["date_of_birth"], '%Y-%m-%d').date()
-                    today = date.today()
-                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                    
-                    if age < 18:
-                        entities["age_group"] = "child"
-                    elif age < 65:
-                        entities["age_group"] = "adult"
-                    else:
-                        entities["age_group"] = "senior"
-                    
-                    entities["analysis_details"].append(f"Age calculated: {age} years")
-                except:
-                    entities["analysis_details"].append("Could not calculate age")
-            
-            # Analyze medical data
-            if medical_data and not medical_data.get("error"):
-                medical_str = json.dumps(medical_data).lower()
-                
-                # Diabetes indicators
-                diabetes_keywords = ['diabetes', 'diabetic', 'insulin', 'glucose', 'a1c', 'metformin']
-                for keyword in diabetes_keywords:
-                    if keyword in medical_str:
-                        entities["diabetes"] = "yes"
-                        entities["medical_conditions"].append(f"Diabetes indicator: {keyword}")
-                        break
-                
-                # Blood pressure indicators
-                bp_keywords = ['hypertension', 'blood pressure', 'systolic', 'diastolic']
-                for keyword in bp_keywords:
-                    if keyword in medical_str:
-                        entities["blood_pressure"] = "diagnosed"
-                        entities["medical_conditions"].append(f"Blood pressure indicator: {keyword}")
-                        break
-            
-            # Analyze pharmacy data
-            if pharmacy_data and not pharmacy_data.get("error"):
-                pharmacy_str = json.dumps(pharmacy_data).lower()
-                
-                # Diabetes medications
-                diabetes_meds = ['insulin', 'metformin', 'glipizide', 'lantus']
-                for med in diabetes_meds:
-                    if med in pharmacy_str:
-                        entities["diabetes"] = "yes"
-                        entities["medications_identified"].append(f"Diabetes medication: {med}")
-                
-                # Blood pressure medications
-                bp_meds = ['lisinopril', 'amlodipine', 'metoprolol', 'losartan']
-                for med in bp_meds:
-                    if med in pharmacy_str:
-                        entities["blood_pressure"] = "managed"
-                        entities["medications_identified"].append(f"BP medication: {med}")
-                
-                # Smoking cessation
-                smoking_meds = ['chantix', 'varenicline', 'nicotine']
-                for med in smoking_meds:
-                    if med in pharmacy_str:
-                        entities["smoking"] = "quit_attempt"
-                        entities["medications_identified"].append(f"Smoking cessation: {med}")
-            
-        except Exception as e:
-            entities["analysis_details"].append(f"Error in entity extraction: {str(e)}")
-        
-        return entities
+        st.download_button(
+            "📊 Complete JSON Report",
+            json.dumps(complete_report, indent=2),
+            f"healthcare_analysis_with_heart_risk_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
     
-    def _create_contextual_chat_prompt(self, user_question: str, conversation_history: List[Dict[str, Any]]) -> str:
-        """Create prompt for contextual chat about analysis"""
+    with col2:
+        # Enhanced CSV summary with heart attack data
         try:
-            # Get recent conversation context
-            recent_messages = conversation_history[-8:] if len(conversation_history) > 8 else conversation_history
-            history_text = ""
+            entities = analysis.get("entity_extraction", {})
+            heart_attack_pred = analysis.get("heart_attack_prediction", {})
             
-            for msg in recent_messages:
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")[:400]  # Increased for better context
-                history_text += f"{role.upper()}: {content}\n"
+            csv_data = {
+                "Metric": [
+                    "Analysis Status", "API Calls Successful", "Conditions Found", "Medications Found",
+                    "Heart Attack Risk Level", "Heart Attack Risk Probability", "Heart Attack Model Confidence",
+                    "Diabetes", "Age Group", "Blood Pressure", "Smoking", "Alcohol", "Timestamp"
+                ],
+                "Value": [
+                    "Success" if analysis.get("success") else "Failed",
+                    f"{api_calls}/5",
+                    conditions,
+                    medications,
+                    heart_attack_pred.get('risk_level', 'unknown'),
+                    f"{heart_attack_pred.get('risk_probability', 0.0):.1%}",
+                    f"{heart_attack_pred.get('confidence', 0.0):.1%}",
+                    entities.get("diabetes", "unknown"),
+                    entities.get("age_group", "unknown"),
+                    entities.get("blood_pressure", "unknown"),
+                    entities.get("smoking", "unknown"),
+                    entities.get("alcohol", "unknown"),
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ]
+            }
             
-            # Prepare comprehensive analysis context
-            context_summary = ""
-            if self.current_analysis_context:
-                # Include full deidentified data for better responses
-                deident_medical = self.current_analysis_context.get('deidentified_medical', {})
-                deident_pharmacy = self.current_analysis_context.get('deidentified_pharmacy', {})
-                entities = self.current_analysis_context.get('entity_extraction', {})
-                heart_attack_pred = self.current_analysis_context.get('heart_attack_prediction', {})  # NEW
-                raw_responses = self.current_analysis_context.get('raw_api_responses', {})
-                
-                context_summary = f"""
-PATIENT ANALYSIS CONTEXT - FULL DEIDENTIFIED DATA AVAILABLE:
+            csv_df = pd.DataFrame(csv_data)
+            csv_string = csv_df.to_csv(index=False)
+            
+            st.download_button(
+                "📊 CSV Summary with Heart Risk",
+                csv_string,
+                f"healthcare_summary_with_heart_risk_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+        except Exception as e:
+            st.error(f"Error generating CSV: {str(e)}")
+    
+    with col3:
+        # Enhanced text report with heart attack data
+        patient_info = analysis.get("patient_data", {})
+        patient_name = f"{patient_info.get('first_name', 'Unknown')} {patient_info.get('last_name', 'Unknown')}"
+        
+        text_report = f"""
+HEALTHCARE ANALYSIS CHATBOT REPORT WITH HEART ATTACK PREDICTION
+==============================================================
+Patient: {patient_name}
+Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Session ID: {analysis.get('session_id', 'Unknown')}
+Status: {'Success' if analysis.get('success') else 'Failed'}
 
-DEIDENTIFIED MEDICAL DATA:
-{json.dumps(deident_medical, indent=2)}
+MCP SERVER API CALLS:
+====================
+Successful Calls: {api_calls}/5
 
-DEIDENTIFIED PHARMACY DATA:
-{json.dumps(deident_pharmacy, indent=2)}
+HEART ATTACK RISK ASSESSMENT:
+============================
+Risk Level: {heart_attack_pred.get('risk_level', 'unknown')}
+Risk Probability: {heart_attack_pred.get('risk_probability', 0.0):.1%}
+Model Confidence: {heart_attack_pred.get('confidence', 0.0):.1%}
+Interpretation: {heart_attack_pred.get('interpretation', 'N/A')}
 
-ENTITY EXTRACTION RESULTS:
+ENTITY EXTRACTION:
+=================
 {json.dumps(entities, indent=2)}
 
-HEART ATTACK PREDICTION RESULTS:
-{json.dumps(heart_attack_pred, indent=2)}
+CONVERSATION HISTORY:
+====================
+{chr(10).join([f"{msg.get('role', 'unknown').upper()}: {msg.get('content', '')}" for msg in st.session_state.chat_history])}
 
-RAW API RESPONSE SUMMARY:
-- MCID: {"✅ Available" if raw_responses.get('mcid') and not raw_responses.get('mcid', {}).get('error') else "❌ Error/Missing"}
-- Medical: {"✅ Available" if raw_responses.get('medical') and not raw_responses.get('medical', {}).get('error') else "❌ Error/Missing"}
-- Pharmacy: {"✅ Available" if raw_responses.get('pharmacy') and not raw_responses.get('pharmacy', {}).get('error') else "❌ Error/Missing"}
-- Token: {"✅ Available" if raw_responses.get('token') and not raw_responses.get('token', {}).get('error') else "❌ Error/Missing"}
-- All: {"✅ Available" if raw_responses.get('all') and not raw_responses.get('all', {}).get('error') else "❌ Error/Missing"}
+ERRORS (if any):
+===============
+{chr(10).join(analysis.get('errors', []))}
 """
-            
-            prompt = f"""You are a healthcare AI assistant with access to complete deidentified patient analysis data including heart attack risk prediction. Answer the user's question based on the comprehensive data provided below.
+        
+        st.download_button(
+            "📝 Text Report with Heart Risk",
+            text_report,
+            f"healthcare_report_with_heart_risk_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain"
+        )
 
-RECENT CONVERSATION HISTORY:
-{history_text}
+# Enhanced Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666;'>
+    🫀 <strong>Healthcare Analysis Chatbot with Heart Attack Risk Prediction</strong><br>
+    Natural Language Processing • MCP Server Integration • ML-Powered Heart Attack Risk Assessment<br>
+    ⚠️ <em>This analysis is for informational purposes only and should not replace professional medical advice.</em><br>
+    🔬 <em>Heart attack risk predictions are computational estimates based on available data.</em>
+</div>
+""", unsafe_allow_html=True)
 
-COMPLETE ANALYSIS DATA:
-{context_summary}
-
-CURRENT QUESTION: {user_question}
-
-Instructions:
-1. Answer based on the complete deidentified medical and pharmacy JSON data above
-2. Reference specific data points, codes, medications, or conditions when relevant
-3. Maintain conversation context from previous messages
-4. Be detailed but informative - you have access to all the deidentified data
-5. If asked about specific medications, conditions, or codes, search through the JSON data
-6. If asked about heart attack risk, reference the heart attack prediction results
-7. If asked about raw API responses, mention which endpoints returned data successfully
-8. Always clarify this is based on deidentified data for privacy
-9. Provide medical insights based on the patterns in the data
-10. If the user asks about specific JSON fields or structures, explain what you found
-
-Answer the user's question with specific details from the deidentified analysis data:"""
-            
-            return prompt
-            
-        except Exception as e:
-            return f"Error creating contextual prompt: {str(e)}"
+# Enhanced Sidebar info
+with st.sidebar:
+    st.header("ℹ️ System Info")
+    
+    if st.session_state.agent:
+        st.success("🤖 Agent: Ready")
+        
+        # Heart attack model status
+        if hasattr(st.session_state.agent, 'heart_attack_model') and st.session_state.agent.heart_attack_model:
+            st.success("🫀 Heart Attack Model: Loaded")
+        else:
+            st.error("🫀 Heart Attack Model: Not Available")
+    else:
+        st.error("🤖 Agent: Not initialized")
+    
+    if st.session_state.current_analysis:
+        st.success("📊 Analysis: Available")
+        
+        # Show heart attack risk if available
+        heart_attack_pred = st.session_state.current_analysis.get('heart_attack_prediction', {})
+        if heart_attack_pred and not heart_attack_pred.get('error'):
+            risk_level = heart_attack_pred.get('risk_level', 'unknown')
+            risk_prob = heart_attack_pred.get('risk_probability', 0.0)
+            st.success(f"🫀 Heart Risk: {risk_level.upper()} ({risk_prob:.1%})")
+        
+        session_id = st.session_state.current_analysis.get("session_id", "")
+        if session_id:
+            st.text(f"Session: {session_id[:12]}...")
+    else:
+        st.info("📊 Analysis: None")
+    
+    st.text(f"💬 Messages: {len(st.session_state.chat_history)}")
+    
+    st.markdown("---")
+    st.markdown("### 🎯 How to Use")
+    st.markdown("""
+    1. **Initialize Agent** (if not done)
+    2. **Give Command** like:
+       "Analyze patient John Smith, DOB 1980-01-15, male, SSN 123456789, zip code 12345"
+    3. **View Results** - JSON data, analysis, and **heart attack risk**
+    4. **Ask Questions** about the findings
+    5. **Refresh All** to start new analysis
+    """)
+    
+    st.markdown("---")
+    st.markdown("### 🫀 Heart Attack Prediction")
+    st.markdown("""
+    The system uses machine learning to assess heart attack risk based on:
+    - Patient demographics
+    - Medical history indicators
+    - Pharmacy data patterns
+    - Clinical risk factors
+    
+    **Note:** Predictions are estimates and should not replace professional medical evaluation.
+    """)
+    
+    if st.checkbox("🐛 Debug Mode"):
+        st.text(f"Agent initialized: {st.session_state.agent is not None}")
+        st.text(f"Show JSON: {st.session_state.show_json_data}")
+        st.text(f"Is typing: {st.session_state.is_typing}")
+        if st.session_state.agent and hasattr(st.session_state.agent, 'heart_attack_model'):
+            st.text(f"Heart model loaded: {st.session_state.agent.heart_attack_model is not None}")
+        if st.session_state.current_analysis:
+            st.text(f"Analysis success: {st.session_state.current_analysis.get('success')}")
+            heart_attack_pred = st.session_state.current_analysis.get('heart_attack_prediction', {})
+            st.text(f"Heart attack pred: {heart_attack_pred.get('risk_level', 'none')}")
