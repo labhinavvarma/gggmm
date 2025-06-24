@@ -2,35 +2,30 @@ import streamlit as st
 st.set_page_config(page_title="Milliman MCP Chat", page_icon="🤖")
 
 import asyncio
-import threading
 from fastmcp import Client
-from fastmcp.client.transports import SSETransport
+from fastmcp.client.transports import StreamableHttpTransport
 
 # Title
 st.title("🤖 Milliman MCP Chat")
 
-# State
+# Initialize chat history
 if "history" not in st.session_state:
     st.session_state.history = []
-if "client" not in st.session_state:
-    st.session_state.client = None
 
-# Initialize client once
-def init_client():
-    transport = SSETransport("http://localhost:8000/sse")
-    st.session_state.client = Client(transport)
-    # Connect
-    asyncio.run(st.session_state.client.__aenter__())
+# Create and cache the MCP client using Streamable HTTP
+@st.cache_resource
+def get_client():
+    transport = StreamableHttpTransport(url="http://localhost:8000/sse")
+    return Client(transport)
 
-init_client_thread = threading.Thread(target=init_client, daemon=True)
-init_client_thread.start()
+client = get_client()
 
-# Ensure client is ready before continuing
-while st.session_state.client is None or init_client_thread.is_alive():
-    st.write("🚧 Connecting to MCP server...")
-    asyncio.sleep(0.1)
+# Async helper to call tool
+async def call_tool(tool_name: str, args: dict):
+    async with client:
+        return await client.call_tool(tool_name, args)
 
-# Form for input
+# Form inputs
 with st.form("user_form"):
     first_name = st.text_input("First Name")
     last_name = st.text_input("Last Name")
@@ -44,10 +39,6 @@ with st.form("user_form"):
     )
     submitted = st.form_submit_button("Submit")
 
-async def call_tool(tool_name, args):
-    return await st.session_state.client.call_tool(tool_name, args)
-
-# On submit
 if submitted:
     args = {
         "first_name": first_name,
@@ -57,14 +48,15 @@ if submitted:
         "gender": gender,
         "zip_code": zip_code
     }
-    st.session_state.history.append(("user", f"Called {tool}"))
+    st.session_state.history.append(("user", f"Called `{tool}`"))
     try:
+        # Run the async call synchronously
         result = asyncio.run(call_tool(tool, args))
         st.session_state.history.append(("tool", f"{tool} output: {result}"))
     except Exception as e:
         st.session_state.history.append(("error", f"Error: {e}"))
 
-# Display history
+# Display chat history
 st.divider()
 for role, msg in st.session_state.history:
     icon = {"user": "🧑", "tool": "⚙️", "error": "❌"}.get(role, "")
