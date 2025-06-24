@@ -1,21 +1,22 @@
-# router.py
-from fastapi import APIRouter
-from mcpserver import UserInput, async_submit_medical_request, async_mcid_search, async_get_token, get_all_data
+# app.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastmcp import SseServerTransport
+from mcpserver import mcp
+from router import router
 
-router = APIRouter()
+app = FastAPI(
+    title="Milliman MCP Server",
+    description="API and SSE for Milliman Claims",
+    version="1.0"
+)
 
-@router.post("/medical/submit")
-async def http_submit_medical(user: UserInput):
-    return await async_submit_medical_request(user)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"]
+)
 
-@router.post("/mcid/search")
-async def http_mcid_search(user: UserInput):
-    return await async_mcid_search(user)
+mcp.include_fastapi(app, mount_path="/sse", transport=SseServerTransport())
 
-@router.post("/token")
-async def http_token():
-    return await async_get_token()
-
-@router.post("/all")
-async def http_all(user: UserInput):
-    return await get_all_data(**user.dict())
+app.include_router(router)
