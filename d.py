@@ -1508,9 +1508,6 @@ Analysis Engine: Health Agent v4.0 with FastAPI Integration
             except Exception as e:
                 st.error(f"Error generating CSV: {str(e)}")
 
-    elif not results.get("chatbot_ready", False):
-        st.warning("⚠️ Chatbot initialization failed. Please check the workflow execution above.")
-
 # Footer
 st.markdown("---")
 st.markdown("""
