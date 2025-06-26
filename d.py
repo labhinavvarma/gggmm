@@ -626,7 +626,8 @@ if st.session_state.analysis_results:
                             st.write(f"- Service Code: `{record.get('hlth_srvc_cd', 'N/A')}`")
                             diagnosis_codes = record.get('diagnosis_codes', [])
                             if diagnosis_codes:
-                                st.write(f"- Diagnosis Codes: {', '.join([f'`{d.get(\"code\", \"N/A\")}`' for d in diagnosis_codes[:5]])}")
+                                codes_list = [f"`{d.get('code', 'N/A')}`" for d in diagnosis_codes[:5]]
+                                st.write(f"- Diagnosis Codes: {', '.join(codes_list)}")
                         
                         if len(hlth_srvc_records) > 3:
                             st.info(f"Showing first 3 of {len(hlth_srvc_records)} medical records.")
