@@ -1090,24 +1090,30 @@ if st.session_state.analysis_results:
                             st.markdown("**🏥 Extracted Medical Records:**")
                             
                             for i, record in enumerate(hlth_srvc_records[:5]):
-                                with st.expander(f"Medical Record {i+1} - Service Code: {record.get('hlth_srvc_cd', 'N/A')}"):
-                                    col1, col2 = st.columns(2)
-                                    
-                                    with col1:
-                                        st.markdown(f"**Health Service Code:**")
-                                        st.code(record.get('hlth_srvc_cd', 'N/A'))
-                                        st.markdown(f"**Data Path:**")
-                                        st.code(record.get('data_path', 'N/A'))
-                                    
-                                    with col2:
-                                        diagnosis_codes = record.get('diagnosis_codes', [])
-                                        if diagnosis_codes:
-                                            st.markdown(f"**Diagnosis Codes ({len(diagnosis_codes)}):**")
-                                            for idx, diag in enumerate(diagnosis_codes, 1):
-                                                source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
-                                                st.markdown(f"**{idx})** `{diag.get('code', 'N/A')}`{source_info}")
-                                        else:
-                                            st.markdown("**No diagnosis codes found**")
+                                # Use a different approach instead of nested expanders
+                                st.markdown(f"### Medical Record {i+1} - Service Code: `{record.get('hlth_srvc_cd', 'N/A')}`")
+                                
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.markdown("**Health Service Code:**")
+                                    st.code(record.get('hlth_srvc_cd', 'N/A'))
+                                    st.markdown("**Data Path:**")
+                                    st.code(record.get('data_path', 'N/A'))
+                                
+                                with col2:
+                                    diagnosis_codes = record.get('diagnosis_codes', [])
+                                    if diagnosis_codes:
+                                        st.markdown(f"**Diagnosis Codes ({len(diagnosis_codes)}):**")
+                                        for idx, diag in enumerate(diagnosis_codes, 1):
+                                            source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
+                                            st.markdown(f"**{idx})** `{diag.get('code', 'N/A')}`{source_info}")
+                                    else:
+                                        st.markdown("**No diagnosis codes found**")
+                                
+                                # Add a separator between records
+                                if i < len(hlth_srvc_records[:5]) - 1:
+                                    st.divider()
                             
                             if len(hlth_srvc_records) > 5:
                                 st.info(f"Showing first 5 of {len(hlth_srvc_records)} medical records.")
@@ -1229,6 +1235,13 @@ if st.session_state.analysis_results:
                         st.markdown(f"- **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
                     if len(medications_identified) > 5:
                         st.info(f"Showing first 5 of {len(medications_identified)} medications identified.")
+                
+                # Show detailed entity analysis without nested expander
+                analysis_details = safe_get(entity_extraction, 'analysis_details', [])
+                if analysis_details:
+                    st.markdown("**🔍 Enhanced Entity Analysis Details:**")
+                    for detail in analysis_details:
+                        st.write(f"• {detail}")
 
         # Health Trajectory and Summary Sections
         with st.expander("📈 Node 5: Health Trajectory Analysis", expanded=expand_all):
