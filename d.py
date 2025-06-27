@@ -1,10 +1,17 @@
 # Configure Streamlit page FIRST - before any other Streamlit commands
 import streamlit as st
+
+# Determine sidebar state based on chatbot readiness
+if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
+    sidebar_state = "expanded"
+else:
+    sidebar_state = "collapsed"
+
 st.set_page_config(
     page_title="Health Analysis Agent",
     page_icon="🏥",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state=sidebar_state
 )
 
 # Now import other modules
@@ -34,7 +41,7 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
-# Custom CSS for sleek layout with right sidebar
+# Custom CSS for clean layout
 st.markdown("""
 <style>
 .main-header {
@@ -65,79 +72,6 @@ st.markdown("""
     margin-bottom: 1rem;
     border-bottom: 2px solid #3498db;
     padding-bottom: 0.5rem;
-}
-
-.chat-sidebar {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 1.5rem;
-    border-radius: 15px;
-    margin: 0.5rem 0;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-    position: sticky;
-    top: 1rem;
-    height: calc(100vh - 2rem);
-    overflow-y: auto;
-}
-
-.chat-title {
-    color: white;
-    font-size: 1.4rem;
-    font-weight: 600;
-    margin-bottom: 1rem;
-    text-align: center;
-    border-bottom: 2px solid rgba(255,255,255,0.3);
-    padding-bottom: 0.5rem;
-}
-
-.chat-container {
-    background: rgba(255,255,255,0.95);
-    border-radius: 10px;
-    padding: 1rem;
-    margin: 1rem 0;
-    backdrop-filter: blur(10px);
-}
-
-.chat-message {
-    padding: 0.8rem 1rem;
-    margin: 0.5rem 0;
-    border-radius: 8px;
-}
-
-.user-message {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    border-left: 3px solid #2196f3;
-    margin-left: 1rem;
-}
-
-.assistant-message {
-    background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
-    border-left: 3px solid #9c27b0;
-    margin-right: 1rem;
-}
-
-.example-questions {
-    background: rgba(255,255,255,0.9);
-    padding: 1rem;
-    border-radius: 8px;
-    margin: 1rem 0;
-    backdrop-filter: blur(10px);
-}
-
-.example-questions h4 {
-    color: #2c3e50;
-    margin-bottom: 0.5rem;
-    font-size: 1rem;
-}
-
-.example-questions ul {
-    margin: 0.5rem 0;
-    padding-left: 1rem;
-}
-
-.example-questions li {
-    margin: 0.2rem 0;
-    font-size: 0.85rem;
-    color: #495057;
 }
 
 .status-success {
@@ -212,10 +146,29 @@ st.markdown("""
     font-size: 0.85rem;
 }
 
-/* Hide streamlit style */
-.stChatInput > div {
-    background: rgba(255,255,255,0.9);
+.chat-message {
+    padding: 0.8rem 1rem;
+    margin: 0.5rem 0;
     border-radius: 8px;
+}
+
+.user-message {
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+    border-left: 3px solid #2196f3;
+}
+
+.assistant-message {
+    background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
+    border-left: 3px solid #9c27b0;
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.css-1d391kg .css-10trblm {
+    color: white;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -311,440 +264,11 @@ if not AGENT_AVAILABLE:
     st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
     st.stop()
 
-# Create main layout: content area + right sidebar
-main_col, chat_col = st.columns([2.5, 1])
-
-with main_col:
-    # 1. PATIENT INFORMATION BOX
-    st.markdown("""
-    <div class="section-box">
-        <div class="section-title">👤 Patient Information</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.container():
-        with st.form("patient_input_form"):
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                first_name = st.text_input("First Name *", value="")
-                last_name = st.text_input("Last Name *", value="")
-            
-            with col2:
-                ssn = st.text_input("SSN *", value="")
-                date_of_birth = st.date_input(
-                    "Date of Birth *", 
-                    value=datetime.now().date(),
-                    min_value=datetime(1900, 1, 1).date(),
-                    max_value=datetime.now().date()
-                )
-            
-            with col3:
-                gender = st.selectbox("Gender *", ["F", "M"])
-                zip_code = st.text_input("Zip Code *", value="")
-            
-            # Show calculated age
-            if date_of_birth:
-                calculated_age = calculate_age(date_of_birth)
-                if calculated_age is not None:
-                    st.info(f"📅 **Calculated Age:** {calculated_age} years old")
-            
-            # 2. RUN HEALTH ANALYSIS BUTTON
-            submitted = st.form_submit_button(
-                "🚀 Run Health Analysis", 
-                use_container_width=True,
-                disabled=st.session_state.analysis_running
-            )
-
-    # Analysis Status
-    if st.session_state.analysis_running:
-        st.markdown('<div class="status-success">🔄 Health analysis workflow executing... Please wait.</div>', unsafe_allow_html=True)
-
-    # Run Health Analysis
-    if submitted and not st.session_state.analysis_running:
-        # Prepare patient data
-        patient_data = {
-            "first_name": first_name.strip(),
-            "last_name": last_name.strip(),
-            "ssn": ssn.strip(),
-            "date_of_birth": date_of_birth.strftime("%Y-%m-%d"),
-            "gender": gender,
-            "zip_code": zip_code.strip()
-        }
-        
-        # Validate patient data
-        is_valid, validation_errors = validate_patient_data(patient_data)
-        
-        if not is_valid:
-            st.error("❌ Please fix the following errors:")
-            for error in validation_errors:
-                st.error(f"• {error}")
-        else:
-            # Initialize Health Agent
-            if st.session_state.agent is None:
-                try:
-                    config = st.session_state.config or Config()
-                    st.session_state.agent = HealthAnalysisAgent(config)
-                    st.success("✅ Health Analysis Agent initialized")
-                except Exception as e:
-                    st.error(f"❌ Failed to initialize Health Agent: {str(e)}")
-                    st.stop()
-            
-            st.session_state.analysis_running = True
-            
-            # Progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            with st.spinner("🚀 Executing health analysis..."):
-                try:
-                    # Progress updates
-                    for i, step in enumerate([
-                        "Initializing workflow...",
-                        "Fetching medical data...", 
-                        "Deidentifying data...",
-                        "Extracting medical information...",
-                        "Analyzing health trajectory...",
-                        "Predicting heart attack risk...",
-                        "Initializing chatbot..."
-                    ]):
-                        status_text.text(f"🔄 {step}")
-                        progress_bar.progress(int((i + 1) * 14))
-                        time.sleep(0.3)
-                    
-                    # Execute analysis
-                    results = st.session_state.agent.run_analysis(patient_data)
-                    
-                    if results.get("success", False):
-                        progress_bar.progress(100)
-                        status_text.text("✅ Analysis completed successfully!")
-                        st.session_state.analysis_results = results
-                        st.session_state.chatbot_context = results.get("chatbot_context", {})
-                        st.markdown('<div class="status-success">✅ Health analysis completed successfully!</div>', unsafe_allow_html=True)
-                    else:
-                        st.session_state.analysis_results = results
-                        st.warning("⚠️ Analysis completed with some errors.")
-                    
-                except Exception as e:
-                    st.error(f"❌ Analysis failed: {str(e)}")
-                    st.session_state.analysis_results = {
-                        "success": False,
-                        "error": str(e),
-                        "patient_data": patient_data,
-                        "errors": [str(e)]
-                    }
-                finally:
-                    st.session_state.analysis_running = False
-
-    # Display Results if Available
-    if st.session_state.analysis_results:
-        results = st.session_state.analysis_results
-        
-        # Show errors if any
-        errors = safe_get(results, 'errors', [])
-        if errors:
-            st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
-
-        # 3. MILLIMAN DATA BUTTON
-        if st.button("📊 Milliman Data", use_container_width=True):
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">📊 Milliman Deidentified Data</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            deidentified_data = safe_get(results, 'deidentified_data', {})
-            
-            if deidentified_data:
-                tab1, tab2 = st.tabs(["🏥 Medical Data", "💊 Pharmacy Data"])
-                
-                with tab1:
-                    medical_data = safe_get(deidentified_data, 'medical', {})
-                    if medical_data:
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(medical_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        st.download_button(
-                            "📥 Download Medical Data JSON",
-                            safe_json_dumps(medical_data),
-                            f"medical_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json",
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning("No medical data available")
-                
-                with tab2:
-                    pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
-                    if pharmacy_data:
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(pharmacy_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        st.download_button(
-                            "📥 Download Pharmacy Data JSON",
-                            safe_json_dumps(pharmacy_data),
-                            f"pharmacy_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json",
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning("No pharmacy data available")
-
-        # 4. MEDICAL/PHARMACY DATA EXTRACTION BUTTON
-        if st.button("🔍 Medical/Pharmacy Data Extraction", use_container_width=True):
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">🔍 Medical/Pharmacy Data Extraction</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            structured_extractions = safe_get(results, 'structured_extractions', {})
-            
-            if structured_extractions:
-                tab1, tab2 = st.tabs(["🏥 Medical Extraction", "💊 Pharmacy Extraction"])
-                
-                with tab1:
-                    medical_extraction = safe_get(structured_extractions, 'medical', {})
-                    if medical_extraction and not medical_extraction.get('error'):
-                        extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
-                        
-                        st.markdown(f"""
-                        <div class="metric-grid">
-                            <div class="metric-card">
-                                <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
-                                <p>Health Service Records</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
-                                <p>Diagnosis Codes</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
-                                <p>Unique Service Codes</p>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
-                        if hlth_srvc_records:
-                            st.markdown("**📋 All Medical Records:**")
-                            for i, record in enumerate(hlth_srvc_records, 1):
-                                with st.expander(f"Medical Record {i} - Service Code: {record.get('hlth_srvc_cd', 'N/A')}"):
-                                    st.write(f"**Service Code:** `{record.get('hlth_srvc_cd', 'N/A')}`")
-                                    st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
-                                    
-                                    diagnosis_codes = record.get('diagnosis_codes', [])
-                                    if diagnosis_codes:
-                                        st.write("**Diagnosis Codes:**")
-                                        for idx, diag in enumerate(diagnosis_codes, 1):
-                                            source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
-                                            st.write(f"  {idx}. `{diag.get('code', 'N/A')}`{source_info}")
-                    else:
-                        st.warning("No medical extraction data available")
-                
-                with tab2:
-                    pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
-                    if pharmacy_extraction and not pharmacy_extraction.get('error'):
-                        extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
-                        
-                        st.markdown(f"""
-                        <div class="metric-grid">
-                            <div class="metric-card">
-                                <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
-                                <p>NDC Records</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
-                                <p>Unique NDC Codes</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
-                                <p>Unique Medications</p>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
-                        if ndc_records:
-                            st.markdown("**💊 All Pharmacy Records:**")
-                            for i, record in enumerate(ndc_records, 1):
-                                with st.expander(f"Pharmacy Record {i} - {record.get('lbl_nm', 'N/A')}"):
-                                    st.write(f"**NDC Code:** `{record.get('ndc', 'N/A')}`")
-                                    st.write(f"**Label Name:** `{record.get('lbl_nm', 'N/A')}`")
-                                    st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
-                    else:
-                        st.warning("No pharmacy extraction data available")
-
-        # 5. ENHANCED ENTITY EXTRACTION BUTTON
-        if st.button("🎯 Enhanced Entity Extraction", use_container_width=True):
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">🎯 Enhanced Entity Extraction</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            entity_extraction = safe_get(results, 'entity_extraction', {})
-            if entity_extraction:
-                # Entity cards
-                st.markdown(f"""
-                <div class="metric-grid">
-                    <div class="metric-card">
-                        <h3>🩺</h3>
-                        <p><strong>Diabetes</strong></p>
-                        <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>👥</h3>
-                        <p><strong>Age Group</strong></p>
-                        <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>🚬</h3>
-                        <p><strong>Smoking</strong></p>
-                        <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>🍷</h3>
-                        <p><strong>Alcohol</strong></p>
-                        <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>💓</h3>
-                        <p><strong>Blood Pressure</strong></p>
-                        <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Medical conditions
-                medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
-                if medical_conditions:
-                    st.markdown("**🏥 Medical Conditions Identified:**")
-                    for condition in medical_conditions:
-                        st.write(f"• {condition}")
-                
-                # Medications identified
-                medications_identified = safe_get(entity_extraction, 'medications_identified', [])
-                if medications_identified:
-                    st.markdown("**💊 Medications Identified:**")
-                    for med in medications_identified:
-                        st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
-
-        # 6. HEALTH TRAJECTORY BUTTON
-        if st.button("📈 Health Trajectory", use_container_width=True):
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">📈 Health Trajectory Analysis</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            health_trajectory = safe_get(results, 'health_trajectory', '')
-            if health_trajectory:
-                st.markdown(health_trajectory)
-            else:
-                st.warning("Health trajectory analysis not available")
-
-        # 7. FINAL SUMMARY BUTTON
-        if st.button("📋 Final Summary", use_container_width=True):
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">📋 Clinical Summary</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            final_summary = safe_get(results, 'final_summary', '')
-            if final_summary:
-                st.markdown(final_summary)
-            else:
-                st.warning("Final summary not available")
-
-        # 8. HEART ATTACK RISK PREDICTION BUTTON
-        if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True):
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">❤️ Heart Attack Risk Assessment (FastAPI Server)</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
-            if heart_attack_prediction and not heart_attack_prediction.get('error'):
-                risk_level = heart_attack_prediction.get("risk_level", "UNKNOWN")
-                risk_score = heart_attack_prediction.get("risk_score", 0.0)
-                risk_icon = heart_attack_prediction.get("risk_icon", "❓")
-                risk_percentage = heart_attack_prediction.get("risk_percentage", "0.0%")
-                
-                # Risk display
-                if risk_level == "HIGH":
-                    st.markdown(f'<div class="risk-high">{risk_icon} <strong>Risk Level: {risk_level}</strong><br>Risk Score: {risk_percentage}<br>⚠️ Immediate medical consultation recommended</div>', unsafe_allow_html=True)
-                elif risk_level == "MODERATE":
-                    st.markdown(f'<div class="risk-moderate">{risk_icon} <strong>Risk Level: {risk_level}</strong><br>Risk Score: {risk_percentage}<br>📋 Regular monitoring advised</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="risk-low">{risk_icon} <strong>Risk Level: {risk_level}</strong><br>Risk Score: {risk_percentage}<br>✅ Continue healthy lifestyle practices</div>', unsafe_allow_html=True)
-                
-                # Features used
-                heart_attack_features = safe_get(results, 'heart_attack_features', {})
-                if heart_attack_features:
-                    extracted_features = heart_attack_features.get("extracted_features", {})
-                    feature_interpretation = heart_attack_features.get("feature_interpretation", {})
-                    
-                    if extracted_features:
-                        st.markdown("**🎯 FastAPI Model Features:**")
-                        for feature, value in extracted_features.items():
-                            interpretation = feature_interpretation.get(feature, str(value))
-                            st.write(f"• **{feature}:** {interpretation}")
-                    
-                    # Risk factors
-                    prediction_interpretation = heart_attack_prediction.get("prediction_interpretation", {})
-                    risk_factors = prediction_interpretation.get("risk_factors", [])
-                    if risk_factors:
-                        st.markdown("**⚠️ Identified Risk Factors:**")
-                        for factor in risk_factors:
-                            st.write(f"• {factor}")
-            else:
-                error_msg = heart_attack_prediction.get('error', 'Heart attack prediction not available')
-                st.error(f"❌ {error_msg}")
-
-
-# RIGHT SIDEBAR - SLEEK CHATBOT
-with chat_col:
+# SIDEBAR CHATBOT
+with st.sidebar:
     if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-        st.markdown("""
-        <div class="chat-sidebar">
-            <div class="chat-title">💬 Medical Assistant</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Example questions in sidebar
-        st.markdown("""
-        <div class="example-questions">
-            <h4>💡 Quick Questions</h4>
-            <p><strong>Medications:</strong></p>
-            <ul>
-                <li>What medications were found?</li>
-                <li>Any diabetes medications?</li>
-            </ul>
-            <p><strong>Diagnoses:</strong></p>
-            <ul>
-                <li>What diagnosis codes were found?</li>
-                <li>Any chronic conditions?</li>
-            </ul>
-            <p><strong>Risk:</strong></p>
-            <ul>
-                <li>What's the heart attack risk?</li>
-                <li>Key risk factors?</li>
-            </ul>
-            <p><strong>Summary:</strong></p>
-            <ul>
-                <li>Summarize key findings</li>
-                <li>Health recommendations?</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Chat container
-        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+        st.title("💬 Medical Assistant")
+        st.markdown("Ask questions about the medical analysis...")
         
         # Chat input
         user_question = st.chat_input("Ask about the medical data...")
@@ -752,7 +276,7 @@ with chat_col:
         # Display chat history
         if st.session_state.chatbot_messages:
             st.markdown("**Conversation:**")
-            for message in st.session_state.chatbot_messages[-8:]:  # Show last 8 messages
+            for message in st.session_state.chatbot_messages[-10:]:  # Show last 10 messages
                 if message["role"] == "user":
                     st.markdown(f'<div class="chat-message user-message"><strong>You:</strong> {message["content"]}</div>', unsafe_allow_html=True)
                 else:
@@ -780,18 +304,406 @@ with chat_col:
         if st.button("🗑️ Clear Chat", use_container_width=True):
             st.session_state.chatbot_messages = []
             st.rerun()
-        
-        st.markdown('</div>', unsafe_allow_html=True)
     
     else:
         # Show placeholder when chatbot is not ready
+        st.title("💬 Medical Assistant")
+        st.info("💤 Chatbot will be available after running health analysis")
+
+# 1. PATIENT INFORMATION BOX
+st.markdown("""
+<div class="section-box">
+    <div class="section-title">👤 Patient Information</div>
+</div>
+""", unsafe_allow_html=True)
+
+
+with st.container():
+    with st.form("patient_input_form"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            first_name = st.text_input("First Name *", value="")
+            last_name = st.text_input("Last Name *", value="")
+        
+        with col2:
+            ssn = st.text_input("SSN *", value="")
+            date_of_birth = st.date_input(
+                "Date of Birth *", 
+                value=datetime.now().date(),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date()
+            )
+        
+        with col3:
+            gender = st.selectbox("Gender *", ["F", "M"])
+            zip_code = st.text_input("Zip Code *", value="")
+        
+        # Show calculated age
+        if date_of_birth:
+            calculated_age = calculate_age(date_of_birth)
+            if calculated_age is not None:
+                st.info(f"📅 **Calculated Age:** {calculated_age} years old")
+        
+        # 2. RUN HEALTH ANALYSIS BUTTON
+        submitted = st.form_submit_button(
+            "🚀 Run Health Analysis", 
+            use_container_width=True,
+            disabled=st.session_state.analysis_running
+        )
+
+# Analysis Status
+if st.session_state.analysis_running:
+    st.markdown('<div class="status-success">🔄 Health analysis workflow executing... Please wait.</div>', unsafe_allow_html=True)
+
+# Run Health Analysis
+if submitted and not st.session_state.analysis_running:
+    # Prepare patient data
+    patient_data = {
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "ssn": ssn.strip(),
+        "date_of_birth": date_of_birth.strftime("%Y-%m-%d"),
+        "gender": gender,
+        "zip_code": zip_code.strip()
+    }
+    
+    # Validate patient data
+    is_valid, validation_errors = validate_patient_data(patient_data)
+    
+    if not is_valid:
+        st.error("❌ Please fix the following errors:")
+        for error in validation_errors:
+            st.error(f"• {error}")
+    else:
+        # Initialize Health Agent
+        if st.session_state.agent is None:
+            try:
+                config = st.session_state.config or Config()
+                st.session_state.agent = HealthAnalysisAgent(config)
+                st.success("✅ Health Analysis Agent initialized")
+            except Exception as e:
+                st.error(f"❌ Failed to initialize Health Agent: {str(e)}")
+                st.stop()
+        
+        st.session_state.analysis_running = True
+        
+        # Progress tracking
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        with st.spinner("🚀 Executing health analysis..."):
+            try:
+                # Progress updates
+                for i, step in enumerate([
+                    "Initializing workflow...",
+                    "Fetching medical data...", 
+                    "Deidentifying data...",
+                    "Extracting medical information...",
+                    "Analyzing health trajectory...",
+                    "Predicting heart attack risk...",
+                    "Initializing chatbot..."
+                ]):
+                    status_text.text(f"🔄 {step}")
+                    progress_bar.progress(int((i + 1) * 14))
+                    time.sleep(0.3)
+                
+                # Execute analysis
+                results = st.session_state.agent.run_analysis(patient_data)
+                
+                if results.get("success", False):
+                    progress_bar.progress(100)
+                    status_text.text("✅ Analysis completed successfully!")
+                    st.session_state.analysis_results = results
+                    st.session_state.chatbot_context = results.get("chatbot_context", {})
+                    st.markdown('<div class="status-success">✅ Health analysis completed successfully!</div>', unsafe_allow_html=True)
+                    
+                    # Force page refresh to open sidebar when chatbot is ready
+                    if results.get("chatbot_ready", False):
+                        st.success("💬 Medical Assistant is now available in the sidebar!")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.session_state.analysis_results = results
+                    st.warning("⚠️ Analysis completed with some errors.")
+                
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {str(e)}")
+                st.session_state.analysis_results = {
+                    "success": False,
+                    "error": str(e),
+                    "patient_data": patient_data,
+                    "errors": [str(e)]
+                }
+            finally:
+                st.session_state.analysis_running = False
+
+# Display Results if Available
+if st.session_state.analysis_results:
+    results = st.session_state.analysis_results
+    
+    # Show errors if any
+    errors = safe_get(results, 'errors', [])
+    if errors:
+        st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
+
+    # 3. MILLIMAN DATA BUTTON
+    if st.button("📊 Milliman Data", use_container_width=True):
         st.markdown("""
-        <div class="chat-sidebar">
-            <div class="chat-title">💬 Medical Assistant</div>
-            <div class="chat-container">
-                <p style="text-align: center; color: #6c757d; margin: 2rem 0;">
-                    💤 Chatbot will be available after running health analysis
-                </p>
-            </div>
+        <div class="section-box">
+            <div class="section-title">📊 Milliman Deidentified Data</div>
         </div>
         """, unsafe_allow_html=True)
+        
+        deidentified_data = safe_get(results, 'deidentified_data', {})
+        
+        if deidentified_data:
+            tab1, tab2 = st.tabs(["🏥 Medical Data", "💊 Pharmacy Data"])
+            
+            with tab1:
+                medical_data = safe_get(deidentified_data, 'medical', {})
+                if medical_data:
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(medical_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Medical Data JSON",
+                        safe_json_dumps(medical_data),
+                        f"medical_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No medical data available")
+            
+            with tab2:
+                pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
+                if pharmacy_data:
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(pharmacy_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Pharmacy Data JSON",
+                        safe_json_dumps(pharmacy_data),
+                        f"pharmacy_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No pharmacy data available")
+
+    # 4. MEDICAL/PHARMACY DATA EXTRACTION BUTTON
+    if st.button("🔍 Medical/Pharmacy Data Extraction", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🔍 Medical/Pharmacy Data Extraction</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        structured_extractions = safe_get(results, 'structured_extractions', {})
+        
+        if structured_extractions:
+            tab1, tab2 = st.tabs(["🏥 Medical Extraction", "💊 Pharmacy Extraction"])
+            
+            with tab1:
+                medical_extraction = safe_get(structured_extractions, 'medical', {})
+                if medical_extraction and not medical_extraction.get('error'):
+                    extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
+                    
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
+                            <p>Health Service Records</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
+                            <p>Diagnosis Codes</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
+                            <p>Unique Service Codes</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
+                    if hlth_srvc_records:
+                        st.markdown("**📋 All Medical Records:**")
+                        for i, record in enumerate(hlth_srvc_records, 1):
+                            with st.expander(f"Medical Record {i} - Service Code: {record.get('hlth_srvc_cd', 'N/A')}"):
+                                st.write(f"**Service Code:** `{record.get('hlth_srvc_cd', 'N/A')}`")
+                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                                
+                                diagnosis_codes = record.get('diagnosis_codes', [])
+                                if diagnosis_codes:
+                                    st.write("**Diagnosis Codes:**")
+                                    for idx, diag in enumerate(diagnosis_codes, 1):
+                                        source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
+                                        st.write(f"  {idx}. `{diag.get('code', 'N/A')}`{source_info}")
+                else:
+                    st.warning("No medical extraction data available")
+            
+            with tab2:
+                pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
+                if pharmacy_extraction and not pharmacy_extraction.get('error'):
+                    extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
+                    
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
+                            <p>NDC Records</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
+                            <p>Unique NDC Codes</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
+                            <p>Unique Medications</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
+                    if ndc_records:
+                        st.markdown("**💊 All Pharmacy Records:**")
+                        for i, record in enumerate(ndc_records, 1):
+                            with st.expander(f"Pharmacy Record {i} - {record.get('lbl_nm', 'N/A')}"):
+                                st.write(f"**NDC Code:** `{record.get('ndc', 'N/A')}`")
+                                st.write(f"**Label Name:** `{record.get('lbl_nm', 'N/A')}`")
+                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                else:
+                    st.warning("No pharmacy extraction data available")
+
+    # 5. ENHANCED ENTITY EXTRACTION BUTTON
+    if st.button("🎯 Enhanced Entity Extraction", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🎯 Enhanced Entity Extraction</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        entity_extraction = safe_get(results, 'entity_extraction', {})
+        if entity_extraction:
+            # Entity cards
+            st.markdown(f"""
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <h3>🩺</h3>
+                    <p><strong>Diabetes</strong></p>
+                    <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>👥</h3>
+                    <p><strong>Age Group</strong></p>
+                    <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🚬</h3>
+                    <p><strong>Smoking</strong></p>
+                    <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🍷</h3>
+                    <p><strong>Alcohol</strong></p>
+                    <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>💓</h3>
+                    <p><strong>Blood Pressure</strong></p>
+                    <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Medical conditions
+            medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
+            if medical_conditions:
+                st.markdown("**🏥 Medical Conditions Identified:**")
+                for condition in medical_conditions:
+                    st.write(f"• {condition}")
+            
+            # Medications identified
+            medications_identified = safe_get(entity_extraction, 'medications_identified', [])
+            if medications_identified:
+                st.markdown("**💊 Medications Identified:**")
+                for med in medications_identified:
+                    st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
+
+    # 6. HEALTH TRAJECTORY BUTTON
+    if st.button("📈 Health Trajectory", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📈 Health Trajectory Analysis</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        health_trajectory = safe_get(results, 'health_trajectory', '')
+        if health_trajectory:
+            st.markdown(health_trajectory)
+        else:
+            st.warning("Health trajectory analysis not available")
+
+    # 7. FINAL SUMMARY BUTTON
+    if st.button("📋 Final Summary", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📋 Clinical Summary</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        final_summary = safe_get(results, 'final_summary', '')
+        if final_summary:
+            st.markdown(final_summary)
+        else:
+            st.warning("Final summary not available")
+
+    # 8. HEART ATTACK RISK PREDICTION BUTTON
+    if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">❤️ Heart Attack Risk Assessment (FastAPI Server)</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+        if heart_attack_prediction and not heart_attack_prediction.get('error'):
+            risk_level = heart_attack_prediction.get("risk_level", "UNKNOWN")
+            risk_score = heart_attack_prediction.get("risk_score", 0.0)
+            risk_icon = heart_attack_prediction.get("risk_icon", "❓")
+            risk_percentage = heart_attack_prediction.get("risk_percentage", "0.0%")
+            
+            # Risk display
+            if risk_level == "HIGH":
+                st.markdown(f'<div class="risk-high">{risk_icon} <strong>Risk Level: {risk_level}</strong><br>Risk Score: {risk_percentage}<br>⚠️ Immediate medical consultation recommended</div>', unsafe_allow_html=True)
+            elif risk_level == "MODERATE":
+                st.markdown(f'<div class="risk-moderate">{risk_icon} <strong>Risk Level: {risk_level}</strong><br>Risk Score: {risk_percentage}<br>📋 Regular monitoring advised</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="risk-low">{risk_icon} <strong>Risk Level: {risk_level}</strong><br>Risk Score: {risk_percentage}<br>✅ Continue healthy lifestyle practices</div>', unsafe_allow_html=True)
+            
+            # Features used
+            heart_attack_features = safe_get(results, 'heart_attack_features', {})
+            if heart_attack_features:
+                extracted_features = heart_attack_features.get("extracted_features", {})
+                feature_interpretation = heart_attack_features.get("feature_interpretation", {})
+                
+                if extracted_features:
+                    st.markdown("**🎯 FastAPI Model Features:**")
+                    for feature, value in extracted_features.items():
+                        interpretation = feature_interpretation.get(feature, str(value))
+                        st.write(f"• **{feature}:** {interpretation}")
+                
+                # Risk factors
+                prediction_interpretation = heart_attack_prediction.get("prediction_interpretation", {})
+                risk_factors = prediction_interpretation.get("risk_factors", [])
+                if risk_factors:
+                    st.markdown("**⚠️ Identified Risk Factors:**")
+                    for factor in risk_factors:
+                        st.write(f"• {factor}")
+        else:
+            error_msg = heart_attack_prediction.get('error', 'Heart attack prediction not available')
+            st.error(f"❌ {error_msg}")
