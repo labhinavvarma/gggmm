@@ -1,383 +1,785 @@
-
 import json
-import requests
-import urllib3
-import uuid
-import asyncio
-import aiohttp
-from datetime import datetime
-from typing import Dict, Any, Optional
+import re
+import copy
+from datetime import datetime, date
+from typing import Dict, Any, List, Union
 import logging
-
-# Disable SSL warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class HealthAPIIntegrator:
-    """Enhanced API integrator compatible with MCP server and FastAPI heart attack prediction"""
+class HealthDataProcessor:
+    """Enhanced data processor with comprehensive nested JSON deidentification"""
     
-    def __init__(self, config):
-        self.config = config
-        logger.info("🔗 Enhanced HealthAPIIntegrator initialized")
-        logger.info(f"🌐 Snowflake API URL: {self.config.api_url}")
-        logger.info(f"📡 Backend API URL: {self.config.fastapi_url}")
-        logger.info(f"❤️ Heart Attack API URL: {self.config.heart_attack_api_url}")
-    
-    def call_llm(self, user_message: str, system_message: Optional[str] = None) -> str:
-        """Enhanced Snowflake Cortex API call with better error handling"""
-        try:
-            session_id = str(uuid.uuid4())
-            sys_msg = system_message or self.config.sys_msg
-            
-            logger.info(f"🤖 Calling Snowflake Cortex API")
-            logger.info(f"🤖 Message length: {len(user_message)} characters")
-            
-            payload = {
-                "query": {
-                    "aplctn_cd": self.config.aplctn_cd,
-                    "app_id": self.config.app_id,
-                    "api_key": self.config.api_key,
-                    "method": "cortex",
-                    "model": self.config.model,
-                    "sys_msg": sys_msg,
-                    "limit_convs": "0",
-                    "prompt": {
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": user_message
-                            }
-                        ]
-                    },
-                    "app_lvl_prefix": "",
-                    "user_id": "",
-                    "session_id": session_id
-                }
-            }
-            
-            headers = {
-                "Content-Type": "application/json; charset=utf-8",
-                "Accept": "application/json",
-                "Authorization": f'Snowflake Token="{self.config.api_key}"'
-            }
-            
-            response = requests.post(
-                self.config.api_url, 
-                headers=headers, 
-                json=payload, 
-                verify=False,
-                timeout=self.config.timeout
-            )
-            
-            if response.status_code == 200:
-                try:
-                    raw = response.text
-                    if "end_of_stream" in raw:
-                        answer, _, _ = raw.partition("end_of_stream")
-                        bot_reply = answer.strip()
-                    else:
-                        bot_reply = raw.strip()
-                    
-                    logger.info("✅ Snowflake Cortex API call successful")
-                    return bot_reply
-                    
-                except Exception as e:
-                    error_msg = f"Error parsing Snowflake response: {e}"
-                    logger.error(error_msg)
-                    return f"Parse Error: {error_msg}"
-            else:
-                error_msg = f"Snowflake Cortex API error {response.status_code}: {response.text}"
-                logger.error(error_msg)
-                return f"API Error {response.status_code}: {response.text[:500]}"
-                
-        except requests.exceptions.Timeout:
-            error_msg = f"Snowflake Cortex API timeout after {self.config.timeout} seconds"
-            logger.error(error_msg)
-            return f"Timeout Error: {error_msg}"
-        except requests.exceptions.ConnectionError:
-            error_msg = f"Cannot connect to Snowflake Cortex API: {self.config.api_url}"
-            logger.error(error_msg)
-            return f"Connection Error: {error_msg}"
-        except Exception as e:
-            error_msg = f"Unexpected error calling Snowflake Cortex API: {str(e)}"
-            logger.error(error_msg)
-            return f"Error: {error_msg}"
-    
-    def fetch_backend_data(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced backend data fetch compatible with MCP server structure"""
-        try:
-            logger.info(f"📡 Calling MCP-compatible Backend API: {self.config.fastapi_url}/all")
-            
-            # Enhanced payload validation
-            required_fields = ["first_name", "last_name", "ssn", "date_of_birth", "gender", "zip_code"]
-            for field in required_fields:
-                if not patient_data.get(field):
-                    return {"error": f"Missing required field: {field}"}
-            
-            response = requests.post(
-                f"{self.config.fastapi_url}/all", 
-                json=patient_data, 
-                timeout=self.config.timeout
-            )
-            
-            if response.status_code == 200:
-                api_data = response.json()
-                
-                # Enhanced result mapping for MCP server compatibility
-                result = {
-                    "mcid_output": self._process_api_response(api_data.get('mcid_search', {}), 'mcid'),
-                    "medical_output": self._process_api_response(api_data.get('medical_submit', {}), 'medical'),
-                    "pharmacy_output": self._process_api_response(api_data.get('pharmacy_submit', {}), 'pharmacy'),
-                    "token_output": self._process_api_response(api_data.get('get_token', {}), 'token')
-                }
-                
-                logger.info("✅ Successfully fetched all MCP-compatible API data")
-                return result
-                
-            else:
-                error_msg = f"Backend API call failed with status {response.status_code}: {response.text}"
-                logger.error(error_msg)
-                return {"error": error_msg}
-                
-        except Exception as e:
-            error_msg = f"Error fetching backend data: {str(e)}"
-            logger.error(error_msg)
-            return {"error": error_msg}
-    
-    def _process_api_response(self, response_data: Dict[str, Any], service_name: str) -> Dict[str, Any]:
-        """Process API response to ensure compatibility"""
-        if not response_data:
-            return {"error": f"No {service_name} data received", "service": service_name}
+    def __init__(self):
+        logger.info("🔧 Enhanced HealthDataProcessor initialized")
         
-        # Handle error responses
-        if "error" in response_data:
-            return {
-                "error": response_data["error"],
-                "service": service_name,
-                "status_code": response_data.get("status_code", 500)
-            }
-        
-        # Handle successful responses
-        if response_data.get("status_code") == 200 and "body" in response_data:
-            return {
-                "status_code": 200,
-                "body": response_data["body"],
-                "service": service_name,
-                "timestamp": response_data.get("timestamp", datetime.now().isoformat())
-            }
-        
-        # Handle other response formats
-        return {
-            "status_code": response_data.get("status_code", 200),
-            "body": response_data,
-            "service": service_name,
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    async def test_fastapi_connection(self) -> Dict[str, Any]:
-        """Enhanced FastAPI server connection test"""
-        try:
-            logger.info(f"🧪 Testing Enhanced FastAPI server connection at {self.config.heart_attack_api_url}...")
-            
-            health_url = f"{self.config.heart_attack_api_url}/health"
-            timeout = aiohttp.ClientTimeout(total=15)
-            
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                # Test health endpoint
-                async with session.get(health_url) as response:
-                    if response.status == 200:
-                        health_data = await response.json()
-                        
-                        # Test prediction endpoint with sample data
-                        test_features = {
-                            "age": 50,
-                            "gender": 1,
-                            "diabetes": 0,
-                            "high_bp": 0,
-                            "smoking": 0
-                        }
-                        
-                        predict_url = f"{self.config.heart_attack_api_url}/predict"
-                        async with session.post(predict_url, json=test_features) as pred_response:
-                            if pred_response.status == 200:
-                                pred_data = await pred_response.json()
-                                return {
-                                    "success": True,
-                                    "health_check": health_data,
-                                    "prediction_test": pred_data,
-                                    "server_url": self.config.heart_attack_api_url,
-                                    "test_features": test_features,
-                                    "connection_method": "enhanced"
-                                }
-                            else:
-                                error_text = await pred_response.text()
-                                return {
-                                    "success": False,
-                                    "error": f"Prediction endpoint error {pred_response.status}: {error_text}",
-                                    "server_url": self.config.heart_attack_api_url
-                                }
-                    else:
-                        error_text = await response.text()
-                        return {
-                            "success": False,
-                            "error": f"Health endpoint error {response.status}: {error_text}",
-                            "server_url": self.config.heart_attack_api_url
-                        }
-                        
-        except asyncio.TimeoutError:
-            return {
-                "success": False,
-                "error": "FastAPI server timeout - server may be down",
-                "server_url": self.config.heart_attack_api_url
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"FastAPI connection test failed: {str(e)}",
-                "server_url": self.config.heart_attack_api_url
-            }
-
-    async def call_fastapi_heart_attack_prediction(self, features: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced FastAPI heart attack prediction with multiple endpoint support"""
-        try:
-            logger.info(f"🔗 Calling Enhanced FastAPI server for heart attack prediction...")
-            logger.info(f"📊 Features: {features}")
-            
-            # Try multiple endpoint formats for compatibility
-            endpoints = [
-                f"{self.config.heart_attack_api_url}/predict",
-                f"{self.config.heart_attack_api_url}/predict-simple"
+        # Enhanced PII patterns for comprehensive deidentification
+        self.pii_patterns = {
+            'ssn': [
+                r'\b\d{3}-?\d{2}-?\d{4}\b',
+                r'\b\d{9}\b'
+            ],
+            'phone': [
+                r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
+                r'\(\d{3}\)\s?\d{3}[-.]?\d{4}',
+                r'\+1[-.]?\d{3}[-.]?\d{3}[-.]?\d{4}'
+            ],
+            'email': [
+                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            ],
+            'names': [
+                r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b',
+                r'\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b'
+            ],
+            'addresses': [
+                r'\b\d+\s+[A-Za-z\s]+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Circle|Cir|Court|Ct|Place|Pl)\b',
+                r'\b[A-Z][a-z]+\s+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd)\b'
+            ],
+            'credit_cards': [
+                r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
+            ],
+            'dates_of_birth': [
+                r'\bDOB:?\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',
+                r'\bDate\s+of\s+Birth:?\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}'
+            ],
+            'member_ids': [
+                r'\b[A-Z]{2,3}\d{6,12}\b',
+                r'\bMBR[-_]?ID:?\s*[A-Z0-9]{6,15}\b'
             ]
+        }
+        
+        # Medical terms to preserve (don't deidentify)
+        self.medical_preserve_patterns = [
+            r'\bICD[-_]?\d+',
+            r'\bCPT[-_]?\d+',
+            r'\bNDC[-_]?\d+',
+            r'\b[A-Z]\d{2}\.?\d*\b',  # ICD-10 codes
+            r'\b\d{5}[-]?\d*\b'      # CPT codes
+        ]
+    
+    def deidentify_medical_data(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced medical data deidentification with comprehensive JSON processing"""
+        try:
+            if not medical_data:
+                return {"error": "No medical data to deidentify"}
             
-            # Ensure all values are integers as required by the server
-            params = {
-                "age": int(features.get("age", 50)),
-                "gender": int(features.get("gender", 0)),
-                "diabetes": int(features.get("diabetes", 0)),
-                "high_bp": int(features.get("high_bp", 0)),
-                "smoking": int(features.get("smoking", 0))
+            # Calculate age
+            try:
+                dob_str = patient_data.get('date_of_birth', '')
+                if dob_str:
+                    dob = datetime.strptime(dob_str, '%Y-%m-%d').date()
+                    today = date.today()
+                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                else:
+                    age = "unknown"
+            except Exception as e:
+                logger.warning(f"Error calculating age: {e}")
+                age = "unknown"
+            
+            # Enhanced JSON processing - handle both 'body' and direct data
+            if 'body' in medical_data:
+                raw_medical_data = medical_data['body']
+            else:
+                raw_medical_data = medical_data
+            
+            # Deep copy and comprehensively deidentify the entire JSON structure
+            logger.info("🔒 Starting comprehensive medical data deidentification...")
+            deidentified_medical_data = self._comprehensive_deidentify_json(
+                copy.deepcopy(raw_medical_data), 
+                data_type="medical"
+            )
+            
+            deidentified = {
+                "src_mbr_first_nm": "john",
+                "src_mbr_last_nm": "smith", 
+                "src_mbr_mid_init_nm": None,
+                "src_mbr_age": age,
+                "src_mbr_zip_cd": "12345",
+                "medical_data": deidentified_medical_data,
+                "original_structure_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "deidentification_level": "comprehensive_nested",
+                "total_fields_processed": self._count_total_fields(deidentified_medical_data),
+                "deidentification_stats": self._get_deidentification_stats()
             }
             
-            logger.info(f"📤 Sending parameters: {params}")
+            logger.info("✅ Successfully deidentified comprehensive medical JSON structure")
+            logger.info(f"📊 Processed {deidentified['total_fields_processed']} total fields")
             
-            timeout = aiohttp.ClientTimeout(total=30)
+            return deidentified
             
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                # Try POST with JSON body first
-                try:
-                    async with session.post(endpoints[0], json=params) as response:
-                        if response.status == 200:
-                            result = await response.json()
-                            logger.info(f"✅ FastAPI prediction successful (JSON): {result}")
-                            return {
-                                "success": True,
-                                "prediction_data": result,
-                                "method": "POST_JSON",
-                                "endpoint": endpoints[0]
-                            }
-                        else:
-                            logger.warning(f"JSON method failed with status {response.status}")
-                except Exception as e:
-                    logger.warning(f"JSON method failed: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error in enhanced medical deidentification: {e}")
+            return {"error": f"Enhanced deidentification failed: {str(e)}"}
+    
+    def deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced pharmacy data deidentification with comprehensive JSON processing"""
+        try:
+            if not pharmacy_data:
+                return {"error": "No pharmacy data to deidentify"}
+            
+            # Enhanced JSON processing - handle both 'body' and direct data
+            if 'body' in pharmacy_data:
+                raw_pharmacy_data = pharmacy_data['body']
+            else:
+                raw_pharmacy_data = pharmacy_data
+            
+            # Deep copy and comprehensively deidentify the entire JSON structure
+            logger.info("🔒 Starting comprehensive pharmacy data deidentification...")
+            deidentified_pharmacy_data = self._comprehensive_deidentify_json(
+                copy.deepcopy(raw_pharmacy_data), 
+                data_type="pharmacy"
+            )
+            
+            result = {
+                "pharmacy_data": deidentified_pharmacy_data,
+                "original_structure_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "deidentification_level": "comprehensive_nested",
+                "total_fields_processed": self._count_total_fields(deidentified_pharmacy_data),
+                "deidentification_stats": self._get_deidentification_stats()
+            }
+            
+            logger.info("✅ Successfully deidentified comprehensive pharmacy JSON structure")
+            logger.info(f"📊 Processed {result['total_fields_processed']} total fields")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced pharmacy deidentification: {e}")
+            return {"error": f"Enhanced deidentification failed: {str(e)}"}
+    
+    def _comprehensive_deidentify_json(self, data: Any, data_type: str = "general", path: str = "") -> Any:
+        """Comprehensive deidentification of entire JSON structure including deeply nested objects"""
+        try:
+            if isinstance(data, dict):
+                deidentified_dict = {}
+                for key, value in data.items():
+                    # Deidentify the key if it contains PII indicators
+                    clean_key = self._deidentify_string(str(key)) if isinstance(key, str) else key
+                    
+                    # Create new path for tracking
+                    new_path = f"{path}.{key}" if path else str(key)
+                    
+                    # Recursively process the value
+                    deidentified_dict[clean_key] = self._comprehensive_deidentify_json(
+                        value, data_type, new_path
+                    )
+                    
+                return deidentified_dict
                 
-                # Try POST with query parameters as fallback
-                try:
-                    async with session.post(endpoints[1], params=params) as response:
-                        if response.status == 200:
-                            result = await response.json()
-                            logger.info(f"✅ FastAPI prediction successful (params): {result}")
-                            return {
-                                "success": True,
-                                "prediction_data": result,
-                                "method": "POST_PARAMS",
-                                "endpoint": endpoints[1]
-                            }
-                        else:
-                            error_text = await response.text()
-                            logger.error(f"❌ All FastAPI methods failed. Status {response.status}: {error_text}")
-                            return {
-                                "success": False,
-                                "error": f"FastAPI server error {response.status}: {error_text}",
-                                "tried_endpoints": endpoints
-                            }
-                except Exception as e:
-                    logger.error(f"Parameters method also failed: {str(e)}")
-                    return {
-                        "success": False,
-                        "error": f"All prediction methods failed. Last error: {str(e)}",
-                        "tried_endpoints": endpoints
-                    }
+            elif isinstance(data, list):
+                # Process list recursively with index tracking
+                deidentified_list = []
+                for i, item in enumerate(data):
+                    new_path = f"{path}[{i}]" if path else f"[{i}]"
+                    deidentified_list.append(
+                        self._comprehensive_deidentify_json(item, data_type, new_path)
+                    )
+                return deidentified_list
+                
+            elif isinstance(data, str):
+                # Comprehensive string deidentification
+                return self._advanced_deidentify_string(data, data_type, path)
+                
+            elif isinstance(data, (int, float)):
+                # Handle numeric data that might be PII
+                return self._deidentify_numeric_data(data, path)
+                
+            else:
+                # Return primitive types as-is (bool, None, etc.)
+                return data
+                
+        except Exception as e:
+            logger.warning(f"Error in comprehensive deidentification at path {path}: {e}")
+            return data  # Return original data if deidentification fails
+    
+    def _advanced_deidentify_string(self, data: str, data_type: str, path: str) -> str:
+        """Advanced string deidentification with context awareness"""
+        try:
+            if not isinstance(data, str) or not data.strip():
+                return data
+            
+            deidentified = str(data)
+            
+            # Track what was deidentified for stats
+            original_length = len(deidentified)
+            
+            # Apply all PII patterns
+            for pii_type, patterns in self.pii_patterns.items():
+                for pattern in patterns:
+                    if re.search(pattern, deidentified, re.IGNORECASE):
+                        mask = f"[{pii_type.upper()}_MASKED]"
+                        deidentified = re.sub(pattern, mask, deidentified, flags=re.IGNORECASE)
+                        self._update_deidentification_stats(pii_type, path)
+            
+            # Preserve medical codes and terms
+            for preserve_pattern in self.medical_preserve_patterns:
+                # This ensures medical codes are not accidentally masked
+                matches = re.findall(preserve_pattern, data, re.IGNORECASE)
+                for match in matches:
+                    # If the match was masked, restore it
+                    deidentified = deidentified.replace('[NAMES_MASKED]', match)
+            
+            # Context-specific deidentification
+            if data_type == "medical":
+                deidentified = self._deidentify_medical_specific(deidentified, path)
+            elif data_type == "pharmacy":
+                deidentified = self._deidentify_pharmacy_specific(deidentified, path)
+            
+            return deidentified
+            
+        except Exception as e:
+            logger.warning(f"Error in advanced string deidentification: {e}")
+            return data
+    
+    def _deidentify_medical_specific(self, data: str, path: str) -> str:
+        """Medical-specific deidentification patterns"""
+        # Provider names in medical data
+        data = re.sub(r'\bDr\.?\s+[A-Z][a-z]+\s+[A-Z][a-z]+\b', '[PROVIDER_MASKED]', data)
+        data = re.sub(r'\bPhysician:?\s*[A-Z][a-z]+\s+[A-Z][a-z]+\b', 'Physician: [PROVIDER_MASKED]', data)
+        
+        # Hospital/facility names
+        data = re.sub(r'\b[A-Z][a-z]+\s+(Hospital|Medical Center|Clinic|Healthcare)\b', '[FACILITY_MASKED]', data)
+        
+        return data
+    
+    def _deidentify_pharmacy_specific(self, data: str, path: str) -> str:
+        """Pharmacy-specific deidentification patterns"""
+        # Pharmacist names
+        data = re.sub(r'\bPharmacist:?\s*[A-Z][a-z]+\s+[A-Z][a-z]+\b', 'Pharmacist: [PHARMACIST_MASKED]', data)
+        
+        # Pharmacy names (but preserve drug names)
+        if 'pharmacy' in path.lower() and 'drug' not in path.lower():
+            data = re.sub(r'\b[A-Z][a-z]+\s+Pharmacy\b', '[PHARMACY_MASKED]', data)
+        
+        return data
+    
+    def _deidentify_numeric_data(self, data: Union[int, float], path: str) -> Union[int, float]:
+        """Deidentify numeric data that might be PII"""
+        # Check if this could be a SSN (9 digits)
+        if isinstance(data, int) and 100000000 <= data <= 999999999:
+            # If path suggests this is a SSN, mask it
+            if any(ssn_indicator in path.lower() for ssn_indicator in ['ssn', 'social', 'security']):
+                return 123456789  # Generic masked SSN
+        
+        # Check if this could be a phone number (10 digits)
+        if isinstance(data, int) and 1000000000 <= data <= 9999999999:
+            if any(phone_indicator in path.lower() for phone_indicator in ['phone', 'tel', 'mobile']):
+                return 5551234567  # Generic masked phone
+        
+        return data
+    
+    def _count_total_fields(self, data: Any) -> int:
+        """Count total number of fields processed"""
+        if isinstance(data, dict):
+            return len(data) + sum(self._count_total_fields(v) for v in data.values())
+        elif isinstance(data, list):
+            return sum(self._count_total_fields(item) for item in data)
+        else:
+            return 1
+    
+    def _update_deidentification_stats(self, pii_type: str, path: str):
+        """Update deidentification statistics"""
+        if not hasattr(self, '_deidentification_stats'):
+            self._deidentification_stats = {}
+        
+        if pii_type not in self._deidentification_stats:
+            self._deidentification_stats[pii_type] = {
+                'count': 0,
+                'paths': []
+            }
+        
+        self._deidentification_stats[pii_type]['count'] += 1
+        self._deidentification_stats[pii_type]['paths'].append(path)
+    
+    def _get_deidentification_stats(self) -> Dict[str, Any]:
+        """Get deidentification statistics"""
+        return getattr(self, '_deidentification_stats', {})
+    
+    def extract_medical_fields(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced medical field extraction with better comma-separated diagnosis handling"""
+        extraction_result = {
+            "hlth_srvc_records": [],
+            "extraction_summary": {
+                "total_hlth_srvc_records": 0,
+                "total_diagnosis_codes": 0,
+                "unique_service_codes": set(),
+                "unique_diagnosis_codes": set()
+            }
+        }
+        
+        try:
+            logger.info("🔍 Starting enhanced medical field extraction...")
+            
+            medical_data = deidentified_medical.get("medical_data", {})
+            if not medical_data:
+                logger.warning("No medical data found in deidentified medical data")
+                return extraction_result
+            
+            # Enhanced recursive extraction from the entire JSON structure
+            self._enhanced_recursive_medical_extraction(medical_data, extraction_result)
+            
+            # Convert sets to lists for JSON serialization
+            extraction_result["extraction_summary"]["unique_service_codes"] = list(
+                extraction_result["extraction_summary"]["unique_service_codes"]
+            )
+            extraction_result["extraction_summary"]["unique_diagnosis_codes"] = list(
+                extraction_result["extraction_summary"]["unique_diagnosis_codes"]
+            )
+            
+            logger.info(f"📋 Enhanced medical extraction completed: "
+                       f"{extraction_result['extraction_summary']['total_hlth_srvc_records']} health service records, "
+                       f"{extraction_result['extraction_summary']['total_diagnosis_codes']} diagnosis codes")
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced medical field extraction: {e}")
+            extraction_result["error"] = f"Enhanced medical extraction failed: {str(e)}"
+        
+        return extraction_result
+    
+    def _enhanced_recursive_medical_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Enhanced recursive search for medical fields in complex nested data structures"""
+        if isinstance(data, dict):
+            current_record = {}
+            
+            # Extract health service code with multiple possible field names
+            service_code_fields = ['hlth_srvc_cd', 'health_service_code', 'service_code', 'procedure_code']
+            for field in service_code_fields:
+                if field in data and data[field]:
+                    current_record["hlth_srvc_cd"] = data[field]
+                    result["extraction_summary"]["unique_service_codes"].add(str(data[field]))
+                    break
+            
+            diagnosis_codes = []
+            
+            # Enhanced diagnosis code extraction
+            # 1. Handle comma-separated diagnosis codes in diag_1_50_cd field
+            diag_combo_fields = ['diag_1_50_cd', 'diagnosis_codes', 'icd_codes']
+            for field in diag_combo_fields:
+                if field in data and data[field]:
+                    diag_value = str(data[field]).strip()
+                    if diag_value and diag_value.lower() not in ['null', 'none', '']:
+                        # Enhanced comma/semicolon/pipe separation
+                        separators = [',', ';', '|', '\n']
+                        individual_codes = [diag_value]  # Start with the whole value
                         
-        except asyncio.TimeoutError:
-            logger.error("❌ FastAPI server timeout")
-            return {
-                "success": False,
-                "error": "FastAPI server timeout - check if server is running"
+                        for sep in separators:
+                            temp_codes = []
+                            for code in individual_codes:
+                                temp_codes.extend([c.strip() for c in code.split(sep) if c.strip()])
+                            individual_codes = temp_codes
+                        
+                        for i, code in enumerate(individual_codes, 1):
+                            if code and code.lower() not in ['null', 'none', '']:
+                                diagnosis_codes.append({
+                                    "code": code,
+                                    "position": i,
+                                    "source": f"{field} (separated)",
+                                    "path": path
+                                })
+                                result["extraction_summary"]["unique_diagnosis_codes"].add(code)
+            
+            # 2. Handle individual diagnosis fields (diag_1_cd, diag_2_cd, etc.)
+            for i in range(1, 51):
+                diag_key = f"diag_{i}_cd"
+                if diag_key in data and data[diag_key]:
+                    diag_code = str(data[diag_key]).strip()
+                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
+                        diagnosis_codes.append({
+                            "code": diag_code,
+                            "position": i,
+                            "source": f"individual field ({diag_key})",
+                            "path": path
+                        })
+                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
+            
+            # 3. Look for other diagnosis-related fields
+            other_diag_fields = ['primary_diagnosis', 'secondary_diagnosis', 'icd10_code', 'icd_10']
+            for field in other_diag_fields:
+                if field in data and data[field]:
+                    diag_code = str(data[field]).strip()
+                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
+                        diagnosis_codes.append({
+                            "code": diag_code,
+                            "position": len(diagnosis_codes) + 1,
+                            "source": f"other field ({field})",
+                            "path": path
+                        })
+                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
+            
+            if diagnosis_codes:
+                current_record["diagnosis_codes"] = diagnosis_codes
+                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
+            
+            if current_record:
+                current_record["data_path"] = path
+                result["hlth_srvc_records"].append(current_record)
+                result["extraction_summary"]["total_hlth_srvc_records"] += 1
+            
+            # Continue recursive search in all nested objects
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._enhanced_recursive_medical_extraction(value, result, new_path)
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._enhanced_recursive_medical_extraction(item, result, new_path)
+    
+    def extract_pharmacy_fields(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced pharmacy field extraction with multiple NDC and label name field support"""
+        extraction_result = {
+            "ndc_records": [],
+            "extraction_summary": {
+                "total_ndc_records": 0,
+                "unique_ndc_codes": set(),
+                "unique_label_names": set()
             }
-        except Exception as e:
-            logger.error(f"Error calling FastAPI server: {e}")
-            return {
-                "success": False,
-                "error": f"FastAPI call failed: {str(e)}"
-            }
-
-    def test_llm_connection(self) -> Dict[str, Any]:
-        """Enhanced Snowflake Cortex API connection test"""
+        }
+        
         try:
-            logger.info("🧪 Testing Enhanced Snowflake Cortex API connection...")
-            test_response = self.call_llm("Hello, please respond with 'Snowflake Cortex connection successful'")
+            logger.info("🔍 Starting enhanced pharmacy field extraction...")
             
-            if test_response.startswith("Error"):
-                return {
-                    "success": False,
-                    "error": test_response,
-                    "endpoint": self.config.api_url
-                }
-            else:
-                return {
-                    "success": True,
-                    "response": test_response,
-                    "endpoint": self.config.api_url,
-                    "model": self.config.model,
-                    "connection_enhanced": True
-                }
+            pharmacy_data = deidentified_pharmacy.get("pharmacy_data", {})
+            if not pharmacy_data:
+                logger.warning("No pharmacy data found in deidentified pharmacy data")
+                return extraction_result
+            
+            self._enhanced_recursive_pharmacy_extraction(pharmacy_data, extraction_result)
+            
+            # Convert sets to lists for JSON serialization
+            extraction_result["extraction_summary"]["unique_ndc_codes"] = list(
+                extraction_result["extraction_summary"]["unique_ndc_codes"]
+            )
+            extraction_result["extraction_summary"]["unique_label_names"] = list(
+                extraction_result["extraction_summary"]["unique_label_names"]
+            )
+            
+            logger.info(f"💊 Enhanced pharmacy extraction completed: "
+                       f"{extraction_result['extraction_summary']['total_ndc_records']} NDC records")
+            
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Enhanced connection test failed: {str(e)}",
-                "endpoint": self.config.api_url
-            }
-
-    def test_backend_connection(self) -> Dict[str, Any]:
-        """Test backend MCP server connection"""
+            logger.error(f"Error in enhanced pharmacy field extraction: {e}")
+            extraction_result["error"] = f"Enhanced pharmacy extraction failed: {str(e)}"
+        
+        return extraction_result
+    
+    def _enhanced_recursive_pharmacy_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Enhanced recursive search for pharmacy fields in complex nested data structures"""
+        if isinstance(data, dict):
+            current_record = {}
+            
+            # Enhanced NDC field detection
+            ndc_field_names = [
+                'ndc', 'ndc_code', 'ndc_number', 'national_drug_code', 
+                'drug_code', 'product_ndc', 'ndc_id'
+            ]
+            ndc_found = False
+            for field in ndc_field_names:
+                if field in data and data[field]:
+                    current_record["ndc"] = data[field]
+                    result["extraction_summary"]["unique_ndc_codes"].add(str(data[field]))
+                    ndc_found = True
+                    break
+            
+            # Enhanced label name field detection
+            label_field_names = [
+                'lbl_nm', 'label_name', 'drug_name', 'medication_name', 
+                'product_name', 'brand_name', 'generic_name', 'drug_label',
+                'medication', 'product_label'
+            ]
+            label_found = False
+            for field in label_field_names:
+                if field in data and data[field]:
+                    current_record["lbl_nm"] = data[field]
+                    result["extraction_summary"]["unique_label_names"].add(str(data[field]))
+                    label_found = True
+                    break
+            
+            # Also extract additional pharmacy-related fields
+            additional_fields = ['strength', 'dosage', 'quantity', 'days_supply', 'refills']
+            for field in additional_fields:
+                if field in data and data[field]:
+                    current_record[field] = data[field]
+            
+            if ndc_found or label_found:
+                current_record["data_path"] = path
+                result["ndc_records"].append(current_record)
+                result["extraction_summary"]["total_ndc_records"] += 1
+            
+            # Continue recursive search in all nested objects
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._enhanced_recursive_pharmacy_extraction(value, result, new_path)
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._enhanced_recursive_pharmacy_extraction(item, result, new_path)
+    
+    def extract_health_entities_enhanced(self, pharmacy_data: Dict[str, Any], 
+                                        pharmacy_extraction: Dict[str, Any],
+                                        medical_extraction: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced health entity extraction using comprehensive data analysis"""
+        entities = {
+            "diabetics": "no",
+            "age_group": "unknown", 
+            "smoking": "no",
+            "alcohol": "no",
+            "blood_pressure": "unknown",
+            "analysis_details": [],
+            "medical_conditions": [],
+            "medications_identified": [],
+            "risk_factors": [],
+            "chronic_conditions": []
+        }
+        
         try:
-            logger.info("🧪 Testing MCP Backend API connection...")
+            logger.info("🎯 Starting enhanced health entity extraction...")
             
-            # Test health endpoint
-            health_url = f"{self.config.fastapi_url}/health"
-            response = requests.get(health_url, timeout=10)
+            # Analyze original pharmacy data
+            if pharmacy_data:
+                data_str = json.dumps(pharmacy_data).lower()
+                self._enhanced_analyze_pharmacy_for_entities(data_str, entities)
             
-            if response.status_code == 200:
-                health_data = response.json()
-                return {
-                    "success": True,
-                    "health_data": health_data,
-                    "backend_url": self.config.fastapi_url,
-                    "mcp_compatible": True
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Backend health check failed: {response.status_code}",
-                    "backend_url": self.config.fastapi_url
+            # Analyze structured pharmacy extraction
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                self._enhanced_analyze_pharmacy_extraction_for_entities(pharmacy_extraction, entities)
+            
+            # Analyze medical extraction for conditions
+            if medical_extraction and medical_extraction.get("hlth_srvc_records"):
+                self._enhanced_analyze_medical_extraction_for_entities(medical_extraction, entities)
+            
+            entities["analysis_details"].append(
+                f"Enhanced analysis sources: Pharmacy data, "
+                f"{len(pharmacy_extraction.get('ndc_records', []))} pharmacy records, "
+                f"{len(medical_extraction.get('hlth_srvc_records', []))} medical records"
+            )
+            
+            logger.info(f"✅ Enhanced entity extraction completed: {len(entities['medical_conditions'])} conditions identified")
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced entity extraction: {e}")
+            entities["analysis_details"].append(f"Error in enhanced entity extraction: {str(e)}")
+        
+        return entities
+    
+    def _enhanced_analyze_pharmacy_for_entities(self, data_str: str, entities: Dict[str, Any]):
+        """Enhanced pharmacy data analysis for health entities"""
+        # Expanded diabetes medication detection
+        diabetes_keywords = [
+            'insulin', 'metformin', 'glipizide', 'diabetes', 'diabetic', 
+            'glucophage', 'lantus', 'humalog', 'novolog', 'levemir',
+            'glyburide', 'pioglitazone', 'sitagliptin', 'glimepiride',
+            'januvia', 'victoza', 'ozempic', 'trulicity'
+        ]
+        for keyword in diabetes_keywords:
+            if keyword in data_str:
+                entities["diabetics"] = "yes"
+                entities["analysis_details"].append(f"Diabetes indicator found in pharmacy data: {keyword}")
+                entities["chronic_conditions"].append("Diabetes")
+                break
+        
+        # Enhanced medication-based age group detection
+        senior_medications = [
+            'aricept', 'warfarin', 'lisinopril', 'atorvastatin', 'metoprolol',
+            'furosemide', 'amlodipine', 'simvastatin', 'donepezil', 'rivaroxaban'
+        ]
+        adult_medications = [
+            'adderall', 'vyvanse', 'accutane', 'birth control', 'isotretinoin'
+        ]
+        
+        for med in senior_medications:
+            if med in data_str:
+                entities["age_group"] = "senior"
+                entities["analysis_details"].append(f"Senior medication found: {med}")
+                break
+        
+        if entities["age_group"] == "unknown":
+            for med in adult_medications:
+                if med in data_str:
+                    entities["age_group"] = "adult"
+                    entities["analysis_details"].append(f"Adult medication found: {med}")
+                    break
+        
+        # Enhanced blood pressure medication detection
+        bp_medications = [
+            'lisinopril', 'amlodipine', 'metoprolol', 'losartan', 'atenolol',
+            'carvedilol', 'valsartan', 'enalapril', 'hydrochlorothiazide'
+        ]
+        for med in bp_medications:
+            if med in data_str:
+                entities["blood_pressure"] = "managed"
+                entities["analysis_details"].append(f"Blood pressure medication found: {med}")
+                entities["chronic_conditions"].append("Hypertension")
+                break
+    
+    def _enhanced_analyze_pharmacy_extraction_for_entities(self, pharmacy_extraction: Dict[str, Any], entities: Dict[str, Any]):
+        """Enhanced analysis of structured pharmacy extraction"""
+        ndc_records = pharmacy_extraction.get("ndc_records", [])
+        
+        for record in ndc_records:
+            ndc = record.get("ndc", "")
+            lbl_nm = record.get("lbl_nm", "")
+            
+            if lbl_nm:
+                entities["medications_identified"].append({
+                    "ndc": ndc,
+                    "label_name": lbl_nm,
+                    "path": record.get("data_path", ""),
+                    "additional_fields": {k: v for k, v in record.items() 
+                                       if k not in ['ndc', 'lbl_nm', 'data_path']}
+                })
+                
+                lbl_lower = lbl_nm.lower()
+                
+                # Enhanced condition detection from medication names
+                if any(word in lbl_lower for word in ['insulin', 'metformin', 'glucophage', 'diabetes']):
+                    entities["diabetics"] = "yes"
+                    entities["analysis_details"].append(f"Diabetes medication found in extraction: {lbl_nm}")
+                
+                if any(word in lbl_lower for word in ['lisinopril', 'amlodipine', 'metoprolol', 'blood pressure']):
+                    entities["blood_pressure"] = "managed"
+                    entities["analysis_details"].append(f"Blood pressure medication found in extraction: {lbl_nm}")
+                
+                # Additional condition detection
+                if any(word in lbl_lower for word in ['statin', 'lipitor', 'crestor', 'cholesterol']):
+                    entities["chronic_conditions"].append("High Cholesterol")
+                    entities["analysis_details"].append(f"Cholesterol medication found: {lbl_nm}")
+    
+    def _enhanced_analyze_medical_extraction_for_entities(self, medical_extraction: Dict[str, Any], entities: Dict[str, Any]):
+        """Enhanced analysis of medical codes for comprehensive health conditions"""
+        hlth_srvc_records = medical_extraction.get("hlth_srvc_records", [])
+        
+        # Enhanced condition mappings with more comprehensive ICD-10 codes
+        condition_mappings = {
+            "diabetes": ["E10", "E11", "E12", "E13", "E14", "E08", "E09"],
+            "hypertension": ["I10", "I11", "I12", "I13", "I15", "I16"],
+            "smoking": ["Z72.0", "F17", "Z87.891"],
+            "alcohol": ["F10", "Z72.1", "Z87.891"],
+            "heart_disease": ["I20", "I21", "I22", "I23", "I24", "I25"],
+            "obesity": ["E66", "Z68"],
+            "depression": ["F32", "F33", "F34", "F39"],
+            "anxiety": ["F40", "F41", "F42", "F43"],
+            "copd": ["J44", "J43", "J42"],
+            "asthma": ["J45", "J46"]
+        }
+        
+        for record in hlth_srvc_records:
+            diagnosis_codes = record.get("diagnosis_codes", [])
+            for diag in diagnosis_codes:
+                diag_code = diag.get("code", "")
+                if diag_code:
+                    for condition, code_prefixes in condition_mappings.items():
+                        if any(diag_code.startswith(prefix) for prefix in code_prefixes):
+                            if condition == "diabetes":
+                                entities["diabetics"] = "yes"
+                                entities["medical_conditions"].append(f"Diabetes (ICD-10: {diag_code})")
+                                entities["chronic_conditions"].append("Diabetes")
+                            elif condition == "hypertension":
+                                entities["blood_pressure"] = "diagnosed"
+                                entities["medical_conditions"].append(f"Hypertension (ICD-10: {diag_code})")
+                                entities["chronic_conditions"].append("Hypertension")
+                            elif condition == "smoking":
+                                entities["smoking"] = "yes"
+                                entities["medical_conditions"].append(f"Smoking (ICD-10: {diag_code})")
+                                entities["risk_factors"].append("Smoking")
+                            elif condition == "heart_disease":
+                                entities["risk_factors"].append("Heart Disease History")
+                                entities["medical_conditions"].append(f"Heart Disease (ICD-10: {diag_code})")
+                            
+                            entities["analysis_details"].append(
+                                f"Medical condition identified from ICD-10 {diag_code}: {condition}"
+                            )
+    
+    def prepare_comprehensive_chatbot_context(self, chat_context: Dict[str, Any]) -> str:
+        """Prepare comprehensive context with complete deidentified data for chatbot"""
+        try:
+            context_sections = []
+            
+            # 1. Patient Overview
+            patient_overview = chat_context.get("patient_overview", {})
+            if patient_overview:
+                context_sections.append(f"PATIENT OVERVIEW:\n{json.dumps(patient_overview, indent=2)}")
+            
+            # 2. Complete Deidentified Medical Data - ENHANCED
+            deidentified_medical = chat_context.get("deidentified_medical", {})
+            if deidentified_medical:
+                # Include the ENTIRE deidentified medical JSON structure
+                complete_medical_data = {
+                    "patient_info": {
+                        "name": f"{deidentified_medical.get('src_mbr_first_nm', 'N/A')} {deidentified_medical.get('src_mbr_last_nm', 'N/A')}",
+                        "age": deidentified_medical.get('src_mbr_age', 'N/A'),
+                        "zip": deidentified_medical.get('src_mbr_zip_cd', 'N/A')
+                    },
+                    "deidentification_info": {
+                        "level": deidentified_medical.get('deidentification_level', 'standard'),
+                        "fields_processed": deidentified_medical.get('total_fields_processed', 0),
+                        "timestamp": deidentified_medical.get('deidentification_timestamp', 'unknown')
+                    },
+                    "complete_medical_data": deidentified_medical.get('medical_data', {})
                 }
                 
+                # Convert to JSON string with proper formatting
+                medical_json_str = json.dumps(complete_medical_data, indent=2, default=str)
+                context_sections.append(f"COMPLETE DEIDENTIFIED MEDICAL DATA:\n{medical_json_str}")
+            
+            # 3. Complete Deidentified Pharmacy Data - ENHANCED  
+            deidentified_pharmacy = chat_context.get("deidentified_pharmacy", {})
+            if deidentified_pharmacy:
+                # Include the ENTIRE deidentified pharmacy JSON structure
+                complete_pharmacy_data = {
+                    "deidentification_info": {
+                        "level": deidentified_pharmacy.get('deidentification_level', 'standard'),
+                        "fields_processed": deidentified_pharmacy.get('total_fields_processed', 0),
+                        "timestamp": deidentified_pharmacy.get('deidentification_timestamp', 'unknown')
+                    },
+                    "complete_pharmacy_data": deidentified_pharmacy.get('pharmacy_data', {})
+                }
+                
+                # Convert to JSON string with proper formatting
+                pharmacy_json_str = json.dumps(complete_pharmacy_data, indent=2, default=str)
+                context_sections.append(f"COMPLETE DEIDENTIFIED PHARMACY DATA:\n{pharmacy_json_str}")
+            
+            # 4. Structured Extractions with Enhanced Details
+            medical_extraction = chat_context.get("medical_extraction", {})
+            if medical_extraction and not medical_extraction.get('error'):
+                context_sections.append(f"MEDICAL DATA EXTRACTIONS:\n{json.dumps(medical_extraction, indent=2)}")
+            
+            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
+            if pharmacy_extraction and not pharmacy_extraction.get('error'):
+                context_sections.append(f"PHARMACY DATA EXTRACTIONS:\n{json.dumps(pharmacy_extraction, indent=2)}")
+            
+            # 5. Enhanced Entity Extraction
+            entity_extraction = chat_context.get("entity_extraction", {})
+            if entity_extraction:
+                context_sections.append(f"ENHANCED HEALTH ENTITIES:\n{json.dumps(entity_extraction, indent=2)}")
+            
+            # 6. Heart Attack Prediction
+            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
+            if heart_attack_prediction:
+                context_sections.append(f"HEART ATTACK PREDICTION:\n{json.dumps(heart_attack_prediction, indent=2)}")
+            
+            # 7. Clinical Analysis
+            health_trajectory = chat_context.get("health_trajectory", "")
+            if health_trajectory:
+                context_sections.append(f"HEALTH TRAJECTORY ANALYSIS:\n{health_trajectory}")
+            
+            final_summary = chat_context.get("final_summary", "")
+            if final_summary:
+                context_sections.append(f"CLINICAL SUMMARY:\n{final_summary}")
+            
+            # Join all sections with clear separators
+            complete_context = "\n\n" + ("\n" + "="*80 + "\n").join(context_sections)
+            
+            logger.info(f"📋 Prepared comprehensive chatbot context with {len(context_sections)} sections")
+            logger.info(f"📊 Total context length: {len(complete_context)} characters")
+            
+            return complete_context
+            
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Backend connection test failed: {str(e)}",
-                "backend_url": self.config.fastapi_url
-            }
+            logger.error(f"Error preparing comprehensive chatbot context: {e}")
+            return "Complete patient medical and pharmacy data available for detailed analysis."
