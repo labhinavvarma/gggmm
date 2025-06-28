@@ -300,6 +300,10 @@ def initialize_session_state():
     # Deep research animation state
     if 'show_research_animation' not in st.session_state:
         st.session_state.show_research_animation = False
+    
+    # Legacy research steps (for backward compatibility)
+    if 'research_steps' not in st.session_state:
+        st.session_state.research_steps = {}
 
 def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
     """Safely get a value from a dictionary"""
