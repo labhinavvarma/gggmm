@@ -1,1148 +1,1029 @@
+# Configure Streamlit page FIRST - before any other Streamlit commands
+import streamlit as st
+
+# Determine sidebar state based on chatbot readiness
+if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
+    sidebar_state = "expanded"
+else:
+    sidebar_state = "collapsed"
+
+st.set_page_config(
+    page_title="Enhanced Health Analysis Agent",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state=sidebar_state
+)
+
+# Now import other modules
 import json
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import sys
+import os
+from typing import Dict, Any, Optional
 import asyncio
-from datetime import datetime
-from typing import Dict, Any, List, TypedDict, Literal, Optional
-from dataclasses import dataclass, asdict
-import logging
 
-# LangGraph imports
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+# Add current directory to path for importing the agent
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
 
-# Import our enhanced modular components
-from health_api_integrator import HealthAPIIntegrator
-from health_data_processor import HealthDataProcessor
+# Import the Enhanced Health Analysis Agent
+AGENT_AVAILABLE = False
+import_error = None
+HealthAnalysisAgent = None
+Config = None
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+try:
+    from health_agent_core import HealthAnalysisAgent, Config
+    AGENT_AVAILABLE = True
+except ImportError as e:
+    AGENT_AVAILABLE = False
+    import_error = str(e)
 
-@dataclass
-class Config:
-    fastapi_url: str = "http://localhost:8001"  # MCP server URL
-    # Snowflake Cortex API Configuration
-    api_url: str = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-    api_key: str = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-    app_id: str = "edadip"
-    aplctn_cd: str = "edagnai"
-    model: str = "llama3.1-70b"
-    sys_msg: str = "You are a healthcare AI assistant. Provide accurate, concise answers based on context."
-    chatbot_sys_msg: str = "You are a powerful healthcare AI assistant with access to comprehensive deidentified medical records and heart attack risk predictions. Provide accurate, detailed analysis based on the complete medical and pharmacy data provided. Always maintain patient privacy and provide professional medical insights."
-    max_retries: int = 3
-    timeout: int = 30
-    
-    # Heart Attack Prediction API Configuration (separate from MCP server)
-    heart_attack_api_url: str = "http://localhost:8080"  # Heart attack FastAPI server
-    heart_attack_threshold: float = 0.5
-    
-    def to_dict(self):
-        return asdict(self)
+# Custom CSS for enhanced layout
+st.markdown("""
+<style>
+.main-header {
+    font-size: 2.5rem;
+    color: #2c3e50;
+    text-align: center;
+    margin-bottom: 2rem;
+    font-weight: 600;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
 
-# Enhanced State Definition for LangGraph with MCP compatibility
-class HealthAnalysisState(TypedDict):
-    # Input data
-    patient_data: Dict[str, Any]
-    
-    # Enhanced API outputs with MCP compatibility including MCID
-    mcid_output: Dict[str, Any]
-    medical_output: Dict[str, Any]
-    pharmacy_output: Dict[str, Any]
-    token_output: Dict[str, Any]
-    
-    # Enhanced processed data with comprehensive deidentification including MCID
-    deidentified_mcid: Dict[str, Any]
-    deidentified_medical: Dict[str, Any]
-    deidentified_pharmacy: Dict[str, Any]
-    
-    # Enhanced extracted structured data
-    medical_extraction: Dict[str, Any]
-    pharmacy_extraction: Dict[str, Any]
-    
-    entity_extraction: Dict[str, Any]
-    
-    # Analysis results
-    health_trajectory: str
-    final_summary: str
-    
-    # Enhanced Heart Attack Prediction via FastAPI
-    heart_attack_prediction: Dict[str, Any]
-    heart_attack_risk_score: float
-    heart_attack_features: Dict[str, Any]
-    
-    # Enhanced chatbot functionality with comprehensive context
-    chatbot_ready: bool
-    chatbot_context: Dict[str, Any]
-    chat_history: List[Dict[str, str]]
-    
-    # Control flow
-    current_step: str
-    errors: List[str]
-    retry_count: int
-    processing_complete: bool
-    step_status: Dict[str, str]
+.section-box {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid #e9ecef;
+    margin: 1rem 0;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
 
-class HealthAnalysisAgent:
-    """Enhanced Health Analysis Agent with MCP server compatibility and comprehensive features"""
+.section-title {
+    font-size: 1.3rem;
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 0.5rem;
+}
+
+.status-success {
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #28a745;
+    margin: 1rem 0;
+}
+
+.status-error {
+    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #dc3545;
+    margin: 1rem 0;
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.metric-card {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid #dee2e6;
+}
+
+.json-container {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    max-height: 500px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.complete-data-info {
+    background: linear-gradient(135deg, #e8f5e8 0%, #d4edd4 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #28a745;
+    margin: 1rem 0;
+}
+
+.chatbot-ready {
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #2196f3;
+    margin: 1rem 0;
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.css-1d391kg .css-10trblm {
+    color: white;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_running' not in st.session_state:
+        st.session_state.analysis_running = False
+    if 'agent' not in st.session_state:
+        st.session_state.agent = None
+    if 'config' not in st.session_state:
+        st.session_state.config = None
+    if 'chatbot_messages' not in st.session_state:
+        st.session_state.chatbot_messages = []
+    if 'chatbot_context' not in st.session_state:
+        st.session_state.chatbot_context = None
+
+def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """Safely get a value from a dictionary"""
+    try:
+        return data.get(key, default) if data else default
+    except:
+        return default
+
+def safe_str(value: Any) -> str:
+    """Safely convert any value to string"""
+    try:
+        return str(value) if value is not None else "unknown"
+    except:
+        return "unknown"
+
+def safe_json_dumps(data: Any, default: str = "{}") -> str:
+    """Safely convert data to JSON string"""
+    try:
+        return json.dumps(data, indent=2) if data else default
+    except Exception as e:
+        return f'{{"error": "JSON serialization failed: {str(e)}"}}'
+
+def calculate_age(birth_date):
+    """Calculate age from birth date"""
+    if not birth_date:
+        return None
     
-    def __init__(self, custom_config: Optional[Config] = None):
-        # Use provided config or create default
-        self.config = custom_config or Config()
-        
-        # Initialize enhanced components
-        self.api_integrator = HealthAPIIntegrator(self.config)
-        self.data_processor = HealthDataProcessor()
-        
-        logger.info("🔧 Enhanced HealthAnalysisAgent initialized with MCP compatibility")
-        logger.info(f"🌐 Snowflake API URL: {self.config.api_url}")
-        logger.info(f"🤖 Model: {self.config.model}")
-        logger.info(f"📡 MCP Server URL: {self.config.fastapi_url}")
-        logger.info(f"❤️ Heart Attack API: {self.config.heart_attack_api_url}")
-        
-        self.setup_enhanced_langgraph()
+    today = datetime.now().date()
+    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return age
+
+def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate patient data and return validation status and errors"""
+    errors = []
+    required_fields = {
+        'first_name': 'First Name',
+        'last_name': 'Last Name', 
+        'ssn': 'SSN',
+        'date_of_birth': 'Date of Birth',
+        'gender': 'Gender',
+        'zip_code': 'Zip Code'
+    }
     
-    def setup_enhanced_langgraph(self):
-        """Setup enhanced LangGraph workflow with MCP compatibility"""
-        logger.info("🔧 Setting up Enhanced LangGraph workflow with MCP compatibility...")
-        
-        # Create the StateGraph
-        workflow = StateGraph(HealthAnalysisState)
-        
-        # Add all processing nodes
-        workflow.add_node("fetch_api_data", self.fetch_api_data)
-        workflow.add_node("deidentify_data", self.deidentify_data)
-        workflow.add_node("extract_medical_pharmacy_data", self.extract_medical_pharmacy_data)
-        workflow.add_node("extract_entities", self.extract_entities)
-        workflow.add_node("analyze_trajectory", self.analyze_trajectory)
-        workflow.add_node("generate_summary", self.generate_summary)
-        workflow.add_node("predict_heart_attack", self.predict_heart_attack)
-        workflow.add_node("initialize_chatbot", self.initialize_chatbot)
-        workflow.add_node("handle_error", self.handle_error)
-        
-        # Define the enhanced workflow edges
-        workflow.add_edge(START, "fetch_api_data")
-        
-        # Conditional edges with enhanced retry logic
-        workflow.add_conditional_edges(
-            "fetch_api_data",
-            self.should_continue_after_api,
-            {
-                "continue": "deidentify_data",
-                "retry": "fetch_api_data", 
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "deidentify_data",
-            self.should_continue_after_deidentify,
-            {
-                "continue": "extract_medical_pharmacy_data",
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "extract_medical_pharmacy_data",
-            self.should_continue_after_extraction_step,
-            {
-                "continue": "extract_entities",
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "extract_entities", 
-            self.should_continue_after_entity_extraction,
-            {
-                "continue": "analyze_trajectory",
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "analyze_trajectory",
-            self.should_continue_after_trajectory,
-            {
-                "continue": "generate_summary",
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "generate_summary",
-            self.should_continue_after_summary,
-            {
-                "continue": "predict_heart_attack",
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_conditional_edges(
-            "predict_heart_attack",
-            self.should_continue_after_heart_attack_prediction,
-            {
-                "continue": "initialize_chatbot",
-                "error": "handle_error"
-            }
-        )
-        
-        workflow.add_edge("initialize_chatbot", END)
-        workflow.add_edge("handle_error", END)
-        
-        # Compile with checkpointer for persistence and reliability
-        memory = MemorySaver()
-        self.graph = workflow.compile(checkpointer=memory)
-        
-        logger.info("✅ Enhanced LangGraph workflow compiled successfully with MCP compatibility!")
+    for field, display_name in required_fields.items():
+        if not data.get(field):
+            errors.append(f"{display_name} is required")
+        elif field == 'ssn' and len(str(data[field])) < 9:
+            errors.append("SSN must be at least 9 digits")
+        elif field == 'zip_code' and len(str(data[field])) < 5:
+            errors.append("Zip code must be at least 5 digits")
     
-    # ===== ENHANCED LANGGRAPH NODES =====
-    
-    def fetch_api_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 1: Fetch data from MCP-compatible APIs"""
-        logger.info("🚀 Enhanced Node 1: Starting MCP-compatible API data fetch...")
-        state["current_step"] = "fetch_api_data"
-        state["step_status"]["fetch_api_data"] = "running"
-        
+    if data.get('date_of_birth'):
         try:
-            patient_data = state["patient_data"]
+            birth_date = datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date()
+            age = calculate_age(birth_date)
             
-            # Enhanced validation
-            required_fields = ["first_name", "last_name", "ssn", "date_of_birth", "gender", "zip_code"]
-            for field in required_fields:
-                if not patient_data.get(field):
-                    state["errors"].append(f"Missing required field: {field}")
-                    state["step_status"]["fetch_api_data"] = "error"
-                    return state
-            
-            # Use enhanced API integrator to fetch data from MCP server
-            api_result = self.api_integrator.fetch_backend_data(patient_data)
-            
-            if "error" in api_result:
-                state["errors"].append(f"MCP API Error: {api_result['error']}")
-                state["step_status"]["fetch_api_data"] = "error"
+            if age and age > 150:
+                errors.append("Age cannot be greater than 150 years")
+            elif age and age < 0:
+                errors.append("Date of birth cannot be in the future")
+        except:
+            errors.append("Invalid date format")
+    
+    return len(errors) == 0, errors
+
+def get_complete_data_stats(results: Dict[str, Any]) -> Dict[str, Any]:
+    """Get statistics about complete deidentified data including MCID"""
+    stats = {
+        "mcid_fields_processed": 0,
+        "medical_fields_processed": 0,
+        "pharmacy_fields_processed": 0,
+        "medical_records": 0,
+        "pharmacy_records": 0,
+        "total_diagnosis_codes": 0,
+        "total_ndc_codes": 0,
+        "medical_dates_extracted": 0,
+        "pharmacy_dates_extracted": 0,
+        "llm_enhanced": False
+    }
+    
+    try:
+        # MCID data stats
+        deidentified_mcid = safe_get(results, 'deidentified_data', {}).get('mcid', {})
+        stats["mcid_fields_processed"] = deidentified_mcid.get('total_fields_processed', 0)
+        
+        # Medical data stats
+        deidentified_medical = safe_get(results, 'deidentified_data', {}).get('medical', {})
+        stats["medical_fields_processed"] = deidentified_medical.get('total_fields_processed', 0)
+        
+        medical_extraction = safe_get(results, 'structured_extractions', {}).get('medical', {})
+        stats["medical_records"] = len(medical_extraction.get('hlth_srvc_records', []))
+        stats["total_diagnosis_codes"] = medical_extraction.get('extraction_summary', {}).get('total_diagnosis_codes', 0)
+        stats["medical_dates_extracted"] = medical_extraction.get('extraction_summary', {}).get('dates_extracted', 0)
+        stats["llm_enhanced"] = medical_extraction.get('llm_enhanced', False)
+        
+        # Pharmacy data stats
+        deidentified_pharmacy = safe_get(results, 'deidentified_data', {}).get('pharmacy', {})
+        stats["pharmacy_fields_processed"] = deidentified_pharmacy.get('total_fields_processed', 0)
+        
+        pharmacy_extraction = safe_get(results, 'structured_extractions', {}).get('pharmacy', {})
+        stats["pharmacy_records"] = len(pharmacy_extraction.get('ndc_records', []))
+        stats["total_ndc_codes"] = len(pharmacy_extraction.get('extraction_summary', {}).get('unique_ndc_codes', []))
+        stats["pharmacy_dates_extracted"] = pharmacy_extraction.get('extraction_summary', {}).get('dates_extracted', 0)
+        
+    except Exception as e:
+        pass
+    
+    return stats
+
+# Initialize session state
+initialize_session_state()
+
+# Main Title
+st.markdown('<h1 class="main-header">🏥 Enhanced Health Analysis Agent</h1>', unsafe_allow_html=True)
+
+# Display import status
+if not AGENT_AVAILABLE:
+    st.markdown(f'<div class="status-error">❌ Failed to import Enhanced Health Agent: {import_error}</div>', unsafe_allow_html=True)
+    st.stop()
+
+# ENHANCED SIDEBAR CHATBOT WITH COMPLETE DATA ACCESS
+with st.sidebar:
+    if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
+        st.title("💬 Enhanced Medical Assistant")
+        st.markdown("---")
+        
+        # Display complete data access info including MCID
+        data_stats = get_complete_data_stats(st.session_state.analysis_results)
+        st.markdown(f"""
+        <div class="complete-data-info">
+        <strong>📊 Complete Data Access (Enhanced v6.0):</strong><br>
+        • MCID Fields: {data_stats['mcid_fields_processed']:,}<br>
+        • Medical Fields: {data_stats['medical_fields_processed']:,}<br>
+        • Pharmacy Fields: {data_stats['pharmacy_fields_processed']:,}<br>
+        • Medical Records: {data_stats['medical_records']}<br>
+        • Pharmacy Records: {data_stats['pharmacy_records']}<br>
+        • Diagnosis Codes: {data_stats['total_diagnosis_codes']}<br>
+        • NDC Codes: {data_stats['total_ndc_codes']}<br>
+        • Medical Dates: {data_stats['medical_dates_extracted']}<br>
+        • Pharmacy Dates: {data_stats['pharmacy_dates_extracted']}<br>
+        • LLM Enhanced: {'✅' if data_stats['llm_enhanced'] else '❌'}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Chat history at top
+        chat_container = st.container()
+        with chat_container:
+            if st.session_state.chatbot_messages:
+                for message in st.session_state.chatbot_messages:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
             else:
-                state["mcid_output"] = api_result.get("mcid_output", {})
-                state["medical_output"] = api_result.get("medical_output", {})
-                state["pharmacy_output"] = api_result.get("pharmacy_output", {})
-                state["token_output"] = api_result.get("token_output", {})
-                
-                state["step_status"]["fetch_api_data"] = "completed"
-                logger.info("✅ Successfully fetched all MCP-compatible API data")
-                
-        except Exception as e:
-            error_msg = f"Error fetching MCP API data: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["fetch_api_data"] = "error"
-            logger.error(error_msg)
+                st.markdown("""
+                <div class="chatbot-ready">
+                <strong>👋 Enhanced Medical Assistant Ready! (v6.0)</strong><br>
+                I have access to the COMPLETE deidentified MCID, medical, and pharmacy data with LLM-enhanced meanings.<br><br>
+                <strong>Ask me about:</strong><br>
+                • Any specific medical codes with AI-generated explanations<br>
+                • Medication details, NDC codes, AI-powered descriptions<br>
+                • MCID member information and identifiers<br>
+                • Dates (CLM_RCVD_DT, RX_FILLED_DT), timelines, service details<br>
+                • Any field or value in the complete JSON data<br>
+                • Medical history analysis with enhanced insights<br>
+                • Heart attack risk factors (gets both LLM + ML analysis)<br>
+                • LLM-generated code meanings and explanations
+                </div>
+                """, unsafe_allow_html=True)
         
-        return state
-    
-    def deidentify_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 2: Comprehensive deidentification including MCID data"""
-        logger.info("🔒 Enhanced Node 2: Starting comprehensive nested JSON deidentification with MCID...")
-        state["current_step"] = "deidentify_data"
-        state["step_status"]["deidentify_data"] = "running"
+        # Chat input at bottom (always visible)
+        st.markdown("---")
+        user_question = st.chat_input("Ask about ANY data in the complete medical records...")
         
-        try:
-            # Deidentify MCID data
-            mcid_data = state.get("mcid_output", {})
-            deidentified_mcid = self.data_processor.deidentify_mcid_data(mcid_data)
-            state["deidentified_mcid"] = deidentified_mcid
+        # Handle chat input
+        if user_question:
+            # Add user message
+            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
             
-            # Deidentify medical data
-            medical_data = state.get("medical_output", {})
-            deidentified_medical = self.data_processor.deidentify_medical_data(medical_data, state["patient_data"])
-            state["deidentified_medical"] = deidentified_medical
-            
-            # Deidentify pharmacy data
-            pharmacy_data = state.get("pharmacy_output", {})
-            deidentified_pharmacy = self.data_processor.deidentify_pharmacy_data(pharmacy_data)
-            state["deidentified_pharmacy"] = deidentified_pharmacy
-            
-            state["step_status"]["deidentify_data"] = "completed"
-            
-            # Log comprehensive deidentification stats
-            mcid_stats = deidentified_mcid.get("deidentification_stats", {})
-            medical_stats = deidentified_medical.get("deidentification_stats", {})
-            pharmacy_stats = deidentified_pharmacy.get("deidentification_stats", {})
-            
-            total_fields = (
-                deidentified_mcid.get('total_fields_processed', 0) +
-                deidentified_medical.get('total_fields_processed', 0) +
-                deidentified_pharmacy.get('total_fields_processed', 0)
-            )
-            
-            logger.info("✅ Successfully completed comprehensive nested JSON deidentification with MCID")
-            logger.info(f"📊 MCID fields processed: {deidentified_mcid.get('total_fields_processed', 0)}")
-            logger.info(f"📊 Medical fields processed: {deidentified_medical.get('total_fields_processed', 0)}")
-            logger.info(f"📊 Pharmacy fields processed: {deidentified_pharmacy.get('total_fields_processed', 0)}")
-            logger.info(f"📊 Total fields processed: {total_fields}")
-            
-        except Exception as e:
-            error_msg = f"Error in comprehensive deidentification with MCID: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["deidentify_data"] = "error"
-            logger.error(error_msg)
-        
-        return state
-    
-    def extract_medical_pharmacy_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 3: Extract fields with LLM-powered meanings and dates"""
-        logger.info("🔍 Enhanced Node 3: Starting LLM-enhanced medical and pharmacy data extraction with dates...")
-        state["current_step"] = "extract_medical_pharmacy_data"
-        state["step_status"]["extract_medical_pharmacy_data"] = "running"
-        
-        try:
-            # Use LLM-enhanced data processor for medical extraction with meanings and dates
-            medical_extraction = self.data_processor.extract_medical_fields_with_llm_meanings(
-                state.get("deidentified_medical", {}), 
-                self.api_integrator.call_llm
-            )
-            state["medical_extraction"] = medical_extraction
-            
-            medical_records = len(medical_extraction.get('hlth_srvc_records', []))
-            dates_extracted = medical_extraction.get('extraction_summary', {}).get('dates_extracted', 0)
-            logger.info(f"📋 LLM-enhanced medical extraction: {medical_records} records, {dates_extracted} dates, LLM meanings added")
-            
-            # Use LLM-enhanced data processor for pharmacy extraction with meanings and dates
-            pharmacy_extraction = self.data_processor.extract_pharmacy_fields_with_llm_meanings(
-                state.get("deidentified_pharmacy", {}), 
-                self.api_integrator.call_llm
-            )
-            state["pharmacy_extraction"] = pharmacy_extraction
-            
-            pharmacy_records = len(pharmacy_extraction.get('ndc_records', []))
-            rx_dates_extracted = pharmacy_extraction.get('extraction_summary', {}).get('dates_extracted', 0)
-            logger.info(f"💊 LLM-enhanced pharmacy extraction: {pharmacy_records} records, {rx_dates_extracted} dates, LLM meanings added")
-            
-            state["step_status"]["extract_medical_pharmacy_data"] = "completed"
-            logger.info("✅ Successfully completed LLM-enhanced medical and pharmacy data extraction with dates")
-            
-        except Exception as e:
-            error_msg = f"Error in LLM-enhanced medical/pharmacy extraction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["extract_medical_pharmacy_data"] = "error"
-            logger.error(error_msg)
-        
-        return state
-    
-    def extract_entities(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 4: Extract comprehensive health entities"""
-        logger.info("🎯 Enhanced Node 4: Starting comprehensive health entity extraction...")
-        state["current_step"] = "extract_entities"
-        state["step_status"]["extract_entities"] = "running"
-        
-        try:
-            pharmacy_data = state.get("pharmacy_output", {})
-            pharmacy_extraction = state.get("pharmacy_extraction", {})
-            medical_extraction = state.get("medical_extraction", {})
-            
-            # Use enhanced data processor for comprehensive entity extraction
-            entities = self.data_processor.extract_health_entities_enhanced(
-                pharmacy_data, pharmacy_extraction, medical_extraction
-            )
-            state["entity_extraction"] = entities
-            
-            state["step_status"]["extract_entities"] = "completed"
-            
-            # Log extraction results
-            conditions_count = len(entities.get("medical_conditions", []))
-            medications_count = len(entities.get("medications_identified", []))
-            logger.info(f"✅ Successfully extracted comprehensive health entities: {conditions_count} conditions, {medications_count} medications")
-            
-        except Exception as e:
-            error_msg = f"Error in comprehensive entity extraction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["extract_entities"] = "error"
-            logger.error(error_msg)
-        
-        return state
-    
-    def analyze_trajectory(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 5: Analyze health trajectory with comprehensive data"""
-        logger.info("📈 Enhanced Node 5: Starting comprehensive health trajectory analysis...")
-        state["current_step"] = "analyze_trajectory"
-        state["step_status"]["analyze_trajectory"] = "running"
-        
-        try:
-            deidentified_medical = state.get("deidentified_medical", {})
-            deidentified_pharmacy = state.get("deidentified_pharmacy", {})
-            medical_extraction = state.get("medical_extraction", {})
-            pharmacy_extraction = state.get("pharmacy_extraction", {})
-            entities = state.get("entity_extraction", {})
-            
-            trajectory_prompt = self._create_comprehensive_trajectory_prompt(
-                deidentified_medical, deidentified_pharmacy, 
-                medical_extraction, pharmacy_extraction, entities
-            )
-            
-            logger.info("🤖 Calling Snowflake Cortex for comprehensive health trajectory analysis...")
-            
-            # Use API integrator for LLM call
-            response = self.api_integrator.call_llm(trajectory_prompt)
-            
-            if response.startswith("Error"):
-                state["errors"].append(f"Comprehensive trajectory analysis failed: {response}")
-                state["step_status"]["analyze_trajectory"] = "error"
-            else:
-                state["health_trajectory"] = response
-                state["step_status"]["analyze_trajectory"] = "completed"
-                logger.info("✅ Successfully completed comprehensive health trajectory analysis")
-            
-        except Exception as e:
-            error_msg = f"Error in comprehensive trajectory analysis: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["analyze_trajectory"] = "error"
-            logger.error(error_msg)
-        
-        return state
-    
-    def generate_summary(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 6: Generate comprehensive final health summary"""
-        logger.info("📋 Enhanced Node 6: Generating comprehensive final health summary...")
-        state["current_step"] = "generate_summary"
-        state["step_status"]["generate_summary"] = "running"
-        
-        try:
-            summary_prompt = self._create_comprehensive_summary_prompt(
-                state.get("health_trajectory", ""), 
-                state.get("entity_extraction", {}),
-                state.get("medical_extraction", {}),
-                state.get("pharmacy_extraction", {})
-            )
-            
-            logger.info("🤖 Calling Snowflake Cortex for comprehensive final summary...")
-            
-            # Use API integrator for LLM call
-            response = self.api_integrator.call_llm(summary_prompt)
-            
-            if response.startswith("Error"):
-                state["errors"].append(f"Comprehensive summary generation failed: {response}")
-                state["step_status"]["generate_summary"] = "error"
-            else:
-                state["final_summary"] = response
-                state["step_status"]["generate_summary"] = "completed"
-                logger.info("✅ Successfully generated comprehensive final summary")
-            
-        except Exception as e:
-            error_msg = f"Error in comprehensive summary generation: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["generate_summary"] = "error"
-            logger.error(error_msg)
-        
-        return state
-    
-    def predict_heart_attack(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 7: Enhanced heart attack prediction with FastAPI compatibility"""
-        logger.info("❤️ Enhanced Node 7: Starting enhanced heart attack prediction...")
-        state["current_step"] = "predict_heart_attack"
-        state["step_status"]["predict_heart_attack"] = "running"
-        
-        try:
-            # Extract features using enhanced feature extraction
-            features = self._extract_enhanced_heart_attack_features(state)
-            state["heart_attack_features"] = features
-            
-            if not features or "error" in features:
-                state["errors"].append("Failed to extract enhanced features for heart attack prediction")
-                state["step_status"]["predict_heart_attack"] = "error"
-                return state
-            
-            # Prepare feature vector for enhanced FastAPI call
-            fastapi_features = self._prepare_enhanced_fastapi_features(features)
-            
-            if fastapi_features is None:
-                state["errors"].append("Failed to prepare enhanced feature vector for prediction")
-                state["step_status"]["predict_heart_attack"] = "error"
-                return state
-            
-            # Make async prediction using enhanced API integrator
+            # Get bot response using complete deidentified data
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                prediction_result = loop.run_until_complete(
-                    self.api_integrator.call_fastapi_heart_attack_prediction(fastapi_features)
-                )
-                loop.close()
-            except Exception as async_error:
-                logger.error(f"Enhanced async prediction call failed: {async_error}")
-                state["errors"].append(f"Enhanced FastAPI prediction call failed: {str(async_error)}")
-                state["step_status"]["predict_heart_attack"] = "error"
-                return state
-            
-            if prediction_result.get("success", False):
-                # Process successful enhanced FastAPI prediction
-                prediction_data = prediction_result.get("prediction_data", {})
+                with st.spinner("Processing with complete data access..."):
+                    chatbot_response = st.session_state.agent.chat_with_data(
+                        user_question, 
+                        st.session_state.chatbot_context, 
+                        st.session_state.chatbot_messages
+                    )
                 
-                # Extract key values from enhanced FastAPI response
-                risk_probability = prediction_data.get("probability", 0.0)
-                binary_prediction = prediction_data.get("prediction", 0)
+                # Add assistant response
+                st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
+                st.rerun()
                 
-                # Convert to percentage
-                risk_percentage = risk_probability * 100
-                confidence_percentage = (1 - risk_probability) * 100 if binary_prediction == 0 else risk_probability * 100
-                
-                # Determine enhanced risk level
-                if risk_percentage >= 70:
-                    risk_category = "High Risk"
-                elif risk_percentage >= 50:
-                    risk_category = "Medium Risk"
-                else:
-                    risk_category = "Low Risk"
-                
-                # Create enhanced prediction result
-                enhanced_prediction = {
-                    "risk_display": f"Heart Disease Risk: {risk_percentage:.1f}% ({risk_category})",
-                    "confidence_display": f"Confidence: {confidence_percentage:.1f}%",
-                    "combined_display": f"Heart Disease Risk: {risk_percentage:.1f}% ({risk_category}) | Confidence: {confidence_percentage:.1f}%",
-                    "raw_risk_score": risk_probability,
-                    "raw_prediction": binary_prediction,
-                    "risk_category": risk_category,
-                    "fastapi_server_url": self.config.heart_attack_api_url,
-                    "prediction_method": prediction_result.get("method", "unknown"),
-                    "prediction_endpoint": prediction_result.get("endpoint", "unknown"),
-                    "prediction_timestamp": datetime.now().isoformat(),
-                    "enhanced_features_used": features.get("feature_interpretation", {}),
-                    "model_enhanced": True
-                }
-                
-                state["heart_attack_prediction"] = enhanced_prediction
-                state["heart_attack_risk_score"] = float(risk_probability)
-                
-                logger.info(f"✅ Enhanced FastAPI heart attack prediction completed successfully")
-                logger.info(f"❤️ Display: {enhanced_prediction['combined_display']}")
-                
-            else:
-                # Handle enhanced FastAPI prediction failure
-                error_msg = prediction_result.get("error", "Unknown enhanced FastAPI error")
-                state["heart_attack_prediction"] = {
-                    "error": error_msg,
-                    "risk_display": "Heart Disease Risk: Error",
-                    "confidence_display": "Confidence: Error",
-                    "combined_display": f"Heart Disease Risk: Error - {error_msg}",
-                    "fastapi_server_url": self.config.heart_attack_api_url,
-                    "error_details": error_msg,
-                    "tried_endpoints": prediction_result.get("tried_endpoints", []),
-                    "model_enhanced": True
-                }
-                state["heart_attack_risk_score"] = 0.0
-                logger.warning(f"⚠️ Enhanced FastAPI heart attack prediction failed: {error_msg}")
-            
-            state["step_status"]["predict_heart_attack"] = "completed"
-            
-        except Exception as e:
-            error_msg = f"Error in enhanced FastAPI heart attack prediction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["predict_heart_attack"] = "error"
-            logger.error(error_msg)
+            except Exception as e:
+                st.error(f"Error processing with complete data: {str(e)}")
         
-        return state
+        # Clear chat button at bottom
+        if st.button("🗑️ Clear Chat History", use_container_width=True):
+            st.session_state.chatbot_messages = []
+            st.rerun()
     
-    def initialize_chatbot(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 8: Initialize comprehensive chatbot with complete deidentified context including MCID"""
-        logger.info("💬 Enhanced Node 8: Initializing comprehensive chatbot with complete context including MCID...")
-        state["current_step"] = "initialize_chatbot"
-        state["step_status"]["initialize_chatbot"] = "running"
+    else:
+        # Show placeholder when chatbot is not ready
+        st.title("💬 Enhanced Medical Assistant v6.0")
+        st.info("💤 Enhanced chatbot will be available after running health analysis")
+        st.markdown("---")
+        st.markdown("**Enhanced Features v6.0:**")
+        st.markdown("• Complete deidentified data access (MCID + Medical + Pharmacy)")
+        st.markdown("• Query ANY field in medical/pharmacy/MCID JSON")
+        st.markdown("• LLM-enhanced code meanings and descriptions")
+        st.markdown("• Date extraction (CLM_RCVD_DT, RX_FILLED_DT)")
+        st.markdown("• Comprehensive nested data analysis") 
+        st.markdown("• Heart attack prediction (LLM + ML model)")
+        st.markdown("• Detailed medical code explanations")
+        st.markdown("• Complete medication and diagnosis details with AI insights")
+
+# 1. PATIENT INFORMATION BOX
+st.markdown("""
+<div class="section-box">
+    <div class="section-title">👤 Patient Information</div>
+</div>
+""", unsafe_allow_html=True)
+
+with st.container():
+    with st.form("patient_input_form"):
+        col1, col2, col3 = st.columns(3)
         
-        try:
-            # Prepare comprehensive chatbot context with all deidentified data including MCID
-            comprehensive_chatbot_context = {
-                "deidentified_mcid": state.get("deidentified_mcid", {}),
-                "deidentified_medical": state.get("deidentified_medical", {}),
-                "deidentified_pharmacy": state.get("deidentified_pharmacy", {}),
-                "medical_extraction": state.get("medical_extraction", {}),
-                "pharmacy_extraction": state.get("pharmacy_extraction", {}),
-                "entity_extraction": state.get("entity_extraction", {}),
-                "health_trajectory": state.get("health_trajectory", ""),
-                "final_summary": state.get("final_summary", ""),
-                "heart_attack_prediction": state.get("heart_attack_prediction", {}),
-                "heart_attack_risk_score": state.get("heart_attack_risk_score", 0.0),
-                "heart_attack_features": state.get("heart_attack_features", {}),
-                "patient_overview": {
-                    "age": state.get("deidentified_medical", {}).get("src_mbr_age", "unknown"),
-                    "zip": state.get("deidentified_medical", {}).get("src_mbr_zip_cd", "unknown"),
-                    "analysis_timestamp": datetime.now().isoformat(),
-                    "heart_attack_risk_level": state.get("heart_attack_prediction", {}).get("risk_category", "unknown"),
-                    "model_type": "enhanced_fastapi_mcp_compatible_with_mcid",
-                    "deidentification_level": "comprehensive_nested_with_mcid",
-                    "total_mcid_fields": state.get("deidentified_mcid", {}).get("total_fields_processed", 0),
-                    "total_medical_fields": state.get("deidentified_medical", {}).get("total_fields_processed", 0),
-                    "total_pharmacy_fields": state.get("deidentified_pharmacy", {}).get("total_fields_processed", 0),
-                    "llm_enhanced_extractions": True
-                }
-            }
-            
-            state["chat_history"] = []
-            state["chatbot_context"] = comprehensive_chatbot_context
-            state["chatbot_ready"] = True
-            state["processing_complete"] = True
-            state["step_status"]["initialize_chatbot"] = "completed"
-            
-            # Log comprehensive chatbot initialization including MCID
-            medical_records = len(state.get("medical_extraction", {}).get("hlth_srvc_records", []))
-            pharmacy_records = len(state.get("pharmacy_extraction", {}).get("ndc_records", []))
-            mcid_fields = state.get("deidentified_mcid", {}).get("total_fields_processed", 0)
-            
-            logger.info("✅ Successfully initialized comprehensive chatbot with complete deidentified context including MCID")
-            logger.info(f"📊 Chatbot context includes: {mcid_fields} MCID fields, {medical_records} medical records, {pharmacy_records} pharmacy records")
-            logger.info(f"🔒 Deidentification level: comprehensive nested JSON with MCID processing")
-            logger.info(f"🤖 LLM-enhanced extractions: code meanings and dates included")
-            
-        except Exception as e:
-            error_msg = f"Error initializing comprehensive chatbot with MCID: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["initialize_chatbot"] = "error"
-            logger.error(error_msg)
+        with col1:
+            first_name = st.text_input("First Name *", value="")
+            last_name = st.text_input("Last Name *", value="")
         
-        return state
-    
-    def handle_error(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node: Enhanced error handling"""
-        logger.error(f"🚨 Enhanced LangGraph Error Handler: {state['current_step']}")
-        logger.error(f"Enhanced Errors: {state['errors']}")
+        with col2:
+            ssn = st.text_input("SSN *", value="")
+            date_of_birth = st.date_input(
+                "Date of Birth *", 
+                value=datetime.now().date(),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date()
+            )
         
-        state["processing_complete"] = True
-        current_step = state.get("current_step", "unknown")
-        state["step_status"][current_step] = "error"
-        return state
-    
-    # ===== ENHANCED LANGGRAPH CONDITIONAL EDGES =====
-    
-    def should_continue_after_api(self, state: HealthAnalysisState) -> Literal["continue", "retry", "error"]:
-        if state["errors"]:
-            if state["retry_count"] < self.config.max_retries:
-                state["retry_count"] += 1
-                logger.warning(f"🔄 Retrying enhanced API fetch (attempt {state['retry_count']}/{self.config.max_retries})")
-                state["errors"] = []
-                return "retry"
-            else:
-                logger.error(f"❌ Max retries ({self.config.max_retries}) exceeded for enhanced API fetch")
-                return "error"
-        return "continue"
-    
-    def should_continue_after_deidentify(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-    
-    def should_continue_after_extraction_step(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-    
-    def should_continue_after_entity_extraction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-    
-    def should_continue_after_trajectory(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-    
-    def should_continue_after_summary(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-    
-    def should_continue_after_heart_attack_prediction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-    
-    # ===== ENHANCED CHATBOT FUNCTIONALITY =====
-    
-    def chat_with_data(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-        """Enhanced chatbot with COMPLETE deidentified data access and special heart attack handling"""
-        try:
-            # Check if this is a heart attack prediction question
-            heart_attack_keywords = [
-                'heart attack', 'cardiac risk', 'heart disease', 'cardiovascular risk',
-                'heart health', 'cardiac health', 'heart attack risk', 'heart attack prediction'
-            ]
-            
-            is_heart_attack_question = any(keyword in user_query.lower() for keyword in heart_attack_keywords)
-            
-            if is_heart_attack_question:
-                return self._handle_heart_attack_prediction_question(user_query, chat_context, chat_history)
-            
-            # Use enhanced data processor to prepare COMPLETE context - ENTIRE JSON data including MCID
-            complete_context = self.data_processor.prepare_complete_deidentified_context(chat_context)
-            
-            # Build conversation history for continuity
-            history_text = ""
-            if chat_history:
-                recent_history = chat_history[-10:]
-                history_text = "\n".join([
-                    f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-                    for msg in recent_history
-                ])
-            
-            # Create COMPLETE prompt with ENTIRE deidentified data including MCID
-            complete_prompt = f"""You are an expert medical data assistant with access to the COMPLETE, ENTIRE deidentified patient health records including MCID, medical, and pharmacy data. You have the FULL JSON data structures available. Answer the user's question with specific, detailed information from ANY part of the complete medical data provided.
-
-COMPLETE DEIDENTIFIED PATIENT DATA (ENTIRE JSON STRUCTURES INCLUDING MCID - NO TRUNCATION):
-{complete_context}
-
-RECENT CONVERSATION HISTORY:
-{history_text}
-
-USER QUESTION: {user_query}
-
-CRITICAL INSTRUCTIONS:
-- You have access to the COMPLETE deidentified MCID, medical, and pharmacy JSON data with LLM-enhanced meanings
-- Search through the ENTIRE JSON structure including MCID data to find relevant information
-- Include specific dates (CLM_RCVD_DT, RX_FILLED_DT), codes, medications, diagnoses, and values from ANY part of the JSON
-- Reference exact field names, values, nested structures, and LLM-generated meanings from the data
-- If user asks about ANY specific field, code, medication, or data point, find it in the complete JSON
-- Include ICD-10 codes with LLM meanings, NDC codes with descriptions, service codes with explanations
-- Access all nested levels of the JSON structure including MCID member information
-- Use LLM-enhanced code meanings to provide better explanations
-- Include dates from CLM_RCVD_DT (medical) and RX_FILLED_DT (pharmacy) when relevant
-- Be thorough and cite specific data points from the complete deidentified records
-- Use the conversation history to understand follow-up questions and context
-
-DETAILED ANSWER USING COMPLETE DEIDENTIFIED DATA INCLUDING MCID:"""
-
-            logger.info(f"💬 Processing query with COMPLETE deidentified data access including MCID: {user_query[:50]}...")
-            logger.info(f"📊 Complete context length: {len(complete_context)} characters")
-            
-            # Use enhanced API integrator for LLM call
-            enhanced_system_msg = """You are a powerful healthcare AI assistant with access to COMPLETE deidentified medical records including MCID, medical, and pharmacy data with LLM-enhanced code meanings. You can search through and reference ANY part of the provided JSON data structures. Provide accurate, detailed analysis based on the ENTIRE medical and pharmacy data provided."""
-            
-            response = self.api_integrator.call_llm(complete_prompt, enhanced_system_msg)
-            
-            if response.startswith("Error"):
-                return "I encountered an error processing your question. Please try rephrasing your question. I have access to the complete deidentified MCID, medical, and pharmacy data with enhanced code meanings and can answer questions about any specific codes, medications, dates, or other data points."
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error in complete deidentified data chatbot with MCID: {str(e)}")
-            return "I encountered an error processing your question. Please try again. I have access to the complete deidentified MCID, medical, and pharmacy JSON data with enhanced meanings and can answer detailed questions about any aspect of the patient's records."
-    
-    def _handle_heart_attack_prediction_question(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-        """Special handler for heart attack prediction questions - shows both LLM analysis and ML model results"""
-        try:
-            logger.info("❤️ Handling heart attack prediction question with both LLM and ML model analysis...")
-            
-            # Get ML model prediction results
-            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
-            heart_attack_features = chat_context.get("heart_attack_features", {})
-            
-            # Get complete context for LLM analysis
-            complete_context = self.data_processor.prepare_complete_deidentified_context(chat_context)
-            
-            # Build conversation history
-            history_text = ""
-            if chat_history:
-                recent_history = chat_history[-8:]
-                history_text = "\n".join([
-                    f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
-                    for msg in recent_history
-                ])
-            
-            # Create special heart attack analysis prompt
-            heart_attack_prompt = f"""You are an expert cardiovascular risk assessment specialist with access to complete patient data AND machine learning model results. Provide a comprehensive heart attack risk analysis combining both clinical data review and ML model insights.
-
-COMPLETE PATIENT DATA INCLUDING MCID, MEDICAL, AND PHARMACY RECORDS:
-{complete_context}
-
-MACHINE LEARNING MODEL PREDICTION RESULTS:
-{json.dumps(heart_attack_prediction, indent=2)}
-
-FEATURES USED IN ML MODEL:
-{json.dumps(heart_attack_features, indent=2)}
-
-CONVERSATION HISTORY:
-{history_text}
-
-USER QUESTION: {user_query}
-
-PROVIDE A COMPREHENSIVE HEART ATTACK RISK ASSESSMENT THAT INCLUDES:
-
-1. **CLINICAL DATA ANALYSIS** (Your LLM Analysis):
-   - Review the complete medical history, diagnoses, and medications
-   - Analyze risk factors from the deidentified data
-   - Clinical interpretation of findings
-   - Evidence-based risk assessment
-
-2. **MACHINE LEARNING MODEL RESULTS**:
-   - ML model prediction: {heart_attack_prediction.get('combined_display', 'Not available')}
-   - Model confidence and methodology
-   - Features that influenced the prediction
-
-3. **INTEGRATED ASSESSMENT**:
-   - How the clinical data supports or contrasts with the ML prediction
-   - Comprehensive risk evaluation
-   - Recommendations based on both analyses
-
-Format your response clearly with sections for LLM Clinical Analysis and ML Model Results, then provide an integrated conclusion."""
-
-            logger.info("🤖 Calling LLM for comprehensive heart attack risk analysis...")
-            
-            response = self.api_integrator.call_llm(heart_attack_prompt, self.config.chatbot_sys_msg)
-            
-            if response.startswith("Error"):
-                # Fallback response with just ML model results
-                ml_display = heart_attack_prediction.get('combined_display', 'Heart attack prediction not available')
-                return f"""**Heart Attack Risk Assessment**
-
-**Machine Learning Model Results:**
-{ml_display}
-
-**Error:** Unable to perform detailed clinical analysis at this time. The ML model prediction above is based on the extracted patient features.
-
-Please try rephrasing your question for a more detailed analysis."""
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error in heart attack prediction analysis: {str(e)}")
-            # Fallback with just ML results
-            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
-            ml_display = heart_attack_prediction.get('combined_display', 'Heart attack prediction not available')
-            
-            return f"""**Heart Attack Risk Assessment**
-
-**Machine Learning Model Results:**
-{ml_display}
-
-**Note:** Detailed clinical analysis unavailable due to processing error. The ML model prediction above provides the cardiovascular risk assessment based on extracted patient features."""
-    
-    # ===== ENHANCED HELPER METHODS =====
-    
-    def _extract_enhanced_heart_attack_features(self, state: HealthAnalysisState) -> Dict[str, Any]:
-        """Enhanced feature extraction for heart attack prediction"""
-        try:
-            features = {}
-            
-            # Enhanced patient age extraction
-            deidentified_medical = state.get("deidentified_medical", {})
-            patient_age = deidentified_medical.get("src_mbr_age", None)
-            
-            if patient_age and patient_age != "unknown":
-                try:
-                    age_value = int(float(str(patient_age)))
-                    if 0 <= age_value <= 120:
-                        features["Age"] = age_value
-                    else:
-                        features["Age"] = 50  # Default age
-                except:
-                    features["Age"] = 50
-            else:
-                features["Age"] = 50
-            
-            # Enhanced gender extraction
-            patient_data = state.get("patient_data", {})
-            gender = str(patient_data.get("gender", "F")).upper()
-            features["Gender"] = 1 if gender in ["M", "MALE", "1"] else 0
-            
-            # Enhanced feature extraction from comprehensive entity extraction
-            entity_extraction = state.get("entity_extraction", {})
-            
-            # Enhanced diabetes detection
-            diabetes = str(entity_extraction.get("diabetics", "no")).lower()
-            features["Diabetes"] = 1 if diabetes in ["yes", "true", "1"] else 0
-            
-            # Enhanced blood pressure detection
-            blood_pressure = str(entity_extraction.get("blood_pressure", "unknown")).lower()
-            features["High_BP"] = 1 if blood_pressure in ["managed", "diagnosed", "yes", "true", "1"] else 0
-            
-            # Enhanced smoking detection
-            smoking = str(entity_extraction.get("smoking", "no")).lower()
-            features["Smoking"] = 1 if smoking in ["yes", "true", "1"] else 0
-            
-            # Validate all features are integers
-            for key in features:
-                try:
-                    features[key] = int(features[key])
-                except:
-                    if key == "Age":
-                        features[key] = 50
-                    else:
-                        features[key] = 0
-            
-            # Create enhanced feature summary
-            enhanced_feature_summary = {
-                "extracted_features": features,
-                "feature_interpretation": {
-                    "Age": f"{features['Age']} years old",
-                    "Gender": "Male" if features["Gender"] == 1 else "Female",
-                    "Diabetes": "Yes" if features["Diabetes"] == 1 else "No",
-                    "High_BP": "Yes" if features["High_BP"] == 1 else "No",
-                    "Smoking": "Yes" if features["Smoking"] == 1 else "No"
-                },
-                "data_sources": {
-                    "age_source": "deidentified_medical.src_mbr_age",
-                    "gender_source": "patient_data.gender",
-                    "diabetes_source": "entity_extraction.diabetics",
-                    "bp_source": "entity_extraction.blood_pressure",
-                    "smoking_source": "entity_extraction.smoking"
-                },
-                "extraction_enhanced": True
-            }
-            
-            logger.info(f"✅ Enhanced heart attack features extracted: {enhanced_feature_summary['feature_interpretation']}")
-            return enhanced_feature_summary
-            
-        except Exception as e:
-            logger.error(f"Error in enhanced heart attack feature extraction: {e}")
-            return {"error": f"Enhanced feature extraction failed: {str(e)}"}
-
-    def _prepare_enhanced_fastapi_features(self, features: Dict[str, Any]) -> Optional[Dict[str, int]]:
-        """Prepare enhanced feature data for FastAPI server call"""
-        try:
-            extracted_features = features.get("extracted_features", {})
-            
-            enhanced_fastapi_features = {
-                "age": int(extracted_features.get("Age", 50)),
-                "gender": int(extracted_features.get("Gender", 0)),
-                "diabetes": int(extracted_features.get("Diabetes", 0)),
-                "high_bp": int(extracted_features.get("High_BP", 0)),
-                "smoking": int(extracted_features.get("Smoking", 0))
-            }
-            
-            # Enhanced validation with logging
-            if enhanced_fastapi_features["age"] < 0 or enhanced_fastapi_features["age"] > 120:
-                logger.warning(f"Age {enhanced_fastapi_features['age']} out of range, using default 50")
-                enhanced_fastapi_features["age"] = 50
-            
-            for key in ["gender", "diabetes", "high_bp", "smoking"]:
-                if enhanced_fastapi_features[key] not in [0, 1]:
-                    logger.warning(f"{key} value {enhanced_fastapi_features[key]} invalid, using 0")
-                    enhanced_fastapi_features[key] = 0
-            
-            logger.info(f"✅ Enhanced FastAPI features prepared: {enhanced_fastapi_features}")
-            return enhanced_fastapi_features
-            
-        except Exception as e:
-            logger.error(f"Error preparing enhanced FastAPI features: {e}")
-            return None
-    
-    def _create_comprehensive_trajectory_prompt(self, medical_data: Dict, pharmacy_data: Dict, 
-                                              medical_extraction: Dict, pharmacy_extraction: Dict, 
-                                              entities: Dict) -> str:
-        """Create comprehensive prompt for health trajectory analysis"""
-        return f"""
-You are a healthcare AI assistant analyzing a patient's comprehensive health trajectory. Based on the following complete deidentified data with comprehensive nested JSON processing, provide a detailed health trajectory analysis.
-
-COMPLETE DEIDENTIFIED MEDICAL DATA (Comprehensive Processing):
-{json.dumps(medical_data, indent=2, default=str)}
-
-COMPLETE DEIDENTIFIED PHARMACY DATA (Comprehensive Processing):
-{json.dumps(pharmacy_data, indent=2, default=str)}
-
-ENHANCED MEDICAL DATA EXTRACTIONS:
-{json.dumps(medical_extraction, indent=2)}
-
-ENHANCED PHARMACY DATA EXTRACTIONS:
-{json.dumps(pharmacy_extraction, indent=2)}
-
-COMPREHENSIVE HEALTH ENTITIES:
-{json.dumps(entities, indent=2)}
-
-Please analyze this patient's health trajectory focusing on:
-
-1. **Current Health Status**: Comprehensive assessment based on medical codes, pharmacy data, and extracted entities
-2. **Risk Factors**: Identified health risks from ICD-10 codes and medication patterns  
-3. **Medication Analysis**: Complete NDC codes, drug names, and therapeutic areas identified
-4. **Chronic Conditions**: Long-term health management needs from medical service codes
-5. **Health Trends**: Trajectory of health over time based on comprehensive service utilization
-6. **Care Recommendations**: Suggested areas for medical attention based on complete data analysis
-7. **Deidentification Impact**: How comprehensive deidentification preserves clinical utility
-
-Provide a detailed analysis (500-600 words) that synthesizes all the available structured and unstructured information into a coherent health trajectory assessment using the comprehensive nested JSON processing results.
-"""
-    
-    def _create_comprehensive_summary_prompt(self, trajectory_analysis: str, entities: Dict, 
-                                           medical_extraction: Dict, pharmacy_extraction: Dict) -> str:
-        """Create comprehensive prompt for final health summary"""
-        return f"""
-Based on the detailed health trajectory analysis below and the comprehensive data extractions with enhanced processing, create a concise executive summary of this patient's health status.
-
-COMPREHENSIVE HEALTH TRAJECTORY ANALYSIS:
-{trajectory_analysis}
-
-ENHANCED HEALTH ENTITIES:
-- Diabetes: {entities.get('diabetics', 'unknown')}
-- Age Group: {entities.get('age_group', 'unknown')}
-- Smoking Status: {entities.get('smoking', 'unknown')}
-- Alcohol Status: {entities.get('alcohol', 'unknown')}
-- Blood Pressure: {entities.get('blood_pressure', 'unknown')}
-- Medical Conditions Identified: {len(entities.get('medical_conditions', []))}
-- Medications Identified: {len(entities.get('medications_identified', []))}
-- Risk Factors: {len(entities.get('risk_factors', []))}
-- Chronic Conditions: {len(entities.get('chronic_conditions', []))}
-
-ENHANCED MEDICAL DATA SUMMARY:
-- Health Service Records: {len(medical_extraction.get('hlth_srvc_records', []))}
-- Total Diagnosis Codes: {medical_extraction.get('extraction_summary', {}).get('total_diagnosis_codes', 0)}
-- Unique Service Codes: {len(medical_extraction.get('extraction_summary', {}).get('unique_service_codes', []))}
-
-ENHANCED PHARMACY DATA SUMMARY:
-- NDC Records: {len(pharmacy_extraction.get('ndc_records', []))}
-- Unique NDC Codes: {len(pharmacy_extraction.get('extraction_summary', {}).get('unique_ndc_codes', []))}
-- Unique Medications: {len(pharmacy_extraction.get('extraction_summary', {}).get('unique_label_names', []))}
-
-Create a comprehensive final summary that includes:
-
-1. **Health Status Overview** (2-3 sentences based on comprehensive data)
-2. **Key Risk Factors** (bullet points based on ICD-10 codes and enhanced medication analysis)
-3. **Priority Recommendations** (3-4 actionable items based on comprehensive analysis)
-4. **Follow-up Needs** (timing and type of care based on service codes and medication patterns)
-5. **Data Processing Notes** (brief note on comprehensive deidentification and extraction)
-
-Keep the summary under 300 words and focus on actionable insights for healthcare providers based on the comprehensive data analysis with enhanced nested JSON processing.
-"""
-    
-    def test_llm_connection(self) -> Dict[str, Any]:
-        """Test enhanced Snowflake Cortex API connection"""
-        return self.api_integrator.test_llm_connection()
-    
-    async def test_fastapi_connection(self) -> Dict[str, Any]:
-        """Test enhanced FastAPI server connection"""
-        return await self.api_integrator.test_fastapi_connection()
-    
-    def test_backend_connection(self) -> Dict[str, Any]:
-        """Test MCP backend server connection"""
-        return self.api_integrator.test_backend_connection()
-    
-    def run_analysis(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run the enhanced health analysis workflow using LangGraph with MCP compatibility"""
+        with col3:
+            gender = st.selectbox("Gender *", ["F", "M"])
+            zip_code = st.text_input("Zip Code *", value="")
         
-        # Initialize enhanced state for LangGraph including MCID
-        initial_state = HealthAnalysisState(
-            patient_data=patient_data,
-            mcid_output={},
-            medical_output={},
-            pharmacy_output={},
-            token_output={},
-            deidentified_mcid={},
-            deidentified_medical={},
-            deidentified_pharmacy={},
-            medical_extraction={},
-            pharmacy_extraction={},
-            entity_extraction={},
-            health_trajectory="",
-            final_summary="",
-            heart_attack_prediction={},
-            heart_attack_risk_score=0.0,
-            heart_attack_features={},
-            chatbot_ready=False,
-            chatbot_context={},
-            chat_history=[],
-            current_step="",
-            errors=[],
-            retry_count=0,
-            processing_complete=False,
-            step_status={}
+        # Show calculated age
+        if date_of_birth:
+            calculated_age = calculate_age(date_of_birth)
+            if calculated_age is not None:
+                st.info(f"📅 **Calculated Age:** {calculated_age} years old")
+        
+        # 2. RUN ENHANCED HEALTH ANALYSIS BUTTON
+        submitted = st.form_submit_button(
+            "🚀 Run Enhanced Health Analysis", 
+            use_container_width=True,
+            disabled=st.session_state.analysis_running
         )
+
+# Analysis Status
+if st.session_state.analysis_running:
+    st.markdown('<div class="status-success">🔄 Enhanced health analysis workflow executing... Please wait.</div>', unsafe_allow_html=True)
+
+# Run Enhanced Health Analysis
+if submitted and not st.session_state.analysis_running:
+    # Prepare patient data
+    patient_data = {
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "ssn": ssn.strip(),
+        "date_of_birth": date_of_birth.strftime("%Y-%m-%d"),
+        "gender": gender,
+        "zip_code": zip_code.strip()
+    }
+    
+    # Validate patient data
+    is_valid, validation_errors = validate_patient_data(patient_data)
+    
+    if not is_valid:
+        st.error("❌ Please fix the following errors:")
+        for error in validation_errors:
+            st.error(f"• {error}")
+    else:
+        # Initialize Enhanced Health Agent
+        if st.session_state.agent is None:
+            try:
+                config = st.session_state.config or Config()
+                st.session_state.agent = HealthAnalysisAgent(config)
+                st.success("✅ Enhanced Health Analysis Agent initialized")
+            except Exception as e:
+                st.error(f"❌ Failed to initialize Enhanced Health Agent: {str(e)}")
+                st.stop()
         
-        try:
-            config_dict = {"configurable": {"thread_id": f"enhanced_health_analysis_{datetime.now().timestamp()}"}}
-            
-            logger.info("🚀 Starting Enhanced MCP-Compatible LangGraph health analysis workflow...")
-            
-            final_state = self.graph.invoke(initial_state, config=config_dict)
-            
-            # Prepare enhanced results with comprehensive information including MCID
-            results = {
-                "success": final_state["processing_complete"] and not final_state["errors"],
-                "patient_data": final_state["patient_data"],
-                "api_outputs": {
-                    "mcid": final_state["mcid_output"],
-                    "medical": final_state["medical_output"], 
-                    "pharmacy": final_state["pharmacy_output"],
-                    "token": final_state["token_output"]
-                },
-                "deidentified_data": {
-                    "mcid": final_state["deidentified_mcid"],
-                    "medical": final_state["deidentified_medical"],
-                    "pharmacy": final_state["deidentified_pharmacy"]
-                },
-                "structured_extractions": {
-                    "medical": final_state["medical_extraction"],
-                    "pharmacy": final_state["pharmacy_extraction"]
-                },
-                "entity_extraction": final_state["entity_extraction"],
-                "health_trajectory": final_state["health_trajectory"],
-                "final_summary": final_state["final_summary"],
-                "heart_attack_prediction": final_state["heart_attack_prediction"],
-                "heart_attack_risk_score": final_state["heart_attack_risk_score"],
-                "heart_attack_features": final_state["heart_attack_features"],
-                "chatbot_ready": final_state["chatbot_ready"],
-                "chatbot_context": final_state["chatbot_context"],
-                "chat_history": final_state["chat_history"],
-                "errors": final_state["errors"],
-                "processing_steps_completed": self._count_completed_steps(final_state),
-                "step_status": final_state["step_status"],
-                "langgraph_used": True,
-                "mcp_compatible": True,
-                "mcid_included": True,
-                "comprehensive_deidentification": True,
-                "llm_enhanced_extractions": True,
-                "enhanced_chatbot": True,
-                "heart_attack_special_handling": True,
-                "enhancement_version": "v6.0_mcid_llm_enhanced_comprehensive"
-            }
-            
-            if results["success"]:
-                logger.info("✅ Enhanced MCP-Compatible LangGraph health analysis completed successfully!")
-                logger.info(f"🔒 Comprehensive deidentification: {results['comprehensive_deidentification']}")
-                logger.info(f"💬 Enhanced chatbot ready: {results['chatbot_ready']}")
-            else:
-                logger.error(f"❌ Enhanced LangGraph health analysis failed with errors: {final_state['errors']}")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Fatal error in Enhanced MCP-Compatible LangGraph workflow: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "patient_data": patient_data,
-                "errors": [str(e)],
-                "processing_steps_completed": 0,
-                "langgraph_used": True,
-                "mcp_compatible": True,
-                "mcid_included": False,
-                "comprehensive_deidentification": False,
-                "llm_enhanced_extractions": False,
-                "enhanced_chatbot": False,
-                "heart_attack_special_handling": False,
-                "enhancement_version": "v6.0_mcid_llm_enhanced_comprehensive"
-            }
-    
-    def _count_completed_steps(self, state: HealthAnalysisState) -> int:
-        """Count enhanced processing steps completed including MCID"""
-        steps = 0
-        if state.get("mcid_output"): steps += 1
-        if state.get("deidentified_mcid") and not state.get("deidentified_mcid", {}).get("error"): steps += 1
-        if state.get("deidentified_medical") and not state.get("deidentified_medical", {}).get("error"): steps += 1
-        if state.get("medical_extraction") or state.get("pharmacy_extraction"): steps += 1
-        if state.get("entity_extraction"): steps += 1
-        if state.get("health_trajectory"): steps += 1
-        if state.get("final_summary"): steps += 1
-        if state.get("heart_attack_prediction"): steps += 1
-        if state.get("chatbot_ready"): steps += 1
-        return steps
+        st.session_state.analysis_running = True
+        
+        # Enhanced Progress tracking with detailed research agent-style updates
+        progress_container = st.container()
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        detailed_progress = st.empty()
+        
+        with st.spinner("🚀 Executing enhanced health analysis with deep research capabilities..."):
+            try:
+                # Enhanced progress updates with research agent-style details
+                workflow_steps = [
+                    {
+                        "step": "Initializing enhanced MCP-compatible workflow...",
+                        "details": "🔧 Setting up LangGraph nodes, initializing API integrators, preparing comprehensive data processors",
+                        "progress": 8
+                    },
+                    {
+                        "step": "Fetching MCP-compatible data sources...",
+                        "details": "📡 Connecting to MCP server, retrieving MCID data, medical claims, pharmacy records, authentication tokens",
+                        "progress": 16
+                    },
+                    {
+                        "step": "Comprehensive nested JSON deidentification...",
+                        "details": "🔒 Processing MCID fields, medical data structures, pharmacy records with PII pattern detection and removal",
+                        "progress": 24
+                    },
+                    {
+                        "step": "LLM-enhanced medical information extraction...",
+                        "details": "🤖 Extracting service codes, diagnosis codes, CLM_RCVD_DT dates, generating AI-powered code meanings",
+                        "progress": 32
+                    },
+                    {
+                        "step": "LLM-enhanced pharmacy data processing...",
+                        "details": "💊 Processing NDC codes, medication labels, RX_FILLED_DT dates, generating AI descriptions for medications",
+                        "progress": 40
+                    },
+                    {
+                        "step": "Comprehensive health entity extraction...",
+                        "details": "🎯 Analyzing diabetes indicators, smoking status, blood pressure, chronic conditions from all data sources",
+                        "progress": 48
+                    },
+                    {
+                        "step": "Advanced health trajectory analysis...",
+                        "details": "📈 Synthesizing medical history, medication patterns, LLM-enhanced insights for comprehensive health assessment",
+                        "progress": 56
+                    },
+                    {
+                        "step": "Generating comprehensive clinical summary...",
+                        "details": "📋 Creating executive summary with actionable insights, risk factors, recommendations based on complete analysis",
+                        "progress": 64
+                    },
+                    {
+                        "step": "Enhanced heart attack risk prediction...",
+                        "details": "❤️ Running FastAPI ML model, extracting risk features, preparing dual LLM+ML analysis capabilities",
+                        "progress": 72
+                    },
+                    {
+                        "step": "Initializing comprehensive chatbot...",
+                        "details": "💬 Loading complete deidentified context, MCID data, LLM meanings, preparing heart attack special handling",
+                        "progress": 80
+                    },
+                    {
+                        "step": "Finalizing enhanced analysis pipeline...",
+                        "details": "✅ Completing workflow, validating all data processing, preparing comprehensive results with full context access",
+                        "progress": 88
+                    },
+                    {
+                        "step": "Analysis completed successfully!",
+                        "details": "🎉 All enhanced features ready: MCID + Medical + Pharmacy deidentification, LLM meanings, dates, dual heart attack analysis",
+                        "progress": 100
+                    }
+                ]
+                
+                for i, step_info in enumerate(workflow_steps):
+                    status_text.text(f"🔄 {step_info['step']}")
+                    detailed_progress.markdown(f"""
+                    <div style="background: #f0f8ff; padding: 0.5rem; border-radius: 5px; margin: 0.5rem 0; border-left: 3px solid #007acc;">
+                    <strong>Step {i+1}/12:</strong> {step_info['step']}<br>
+                    <small style="color: #555;">{step_info['details']}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    progress_bar.progress(step_info['progress'])
+                    time.sleep(0.8)  # Longer pause to show research agent-style processing
+                
+                # Execute enhanced analysis
+                results = st.session_state.agent.run_analysis(patient_data)
+                
+                if results.get("success", False):
+                    progress_bar.progress(100)
+                    status_text.text("✅ Enhanced analysis completed successfully!")
+                    detailed_progress.markdown("""
+                    <div style="background: #d4edda; padding: 1rem; border-radius: 5px; margin: 1rem 0; border-left: 4px solid #28a745;">
+                    <strong>🎉 Enhanced Health Analysis Complete!</strong><br>
+                    All advanced features are now ready: MCID deidentification, LLM-enhanced code meanings, date extraction, and dual heart attack prediction analysis.
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.session_state.analysis_results = results
+                    st.session_state.chatbot_context = results.get("chatbot_context", {})
+                    
+                    # Display enhanced success information
+                    data_stats = get_complete_data_stats(results)
+                    
+                    total_fields = data_stats['mcid_fields_processed'] + data_stats['medical_fields_processed'] + data_stats['pharmacy_fields_processed']
+                    total_dates = data_stats['medical_dates_extracted'] + data_stats['pharmacy_dates_extracted']
+                    
+                    st.markdown(f"""
+                    <div class="status-success">
+                    ✅ Enhanced health analysis v6.0 completed successfully!<br>
+                    🆔 MCID fields processed: {data_stats['mcid_fields_processed']:,}<br>
+                    🔒 Total deidentification: {total_fields:,} fields processed<br>
+                    📅 Dates extracted: {total_dates} (CLM_RCVD_DT + RX_FILLED_DT)<br>
+                    🤖 LLM-enhanced: {'✅ Code meanings generated' if data_stats['llm_enhanced'] else '❌ Basic extraction only'}<br>
+                    📊 Complete data ready for enhanced chatbot access
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Ensure enhanced chatbot is properly loaded
+                    if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
+                        st.markdown(f"""
+                        <div class="chatbot-ready">
+                        💬 <strong>Enhanced Medical Assistant v6.0 is now ready!</strong><br>
+                        The chatbot has complete access to ALL enhanced deidentified data:<br>
+                        🆔 {data_stats['mcid_fields_processed']:,} MCID fields with member information<br>
+                        📋 {data_stats['medical_records']} medical records with {data_stats['total_diagnosis_codes']} diagnosis codes + LLM meanings<br>
+                        💊 {data_stats['pharmacy_records']} pharmacy records with {data_stats['total_ndc_codes']} NDC codes + AI descriptions<br>
+                        📅 {total_dates} dates extracted from claims and prescriptions<br>
+                        🔍 Can answer questions about ANY field, code, or value in the complete JSON data<br>
+                        ❤️ Heart attack risk prediction with dual LLM + ML model analysis<br>
+                        🤖 AI-powered code explanations and medication descriptions
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Force page refresh to open sidebar
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Enhanced chatbot initialization incomplete.")
+                else:
+                    st.session_state.analysis_results = results
+                    st.warning("⚠️ Enhanced analysis completed with some errors.")
+                
+            except Exception as e:
+                st.error(f"❌ Enhanced analysis failed: {str(e)}")
+                st.session_state.analysis_results = {
+                    "success": False,
+                    "error": str(e),
+                    "patient_data": patient_data,
+                    "errors": [str(e)]
+                }
+            finally:
+                st.session_state.analysis_running = False
 
-def main():
-    """Example usage of the Enhanced MCP-Compatible Health Analysis Agent with MCID and LLM enhancements"""
+# Display Enhanced Results if Available
+if st.session_state.analysis_results:
+    results = st.session_state.analysis_results
     
-    print("🏥 Enhanced MCP-Compatible Health Analysis Agent v6.0")
-    print("✅ Comprehensive modular architecture with advanced features:")
-    print("   📡 HealthAPIIntegrator - MCP server compatible API calls")
-    print("   🔧 HealthDataProcessor - Comprehensive nested JSON deidentification with MCID")
-    print("   🏗️ HealthAnalysisAgent - Enhanced workflow orchestration with LLM integration")
-    print("   💬 Enhanced chatbot - Complete deidentified data access with heart attack special handling")
-    print("   🆔 MCID Integration - Member Consumer ID data included in analysis")
-    print("   🤖 LLM-Enhanced Extractions - Code meanings and descriptions powered by AI")
-    print("   📅 Date Extraction - CLM_RCVD_DT and RX_FILLED_DT processing")
-    print("   ❤️ Heart Attack Prediction - Dual LLM + ML model analysis")
-    print()
-    
-    config = Config()
-    print("📋 Enhanced Configuration:")
-    print(f"   🌐 Snowflake API: {config.api_url}")
-    print(f"   🤖 Model: {config.model}")
-    print(f"   📡 MCP Server: {config.fastapi_url}")
-    print(f"   ❤️ Heart Attack API: {config.heart_attack_api_url}")
-    print()
-    print("✅ Enhanced MCP-Compatible Health Agent ready with all advanced features!")
-    print("🚀 Features: MCID + Medical + Pharmacy deidentification, LLM code meanings, date extraction, heart attack dual analysis")
-    print("🚀 Run: from health_agent_core import HealthAnalysisAgent, Config")
-    
-    return "Enhanced MCP-Compatible Health Agent v6.0 ready for integration"
+    # Show errors if any
+    errors = safe_get(results, 'errors', [])
+    if errors:
+        st.markdown('<div class="status-error">❌ Some analysis errors occurred</div>', unsafe_allow_html=True)
 
-if __name__ == "__main__":
-    main()
+    # Display complete data access information including MCID
+    if results.get("success", False):
+        data_stats = get_complete_data_stats(results)
+        total_fields = data_stats['mcid_fields_processed'] + data_stats['medical_fields_processed'] + data_stats['pharmacy_fields_processed']
+        total_dates = data_stats['medical_dates_extracted'] + data_stats['pharmacy_dates_extracted']
+        
+        st.markdown(f"""
+        <div class="complete-data-info">
+        <strong>📊 Complete Enhanced Data Processing Results v6.0:</strong><br>
+        • Total MCID Fields Processed: {data_stats['mcid_fields_processed']:,}<br>
+        • Total Medical Fields Processed: {data_stats['medical_fields_processed']:,}<br>
+        • Total Pharmacy Fields Processed: {data_stats['pharmacy_fields_processed']:,}<br>
+        • Medical Records Extracted: {data_stats['medical_records']} (with LLM meanings)<br>
+        • Pharmacy Records Extracted: {data_stats['pharmacy_records']} (with AI descriptions)<br>
+        • Diagnosis Codes Found: {data_stats['total_diagnosis_codes']}<br>
+        • NDC Codes Found: {data_stats['total_ndc_codes']}<br>
+        • Medical Dates Extracted: {data_stats['medical_dates_extracted']} (CLM_RCVD_DT)<br>
+        • Pharmacy Dates Extracted: {data_stats['pharmacy_dates_extracted']} (RX_FILLED_DT)<br>
+        • Deidentification Level: Comprehensive Nested JSON with MCID<br>
+        • LLM Enhancement: {'✅ Active' if data_stats['llm_enhanced'] else '❌ Not Available'}<br>
+        • Chatbot Data Access: Complete (No Truncation) + Heart Attack Special Handling
+        </div>
+        """, unsafe_allow_html=True)
+
+    # 3. COMPLETE DEIDENTIFIED DATA BUTTON (Enhanced with MCID)
+    if st.button("📊 Complete Deidentified Data (MCID + Medical + Pharmacy)", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📊 Complete Deidentified Data (Entire JSON Structures with MCID)</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        deidentified_data = safe_get(results, 'deidentified_data', {})
+        
+        if deidentified_data:
+            tab1, tab2, tab3 = st.tabs(["🆔 Complete MCID Data", "🏥 Complete Medical Data", "💊 Complete Pharmacy Data"])
+            
+            with tab1:
+                mcid_data = safe_get(deidentified_data, 'mcid', {})
+                if mcid_data:
+                    st.markdown("**Complete Deidentified MCID JSON Structure:**")
+                    
+                    # Show MCID processing stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("MCID Fields Processed", mcid_data.get('total_fields_processed', 0))
+                    with col2:
+                        st.metric("Deidentification Level", mcid_data.get('deidentification_level', 'standard'))
+                    with col3:
+                        st.metric("Processing Timestamp", "✅ Completed")
+                    
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(mcid_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Complete MCID Data JSON",
+                        safe_json_dumps(mcid_data),
+                        f"complete_mcid_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No complete MCID data available")
+            
+            with tab2:
+                medical_data = safe_get(deidentified_data, 'medical', {})
+                if medical_data:
+                    st.markdown("**Complete Deidentified Medical JSON Structure:**")
+                    
+                    # Show processing stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Fields Processed", medical_data.get('total_fields_processed', 0))
+                    with col2:
+                        st.metric("Deidentification Level", medical_data.get('deidentification_level', 'standard'))
+                    with col3:
+                        st.metric("Patient Age", medical_data.get('src_mbr_age', 'unknown'))
+                    
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(medical_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Complete Medical Data JSON",
+                        safe_json_dumps(medical_data),
+                        f"complete_medical_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No complete medical data available")
+            
+            with tab3:
+                pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
+                if pharmacy_data:
+                    st.markdown("**Complete Deidentified Pharmacy JSON Structure:**")
+                    
+                    # Show processing stats
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Fields Processed", pharmacy_data.get('total_fields_processed', 0))
+                    with col2:
+                        st.metric("Deidentification Level", pharmacy_data.get('deidentification_level', 'standard'))
+                    
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(pharmacy_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Complete Pharmacy Data JSON",
+                        safe_json_dumps(pharmacy_data),
+                        f"complete_pharmacy_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No complete pharmacy data available")
+
+    # 4. ENHANCED DATA EXTRACTION WITH LLM MEANINGS BUTTON
+    if st.button("🔍 Enhanced Data Extraction (LLM Meanings + Dates)", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🔍 Enhanced Medical/Pharmacy Data Extraction with AI-Powered Meanings</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        structured_extractions = safe_get(results, 'structured_extractions', {})
+        
+        if structured_extractions:
+            tab1, tab2 = st.tabs(["🏥 Enhanced Medical Extraction", "💊 Enhanced Pharmacy Extraction"])
+            
+            with tab1:
+                medical_extraction = safe_get(structured_extractions, 'medical', {})
+                if medical_extraction and not medical_extraction.get('error'):
+                    extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
+                    
+                    # Enhanced metrics including dates and LLM status
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
+                            <p>Health Service Records</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
+                            <p>Diagnosis Codes</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('dates_extracted', 0)}</h3>
+                            <p>Dates Extracted (CLM_RCVD_DT)</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{'✅' if medical_extraction.get('llm_enhanced', False) else '❌'}</h3>
+                            <p>LLM Enhanced</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
+                            <p>Unique Service Codes</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_diagnosis_codes', []))}</h3>
+                            <p>Unique Diagnosis Codes</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
+                    if hlth_srvc_records:
+                        st.markdown("**📋 All Enhanced Medical Records with LLM Meanings:**")
+                        for i, record in enumerate(hlth_srvc_records, 1):
+                            service_code = record.get('hlth_srvc_cd', 'N/A')
+                            service_meaning = record.get('hlth_srvc_cd_meaning', 'No meaning available')
+                            claim_date = record.get('claim_received_date', 'No date available')
+                            
+                            with st.expander(f"Medical Record {i} - Service: {service_code} | Date: {claim_date}"):
+                                st.write(f"**Service Code:** `{service_code}`")
+                                st.write(f"**🤖 AI-Generated Meaning:** {service_meaning}")
+                                st.write(f"**📅 Claim Received Date:** `{claim_date}`")
+                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                                
+                                diagnosis_codes = record.get('diagnosis_codes', [])
+                                if diagnosis_codes:
+                                    st.write("**Diagnosis Codes with LLM Meanings:**")
+                                    for idx, diag in enumerate(diagnosis_codes, 1):
+                                        source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
+                                        llm_meaning = diag.get('llm_meaning', 'No meaning available')
+                                        st.write(f"  {idx}. **Code:** `{diag.get('code', 'N/A')}`{source_info}")
+                                        st.write(f"      **🤖 AI Meaning:** {llm_meaning}")
+                else:
+                    st.warning("No enhanced medical extraction data available")
+            
+            with tab2:
+                pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
+                if pharmacy_extraction and not pharmacy_extraction.get('error'):
+                    extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
+                    
+                    # Enhanced pharmacy metrics including dates and LLM status
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
+                            <p>NDC Records</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
+                            <p>Unique NDC Codes</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
+                            <p>Unique Medications</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('dates_extracted', 0)}</h3>
+                            <p>Dates Extracted (RX_FILLED_DT)</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{'✅' if pharmacy_extraction.get('llm_enhanced', False) else '❌'}</h3>
+                            <p>LLM Enhanced</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
+                    if ndc_records:
+                        st.markdown("**💊 All Enhanced Pharmacy Records with AI Descriptions:**")
+                        for i, record in enumerate(ndc_records, 1):
+                            ndc_code = record.get('ndc', 'N/A')
+                            label_name = record.get('lbl_nm', 'N/A')
+                            ndc_meaning = record.get('ndc_llm_meaning', 'No meaning available')
+                            label_description = record.get('lbl_nm_llm_description', 'No description available')
+                            rx_date = record.get('prescription_filled_date', 'No date available')
+                            
+                            with st.expander(f"Pharmacy Record {i} - {label_name} | Date: {rx_date}"):
+                                st.write(f"**NDC Code:** `{ndc_code}`")
+                                st.write(f"**🤖 AI-Generated NDC Meaning:** {ndc_meaning}")
+                                st.write(f"**Label Name:** `{label_name}`")
+                                st.write(f"**🤖 AI-Generated Description:** {label_description}")
+                                st.write(f"**📅 Prescription Filled Date:** `{rx_date}`")
+                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                                
+                                # Show additional fields if available
+                                additional_fields = {k: v for k, v in record.items() 
+                                                   if k not in ['ndc', 'lbl_nm', 'data_path', 'ndc_llm_meaning', 'lbl_nm_llm_description', 'prescription_filled_date']}
+                                if additional_fields:
+                                    st.write("**Additional Pharmacy Fields:**")
+                                    for field, value in additional_fields.items():
+                                        st.write(f"  • **{field}:** `{value}`")
+                else:
+                    st.warning("No enhanced pharmacy extraction data available")
+
+    # 5. COMPREHENSIVE ENTITY EXTRACTION BUTTON
+    if st.button("🎯 Comprehensive Entity Extraction", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🎯 Comprehensive Health Entity Extraction</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        entity_extraction = safe_get(results, 'entity_extraction', {})
+        if entity_extraction:
+            # Enhanced entity cards
+            st.markdown(f"""
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <h3>🩺</h3>
+                    <p><strong>Diabetes</strong></p>
+                    <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>👥</h3>
+                    <p><strong>Age Group</strong></p>
+                    <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🚬</h3>
+                    <p><strong>Smoking</strong></p>
+                    <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🍷</h3>
+                    <p><strong>Alcohol</strong></p>
+                    <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>💓</h3>
+                    <p><strong>Blood Pressure</strong></p>
+                    <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Enhanced medical conditions
+            medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
+            chronic_conditions = safe_get(entity_extraction, 'chronic_conditions', [])
+            risk_factors = safe_get(entity_extraction, 'risk_factors', [])
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if medical_conditions:
+                    st.markdown("**🏥 Medical Conditions Identified:**")
+                    for condition in medical_conditions:
+                        st.write(f"• {condition}")
+            
+            with col2:
+                if chronic_conditions:
+                    st.markdown("**🔄 Chronic Conditions:**")
+                    for condition in chronic_conditions:
+                        st.write(f"• {condition}")
+            
+            with col3:
+                if risk_factors:
+                    st.markdown("**⚠️ Risk Factors:**")
+                    for factor in risk_factors:
+                        st.write(f"• {factor}")
+            
+            # Enhanced medications identified
+            medications_identified = safe_get(entity_extraction, 'medications_identified', [])
+            if medications_identified:
+                st.markdown("**💊 Medications Identified:**")
+                for med in medications_identified:
+                    additional_fields = med.get('additional_fields', {})
+                    additional_info = f" | {additional_fields}" if additional_fields else ""
+                    st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')}){additional_info}")
+
+    # 6. HEALTH TRAJECTORY BUTTON
+    if st.button("📈 Comprehensive Health Trajectory", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📈 Comprehensive Health Trajectory Analysis</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        health_trajectory = safe_get(results, 'health_trajectory', '')
+        if health_trajectory:
+            st.markdown(health_trajectory)
+        else:
+            st.warning("Comprehensive health trajectory analysis not available")
+
+    # 7. FINAL SUMMARY BUTTON
+    if st.button("📋 Comprehensive Final Summary", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📋 Comprehensive Clinical Summary</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        final_summary = safe_get(results, 'final_summary', '')
+        if final_summary:
+            st.markdown(final_summary)
+        else:
+            st.warning("Comprehensive final summary not available")
+
+    # 8. ENHANCED HEART ATTACK RISK PREDICTION BUTTON
+    if st.button("❤️ Enhanced Heart Attack Risk Prediction", use_container_width=True):
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">❤️ Enhanced Heart Attack Risk Assessment</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+        if heart_attack_prediction and not heart_attack_prediction.get('error'):
+            # Display enhanced prediction format
+            combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
+            risk_category = heart_attack_prediction.get("risk_category", "Unknown")
+            prediction_method = heart_attack_prediction.get("prediction_method", "unknown")
+            
+            # Enhanced display with more information
+            st.markdown(f"""
+            <div style="background: #f8f9fa; padding: 2rem; border-radius: 10px; border: 1px solid #dee2e6; margin: 1rem 0; text-align: center;">
+                <h3 style="color: #2c3e50; margin-bottom: 1rem;">Enhanced Heart Attack Risk Prediction</h3>
+                <h4 style="color: #495057; font-weight: 600;">{combined_display}</h4>
+                <p style="color: #6c757d; margin-top: 1rem; font-size: 0.9rem;">
+                    Enhanced Prediction Method: {prediction_method}<br>
+                    FastAPI Server: {heart_attack_prediction.get('fastapi_server_url', 'Unknown')}<br>
+                    Model Enhanced: {heart_attack_prediction.get('model_enhanced', False)}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Show enhanced features used
+            enhanced_features = heart_attack_prediction.get("enhanced_features_used", {})
+            if enhanced_features:
+                st.markdown("**🎯 Enhanced Features Used for Prediction:**")
+                for feature, value in enhanced_features.items():
+                    st.write(f"• **{feature}:** {value}")
+            
+        else:
+            error_msg = heart_attack_prediction.get('error', 'Enhanced heart attack prediction not available')
+            st.error(f"❌ Enhanced FastAPI Server Error: {error_msg}")
+            
+            # Show enhanced connection info for debugging
+            st.info(f"💡 Expected Enhanced FastAPI Server: {st.session_state.config.heart_attack_api_url if st.session_state.config else 'http://localhost:8080'}")
+            st.info("💡 Make sure enhanced FastAPI server is running with heart attack prediction model")
+
+# Footer with enhanced information including all v6.0 features
+if st.session_state.analysis_results and st.session_state.analysis_results.get("success", False):
+    st.markdown("---")
+    data_stats = get_complete_data_stats(st.session_state.analysis_results)
+    total_fields = data_stats['mcid_fields_processed'] + data_stats['medical_fields_processed'] + data_stats['pharmacy_fields_processed']
+    total_dates = data_stats['medical_dates_extracted'] + data_stats['pharmacy_dates_extracted']
+    
+    st.markdown(f"""
+    <div class="complete-data-info">
+    <strong>🔍 Enhanced Analysis Complete v6.0:</strong><br>
+    The Enhanced Medical Assistant in the sidebar has complete access to ALL enhanced deidentified data including:<br>
+    🆔 MCID Data: {data_stats['mcid_fields_processed']:,} fields processed<br>
+    📋 Medical Data: {data_stats['medical_records']} records with {data_stats['total_diagnosis_codes']} diagnosis codes + AI meanings<br>
+    💊 Pharmacy Data: {data_stats['pharmacy_records']} records with {data_stats['total_ndc_codes']} NDC codes + AI descriptions<br>
+    📅 Date Extraction: {total_dates} dates from CLM_RCVD_DT and RX_FILLED_DT fields<br>
+    🤖 LLM Enhancement: {'✅ Code meanings and descriptions generated' if data_stats['llm_enhanced'] else '❌ Basic extraction only'}<br>
+    ❤️ Heart Attack Prediction: Dual LLM + ML model analysis available<br>
+    🔍 Ask specific questions about any codes, medications, dates, or fields in the complete medical records.<br>
+    📊 No data truncation - complete JSON structures with MCID are available for comprehensive queries.
+    </div>
+    """, unsafe_allow_html=True)
