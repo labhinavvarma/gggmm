@@ -45,19 +45,26 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
-# Simplified CSS that actually works with Streamlit
+# Advanced CSS for sophisticated professional animation
 st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+    font-family: 'Inter', sans-serif;
+}
+
 .main-header {
-    font-size: 2.5rem;
+    font-size: 2.8rem;
     color: #2c3e50;
     text-align: center;
     margin-bottom: 2rem;
-    font-weight: 600;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    font-weight: 700;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
 }
 
 .section-box {
@@ -138,14 +145,419 @@ st.markdown("""
     box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
 }
 
-/* Simple workflow container that works */
-.workflow-container {
-    background: linear-gradient(135deg, #2c3e50 0%, #3498db 50%, #9b59b6 100%);
-    padding: 2rem;
-    border-radius: 20px;
+/* Advanced Professional Workflow Container */
+.advanced-workflow-container {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 25%, #667eea 50%, #764ba2 75%, #f093fb 100%);
+    padding: 3rem;
+    border-radius: 25px;
     margin: 2rem 0;
     color: white;
-    box-shadow: 0 15px 35px rgba(52, 152, 219, 0.3);
+    box-shadow: 
+        0 25px 50px rgba(52, 152, 219, 0.3),
+        0 0 0 1px rgba(255, 255, 255, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    position: relative;
+    overflow: hidden;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.advanced-workflow-container::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+    animation: rotate 20s linear infinite;
+    pointer-events: none;
+}
+
+.advanced-workflow-container::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(45deg, 
+        transparent 30%, 
+        rgba(255,255,255,0.1) 50%, 
+        transparent 70%);
+    animation: shimmer 3s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes rotate {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+    0%, 100% { transform: translateX(-100%) translateY(-100%); }
+    50% { transform: translateX(100%) translateY(100%); }
+}
+
+.workflow-header {
+    text-align: center;
+    margin-bottom: 3rem;
+    position: relative;
+    z-index: 10;
+}
+
+.workflow-title {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    text-shadow: 3px 3px 6px rgba(0,0,0,0.3);
+    background: linear-gradient(135deg, #fff 0%, #f0f8ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.workflow-subtitle {
+    font-size: 1.2rem;
+    opacity: 0.9;
+    margin-bottom: 2rem;
+    font-weight: 300;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+
+.progress-dashboard {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+    z-index: 10;
+    box-shadow: 
+        0 15px 35px rgba(0, 0, 0, 0.1),
+        0 5px 15px rgba(0, 0, 0, 0.05);
+}
+
+.progress-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.progress-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: #fff;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 1.5rem;
+    border-radius: 15px;
+    text-align: center;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    transition: left 0.5s ease;
+}
+
+.stat-card:hover::before {
+    left: 100%;
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 35px rgba(255, 255, 255, 0.2);
+}
+
+.stat-number {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    margin-bottom: 0.5rem;
+}
+
+.stat-label {
+    font-size: 1rem;
+    opacity: 0.9;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.advanced-progress-container {
+    margin: 2rem 0;
+}
+
+.progress-bar-wrapper {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 25px;
+    padding: 8px;
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 20px;
+    background: linear-gradient(90deg, #00ff87, #60efff, #ff6b9d, #ffd93d);
+    border-radius: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 5px 15px rgba(0, 255, 135, 0.4);
+}
+
+.progress-bar-fill::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, 
+        transparent, 
+        rgba(255,255,255,0.6), 
+        transparent);
+    animation: progress-shine 2s infinite;
+}
+
+@keyframes progress-shine {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.steps-section {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    padding: 2rem;
+    backdrop-filter: blur(15px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    position: relative;
+    z-index: 10;
+}
+
+.steps-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 2rem;
+    text-align: center;
+    color: #fff;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+
+.step-item {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 15px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.step-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 15px;
+    transition: all 0.3s ease;
+    z-index: -1;
+}
+
+.step-pending {
+    border-left: 4px solid rgba(255, 255, 255, 0.3);
+}
+
+.step-running {
+    border-left: 4px solid #ffc107;
+    background: rgba(255, 193, 7, 0.15);
+    animation: pulse-step 2s infinite;
+    box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+}
+
+.step-completed {
+    border-left: 4px solid #28a745;
+    background: rgba(40, 167, 69, 0.15);
+    box-shadow: 0 10px 30px rgba(40, 167, 69, 0.2);
+}
+
+.step-error {
+    border-left: 4px solid #dc3545;
+    background: rgba(220, 53, 69, 0.15);
+    animation: shake-step 0.5s ease-in-out;
+}
+
+@keyframes pulse-step {
+    0%, 100% { 
+        transform: scale(1);
+        box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+    }
+    50% { 
+        transform: scale(1.02);
+        box-shadow: 0 15px 40px rgba(255, 193, 7, 0.5);
+    }
+}
+
+@keyframes shake-step {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-10px); }
+    75% { transform: translateX(10px); }
+}
+
+.step-content {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.step-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    position: relative;
+    transition: all 0.4s ease;
+    flex-shrink: 0;
+}
+
+.step-icon-pending {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.6);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.step-icon-running {
+    background: linear-gradient(135deg, #ffc107, #ff8f00);
+    color: #000;
+    border: 2px solid #ffca28;
+    animation: spin-icon 2s linear infinite;
+    box-shadow: 0 0 25px rgba(255, 193, 7, 0.6);
+}
+
+.step-icon-completed {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    color: white;
+    border: 2px solid #34ce57;
+    box-shadow: 0 0 20px rgba(40, 167, 69, 0.5);
+}
+
+.step-icon-error {
+    background: linear-gradient(135deg, #dc3545, #ff6b6b);
+    color: white;
+    border: 2px solid #e74c3c;
+    box-shadow: 0 0 20px rgba(220, 53, 69, 0.5);
+}
+
+@keyframes spin-icon {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.step-details {
+    flex: 1;
+}
+
+.step-name {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: #fff;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+}
+
+.step-description {
+    font-size: 1rem;
+    opacity: 0.9;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.step-status {
+    padding: 0.5rem 1.5rem;
+    border-radius: 25px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+}
+
+.status-pending {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.status-running {
+    background: linear-gradient(135deg, #ffc107, #ff8f00);
+    color: #000;
+    animation: pulse-status 1.5s infinite;
+}
+
+.status-completed {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    color: white;
+}
+
+.status-error {
+    background: linear-gradient(135deg, #dc3545, #ff6b6b);
+    color: white;
+}
+
+@keyframes pulse-status {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+.workflow-footer {
+    text-align: center;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+    z-index: 10;
+}
+
+.footer-status {
+    font-size: 1.2rem;
+    font-weight: 500;
+    color: #fff;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    animation: breathe 3s infinite;
+}
+
+@keyframes breathe {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 1; }
 }
 
 /* Sidebar styling */
@@ -189,17 +601,17 @@ def initialize_session_state():
     if 'show_heart_attack' not in st.session_state:
         st.session_state.show_heart_attack = False
     
-    # Workflow steps tracking using native Streamlit components
+    # Advanced workflow steps with enhanced details
     if 'workflow_steps' not in st.session_state:
         st.session_state.workflow_steps = [
-            {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡'},
-            {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers while preserving clinical value', 'icon': '🔒'},
-            {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes, NDC numbers, and structured data', 'icon': '🔍'},
-            {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying conditions, medications, and risk factors', 'icon': '🎯'},
-            {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing longitudinal health patterns and trends', 'icon': '📈'},
-            {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating comprehensive clinical assessment report', 'icon': '📋'},
-            {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running advanced ML risk assessment algorithms', 'icon': '❤️'},
-            {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up AI medical assistant with full context', 'icon': '🤖'}
+            {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡', 'emoji': '🌐'},
+            {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers while preserving clinical value', 'icon': '🔒', 'emoji': '🛡️'},
+            {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes, NDC numbers, and structured data', 'icon': '🔍', 'emoji': '⚙️'},
+            {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying conditions, medications, and risk factors', 'icon': '🎯', 'emoji': '🧬'},
+            {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing longitudinal health patterns and trends', 'icon': '📈', 'emoji': '📊'},
+            {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating comprehensive clinical assessment report', 'icon': '📋', 'emoji': '📄'},
+            {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running advanced ML risk assessment algorithms', 'icon': '❤️', 'emoji': '🤖'},
+            {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up AI medical assistant with full context', 'icon': '🤖', 'emoji': '💬'}
         ]
     if 'current_step' not in st.session_state:
         st.session_state.current_step = 0
@@ -209,113 +621,169 @@ def initialize_session_state():
 def reset_workflow():
     """Reset workflow to initial state"""
     st.session_state.workflow_steps = [
-        {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡'},
-        {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers while preserving clinical value', 'icon': '🔒'},
-        {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes, NDC numbers, and structured data', 'icon': '🔍'},
-        {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying conditions, medications, and risk factors', 'icon': '🎯'},
-        {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing longitudinal health patterns and trends', 'icon': '📈'},
-        {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating comprehensive clinical assessment report', 'icon': '📋'},
-        {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running advanced ML risk assessment algorithms', 'icon': '❤️'},
-        {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up AI medical assistant with full context', 'icon': '🤖'}
+        {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡', 'emoji': '🌐'},
+        {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers while preserving clinical value', 'icon': '🔒', 'emoji': '🛡️'},
+        {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes, NDC numbers, and structured data', 'icon': '🔍', 'emoji': '⚙️'},
+        {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying conditions, medications, and risk factors', 'icon': '🎯', 'emoji': '🧬'},
+        {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing longitudinal health patterns and trends', 'icon': '📈', 'emoji': '📊'},
+        {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating comprehensive clinical assessment report', 'icon': '📋', 'emoji': '📄'},
+        {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running advanced ML risk assessment algorithms', 'icon': '❤️', 'emoji': '🤖'},
+        {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up AI medical assistant with full context', 'icon': '🤖', 'emoji': '💬'}
     ]
     st.session_state.current_step = 0
 
-def display_native_workflow_animation():
-    """Display workflow animation using ONLY Streamlit native components"""
+def display_advanced_professional_workflow():
+    """Display the most advanced and professional workflow animation"""
     
-    # Calculate progress statistics
+    # Calculate comprehensive statistics
     total_steps = len(st.session_state.workflow_steps)
     completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
     running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
+    error_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'error')
     progress_percentage = (completed_steps / total_steps) * 100
     
-    # Container with simple styling that works
-    st.markdown('<div class="workflow-container">', unsafe_allow_html=True)
+    # Main advanced container
+    st.markdown('<div class="advanced-workflow-container">', unsafe_allow_html=True)
     
-    # Header - using native Streamlit
-    st.markdown("### 🔬 Deep Research Analysis Workflow")
-    st.markdown("*Advanced Healthcare Data Processing Pipeline*")
+    # Header Section
+    st.markdown("""
+    <div class="workflow-header">
+        <div class="workflow-title">🔬 Deep Research Analysis</div>
+        <div class="workflow-subtitle">Advanced Healthcare Data Processing Pipeline</div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Progress stats using native columns
-    st.markdown("---")
+    # Progress Dashboard
+    st.markdown('<div class="progress-dashboard">', unsafe_allow_html=True)
+    st.markdown('<div class="progress-title">Real-Time Analytics Dashboard</div>', unsafe_allow_html=True)
+    
+    # Advanced stats grid using Streamlit columns
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Steps", total_steps)
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{total_steps}</div>
+            <div class="stat-label">Total Steps</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col2:
-        st.metric("Completed", completed_steps)
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{completed_steps}</div>
+            <div class="stat-label">Completed</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col3:
-        st.metric("Running", running_steps)
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{running_steps}</div>
+            <div class="stat-label">Processing</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col4:
-        st.metric("Progress", f"{progress_percentage:.0f}%")
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{progress_percentage:.0f}%</div>
+            <div class="stat-label">Progress</div>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Progress bar using native Streamlit
-    st.progress(progress_percentage / 100, text=f"Overall Progress: {progress_percentage:.0f}%")
+    # Advanced Progress Bar
+    st.markdown(f"""
+    <div class="advanced-progress-container">
+        <div class="progress-bar-wrapper">
+            <div class="progress-bar-fill" style="width: {progress_percentage}%;"></div>
+        </div>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    st.markdown("---")
-    st.markdown("#### Workflow Steps:")
+    # Steps Section
+    st.markdown('<div class="steps-section">', unsafe_allow_html=True)
+    st.markdown('<div class="steps-title">Workflow Execution Pipeline</div>', unsafe_allow_html=True)
     
-    # Display steps using native Streamlit components
+    # Display each step with advanced styling
     for i, step in enumerate(st.session_state.workflow_steps):
         step_number = i + 1
         name = step['name']
         status = step['status']
         description = step['description']
         icon = step['icon']
+        emoji = step['emoji']
         
-        # Create columns for each step
-        icon_col, content_col, status_col = st.columns([1, 6, 2])
+        # Determine CSS classes and content based on status
+        if status == 'pending':
+            step_class = "step-pending"
+            icon_class = "step-icon-pending"
+            status_class = "status-pending"
+            icon_content = str(step_number)
+            status_text = "Waiting"
+        elif status == 'running':
+            step_class = "step-running"
+            icon_class = "step-icon-running"
+            status_class = "status-running"
+            icon_content = "●"
+            status_text = "Processing"
+        elif status == 'completed':
+            step_class = "step-completed"
+            icon_class = "step-icon-completed"
+            status_class = "status-completed"
+            icon_content = "✓"
+            status_text = "Complete"
+        elif status == 'error':
+            step_class = "step-error"
+            icon_class = "step-icon-error"
+            status_class = "status-error"
+            icon_content = "✗"
+            status_text = "Failed"
+        else:
+            step_class = "step-pending"
+            icon_class = "step-icon-pending"
+            status_class = "status-pending"
+            icon_content = str(step_number)
+            status_text = "Waiting"
         
-        with icon_col:
-            if status == 'pending':
-                st.write(f"**{step_number}**")
-            elif status == 'running':
-                st.write("🔄")
-            elif status == 'completed':
-                st.write("✅")
-            elif status == 'error':
-                st.write("❌")
-        
-        with content_col:
-            if status == 'running':
-                st.markdown(f"**{icon} {name}** ⚡")
-                st.caption(f"🔄 {description}")
-            elif status == 'completed':
-                st.markdown(f"~~{icon} {name}~~ ✅")
-                st.caption(f"✅ {description}")
-            elif status == 'error':
-                st.markdown(f"**{icon} {name}** ❌")
-                st.caption(f"❌ {description}")
-            else:
-                st.markdown(f"{icon} {name}")
-                st.caption(description)
-        
-        with status_col:
-            if status == 'running':
-                st.info("Processing")
-            elif status == 'completed':
-                st.success("Complete")
-            elif status == 'error':
-                st.error("Failed")
-            else:
-                st.write("Waiting")
-        
-        # Add separator between steps
-        if i < len(st.session_state.workflow_steps) - 1:
-            st.markdown("---")
+        # Create the step item
+        st.markdown(f"""
+        <div class="step-item {step_class}">
+            <div class="step-content">
+                <div class="step-icon {icon_class}">
+                    {icon_content}
+                </div>
+                <div class="step-details">
+                    <div class="step-name">{icon} {name} {emoji}</div>
+                    <div class="step-description">{description}</div>
+                </div>
+                <div class="step-status {status_class}">
+                    {status_text}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Current status message
-    st.markdown("---")
+    st.markdown('</div>', unsafe_allow_html=True)  # Close steps-section
+    
+    # Advanced Footer with dynamic status
     if running_steps > 0:
         current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
-        st.info(f"🔄 **Currently executing:** {current_step_name}")
+        status_message = f"🔄 Currently executing: {current_step_name}"
     elif completed_steps == total_steps:
-        st.success("🎉 **All workflow steps completed successfully!**")
+        status_message = "🎉 All workflow steps completed successfully!"
+    elif error_steps > 0:
+        status_message = f"⚠️ {error_steps} step(s) encountered errors"
     else:
-        st.info("⏳ **Comprehensive healthcare data analysis in progress...**")
+        status_message = "⏳ Comprehensive healthcare data analysis in progress..."
     
-    # Close container
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="workflow-footer">
+        <div class="footer-status">{status_message}</div>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
     """Safely get a value from a dictionary"""
@@ -493,13 +961,13 @@ with st.container():
             type="primary"
         )
 
-# Animation container
+# Advanced Animation container
 animation_container = st.empty()
 
-# Show native animation when running
+# Show advanced professional animation when running
 if st.session_state.analysis_running and st.session_state.show_animation:
     with animation_container.container():
-        display_native_workflow_animation()
+        display_advanced_professional_workflow()
 
 # Run Deep Research Analysis
 if submitted and not st.session_state.analysis_running:
@@ -533,42 +1001,42 @@ if submitted and not st.session_state.analysis_running:
                 st.error("💡 Please check that all required modules are installed and services are running")
                 st.stop()
         
-        # Start analysis with native workflow
+        # Start analysis with advanced professional workflow
         st.session_state.analysis_running = True
         st.session_state.show_animation = True
         
         # Reset workflow
         reset_workflow()
         
-        st.info("🔬 Starting Deep Research Analysis - Watch the workflow execute step by step:")
+        st.info("🔬 Starting Advanced Deep Research Analysis - Experience the sophisticated workflow:")
         
         try:
-            # NATIVE STEP-BY-STEP EXECUTION
+            # ADVANCED PROFESSIONAL STEP-BY-STEP EXECUTION
             for step_idx in range(len(st.session_state.workflow_steps)):
                 st.session_state.current_step = step_idx + 1
                 
                 # Set current step to running
                 st.session_state.workflow_steps[step_idx]['status'] = 'running'
                 
-                # Update display to show running step
+                # Update display with advanced professional animation
                 with animation_container.container():
-                    display_native_workflow_animation()
+                    display_advanced_professional_workflow()
                 
-                # Simulate processing time for this step
-                time.sleep(2.0)  # 2 seconds to see the step running
+                # Simulate processing time for visual effect
+                time.sleep(2.5)  # Extended time to appreciate the advanced animations
                 
                 # Mark step as completed
                 st.session_state.workflow_steps[step_idx]['status'] = 'completed'
                 
-                # Update display to show completed step
+                # Update display to show completion
                 with animation_container.container():
-                    display_native_workflow_animation()
+                    display_advanced_professional_workflow()
                 
                 # Brief pause before next step
-                time.sleep(0.5)
+                time.sleep(0.8)
             
             # Execute actual analysis after animation
-            with st.spinner("🔬 Executing deep research analysis..."):
+            with st.spinner("🔬 Executing advanced deep research analysis..."):
                 results = st.session_state.agent.run_analysis(patient_data)
             
             # Store results
@@ -581,14 +1049,14 @@ if submitted and not st.session_state.analysis_running:
             
             # Show completion
             if results.get("success", False):
-                st.success("🎉 All workflow steps completed successfully!")
-                st.markdown('<div class="status-success">✅ Deep research analysis completed successfully!</div>', unsafe_allow_html=True)
+                st.success("🎉 All advanced workflow steps completed successfully!")
+                st.markdown('<div class="status-success">✅ Advanced deep research analysis completed successfully!</div>', unsafe_allow_html=True)
                 
                 if results.get("chatbot_ready", False):
-                    st.success("💬 Medical Assistant is now available in the sidebar!")
-                    st.info("🎯 You can ask detailed questions about the analysis results!")
+                    st.success("💬 Advanced Medical Assistant is now available in the sidebar!")
+                    st.info("🎯 You can ask detailed questions about the comprehensive analysis results!")
                     
-                    # Force sidebar to expand by refreshing
+                    # Force sidebar to expand
                     time.sleep(1)
                     st.rerun()
             else:
@@ -600,7 +1068,7 @@ if submitted and not st.session_state.analysis_running:
                 current_idx = st.session_state.current_step - 1
                 st.session_state.workflow_steps[current_idx]['status'] = 'error'
             
-            st.error(f"❌ Analysis failed: {str(e)}")
+            st.error(f"❌ Advanced analysis failed: {str(e)}")
             st.session_state.analysis_results = {
                 "success": False,
                 "error": str(e),
@@ -630,7 +1098,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
             for error in errors:
                 st.write(f"• {error}")
 
-    # 3. CLAIMS DATA BUTTON
+    # 3. CLAIMS DATA BUTTON (NOW INCLUDING MCID)
     if st.button("📊 Claims Data", use_container_width=True, key="claims_data_btn"):
         st.session_state.show_claims_data = not st.session_state.show_claims_data
     
@@ -642,9 +1110,11 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
         """, unsafe_allow_html=True)
         
         deidentified_data = safe_get(results, 'deidentified_data', {})
+        api_outputs = safe_get(results, 'api_outputs', {})
         
-        if deidentified_data:
-            tab1, tab2 = st.tabs(["🏥 Medical Claims", "💊 Pharmacy Claims"])
+        if deidentified_data or api_outputs:
+            # Updated tabs to include MCID
+            tab1, tab2, tab3 = st.tabs(["🏥 Medical Claims", "💊 Pharmacy Claims", "🆔 MCID Claims"])
             
             with tab1:
                 medical_data = safe_get(deidentified_data, 'medical', {})
@@ -681,6 +1151,40 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     )
                 else:
                     st.warning("No pharmacy claims data available")
+            
+            with tab3:
+                # MCID data from API outputs
+                mcid_data = safe_get(api_outputs, 'mcid', {})
+                if mcid_data:
+                    st.markdown("**🆔 MCID (Member Consumer ID) Claims Data:**")
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(mcid_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download MCID Claims Data JSON",
+                        safe_json_dumps(mcid_data),
+                        f"mcid_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                    
+                    # Show MCID summary if available
+                    if mcid_data.get('status_code') == 200 and mcid_data.get('body'):
+                        mcid_body = mcid_data.get('body', {})
+                        st.markdown("**📋 MCID Search Summary:**")
+                        
+                        # Extract consumer information if available
+                        consumers = mcid_body.get('consumer', [])
+                        if consumers and len(consumers) > 0:
+                            consumer = consumers[0]
+                            st.write(f"**Consumer ID:** {consumer.get('consumerId', 'N/A')}")
+                            st.write(f"**Match Score:** {consumer.get('score', 'N/A')}")
+                            st.write(f"**Status:** {consumer.get('status', 'N/A')}")
+                        else:
+                            st.info("No consumer matches found in MCID search")
+                else:
+                    st.warning("No MCID claims data available")
 
     # 4. CLAIMS DATA EXTRACTION BUTTON
     if st.button("🔍 Claims Data Extraction", use_container_width=True, key="claims_extraction_btn"):
