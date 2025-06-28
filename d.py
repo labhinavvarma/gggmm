@@ -138,16 +138,6 @@ st.markdown("""
     box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
 }
 
-/* Animation container styling */
-.animation-container {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 2rem;
-    border-radius: 12px;
-    margin: 2rem 0;
-    color: white;
-    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
-}
-
 /* Sidebar styling */
 .css-1d391kg {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -189,203 +179,108 @@ def initialize_session_state():
     if 'show_heart_attack' not in st.session_state:
         st.session_state.show_heart_attack = False
     
-    # Progressive Animation Workflow Steps
+    # FIXED: Simple workflow steps tracking
     if 'workflow_steps' not in st.session_state:
-        st.session_state.workflow_steps = {
-            1: {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims'},
-            2: {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers'},
-            3: {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes and data'},
-            4: {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying health conditions'},
-            5: {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing health trends'},
-            6: {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating clinical summary'},
-            7: {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running ML risk assessment'},
-            8: {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up medical chatbot'}
-        }
+        st.session_state.workflow_steps = [
+            {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims'},
+            {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers'},
+            {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes and data'},
+            {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying health conditions'},
+            {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing health trends'},
+            {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating clinical summary'},
+            {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running ML risk assessment'},
+            {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up medical chatbot'}
+        ]
     if 'current_step' not in st.session_state:
         st.session_state.current_step = 0
     if 'show_animation' not in st.session_state:
         st.session_state.show_animation = False
-    if 'steps_revealed' not in st.session_state:
-        st.session_state.steps_revealed = 0
-    if 'animation_complete' not in st.session_state:
-        st.session_state.animation_complete = False
 
-def update_workflow_step(step_number: int, status: str):
-    """Safely update workflow step status and reveal steps progressively"""
-    try:
-        if step_number in st.session_state.workflow_steps:
-            st.session_state.workflow_steps[step_number]['status'] = status
-            st.session_state.current_step = step_number
-            
-            # Progressive reveal: show current step and previous steps
-            if status == 'running':
-                st.session_state.steps_revealed = max(st.session_state.steps_revealed, step_number)
+def reset_workflow():
+    """Reset workflow to initial state"""
+    st.session_state.workflow_steps = [
+        {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims'},
+        {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers'},
+        {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes and data'},
+        {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying health conditions'},
+        {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing health trends'},
+        {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating clinical summary'},
+        {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running ML risk assessment'},
+        {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up medical chatbot'}
+    ]
+    st.session_state.current_step = 0
+
+def display_workflow_animation():
+    """Display working step-by-step workflow animation"""
+    
+    # Header with background
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                padding: 2rem; border-radius: 12px; margin: 1rem 0; color: white;">
+        <h3 style="text-align: center; margin-bottom: 1rem;">🔬 Deep Research Analysis Workflow</h3>
+    """, unsafe_allow_html=True)
+    
+    # Progress bar
+    total_steps = len(st.session_state.workflow_steps)
+    completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
+    progress = completed_steps / total_steps
+    
+    st.progress(progress, text=f"Progress: {completed_steps}/{total_steps} steps completed")
+    
+    # Display steps
+    st.markdown("### Workflow Steps:")
+    
+    for i, step in enumerate(st.session_state.workflow_steps):
+        step_number = i + 1
+        name = step['name']
+        status = step['status']
+        description = step['description']
+        
+        # Create columns for better layout
+        col1, col2, col3 = st.columns([1, 6, 2])
+        
+        with col1:
+            if status == 'pending':
+                st.write(f"**{step_number}**")
+            elif status == 'running':
+                st.write("🔄")
             elif status == 'completed':
-                st.session_state.steps_revealed = max(st.session_state.steps_revealed, step_number + 1)
-                
-    except Exception as e:
-        logger.warning(f"Could not update workflow step {step_number}: {e}")
-
-def reset_workflow_steps():
-    """Reset all workflow steps to pending and hide all steps"""
-    try:
-        for step_num in st.session_state.workflow_steps:
-            st.session_state.workflow_steps[step_num]['status'] = 'pending'
-        st.session_state.current_step = 0
-        st.session_state.steps_revealed = 0
-        st.session_state.animation_complete = False
-    except Exception as e:
-        logger.warning(f"Could not reset workflow steps: {e}")
-
-def complete_animation():
-    """Mark animation as complete and prepare for results display"""
-    try:
-        st.session_state.animation_complete = True
-        st.session_state.show_animation = False
-        # Ensure all steps are marked as completed
-        for step_num in st.session_state.workflow_steps:
-            if st.session_state.workflow_steps[step_num]['status'] != 'error':
-                st.session_state.workflow_steps[step_num]['status'] = 'completed'
-    except Exception as e:
-        logger.warning(f"Could not complete animation: {e}")
-
-def display_progressive_workflow_animation():
-    """Display progressive workflow animation using Streamlit native components"""
-    try:
-        # Calculate progress percentage
-        completed_steps = sum(1 for step in st.session_state.workflow_steps.values() if step['status'] == 'completed')
-        progress_percentage = (completed_steps / len(st.session_state.workflow_steps)) * 100
+                st.write("✅")
+            elif status == 'error':
+                st.write("❌")
         
-        # Create animated container using Streamlit native components
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    padding: 2rem; border-radius: 12px; margin: 2rem 0; color: white;
-                    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);">
-        """, unsafe_allow_html=True)
+        with col2:
+            if status == 'running':
+                st.markdown(f"**{name}** - *{description}*")
+                st.info("Currently processing...")
+            elif status == 'completed':
+                st.markdown(f"~~{name}~~ - ✅ Complete")
+            elif status == 'error':
+                st.markdown(f"**{name}** - ❌ Error")
+            else:
+                st.markdown(f"{name}")
         
-        # Header
-        st.markdown("<h3 style='text-align: center; color: white; margin-bottom: 1rem;'>🔬 Deep Research Analysis</h3>", unsafe_allow_html=True)
+        with col3:
+            if status == 'running':
+                st.write("🔄 Active")
+            elif status == 'completed':
+                st.write("✅ Done")
+            elif status == 'error':
+                st.write("❌ Failed")
+            else:
+                st.write("⏳ Waiting")
         
-        # Step counter
-        st.markdown(f"""
-        <div style="text-align: center; background: rgba(255, 255, 255, 0.15); 
-                    border-radius: 20px; padding: 0.5rem 1rem; display: inline-block; 
-                    font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; color: white;">
-            Step {st.session_state.current_step} of 8
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Progress bar using Streamlit's native progress bar
-        st.progress(progress_percentage / 100, text=f"Progress: {progress_percentage:.0f}%")
-        
-        # Display steps using Streamlit native components
-        steps_revealed = st.session_state.steps_revealed
-        
-        st.markdown("<div style='margin: 1.5rem 0;'>", unsafe_allow_html=True)
-        
-        for step_num in range(1, min(steps_revealed + 2, 9)):
-            if step_num in st.session_state.workflow_steps:
-                step_info = st.session_state.workflow_steps[step_num]
-                status = step_info['status']
-                name = step_info['name']
-                description = step_info.get('description', '')
-                
-                # Create columns for icon and text
-                col1, col2 = st.columns([1, 8])
-                
-                with col1:
-                    if status == 'pending':
-                        st.markdown(f"""
-                        <div style="width: 40px; height: 40px; border-radius: 50%; 
-                                    background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.5);
-                                    border: 2px solid rgba(255, 255, 255, 0.2); display: flex; 
-                                    align-items: center; justify-content: center; font-weight: bold;
-                                    text-align: center; line-height: 36px;">
-                            {step_num}
-                        </div>
-                        """, unsafe_allow_html=True)
-                    elif status == 'running':
-                        st.markdown("""
-                        <div style="width: 40px; height: 40px; border-radius: 50%; 
-                                    background: #ffc107; color: #000; border: 2px solid #ffca2c;
-                                    display: flex; align-items: center; justify-content: center; 
-                                    font-weight: bold; text-align: center; line-height: 36px;
-                                    animation: pulse 1s infinite;">
-                            ●
-                        </div>
-                        """, unsafe_allow_html=True)
-                    elif status == 'completed':
-                        st.markdown("""
-                        <div style="width: 40px; height: 40px; border-radius: 50%; 
-                                    background: #28a745; color: white; border: 2px solid #34ce57;
-                                    display: flex; align-items: center; justify-content: center; 
-                                    font-weight: bold; text-align: center; line-height: 36px;">
-                            ✓
-                        </div>
-                        """, unsafe_allow_html=True)
-                    elif status == 'error':
-                        st.markdown("""
-                        <div style="width: 40px; height: 40px; border-radius: 50%; 
-                                    background: #dc3545; color: white; border: 2px solid #e4606d;
-                                    display: flex; align-items: center; justify-content: center; 
-                                    font-weight: bold; text-align: center; line-height: 36px;">
-                            ✗
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                with col2:
-                    # Step name and description with better styling
-                    if status == 'running':
-                        st.markdown(f"<span style='color: white; font-weight: 600; font-size: 1.1rem;'>{name} ⚡</span>", unsafe_allow_html=True)
-                        st.markdown(f"<span style='color: rgba(255, 255, 255, 0.8); font-size: 0.9rem;'>{description}</span>", unsafe_allow_html=True)
-                    elif status == 'completed':
-                        st.markdown(f"<span style='color: rgba(255, 255, 255, 0.9); text-decoration: line-through;'>{name}</span> <span style='color: #28a745;'>✅</span>", unsafe_allow_html=True)
-                        st.markdown(f"<span style='color: rgba(255, 255, 255, 0.7); font-size: 0.9rem;'>✅ {description}</span>", unsafe_allow_html=True)
-                    elif status == 'error':
-                        st.markdown(f"<span style='color: white; font-weight: 600;'>{name}</span> <span style='color: #dc3545;'>❌</span>", unsafe_allow_html=True)
-                        st.markdown(f"<span style='color: rgba(255, 255, 255, 0.8); font-size: 0.9rem;'>❌ {description}</span>", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"<span style='color: rgba(255, 255, 255, 0.7);'>{name}</span>", unsafe_allow_html=True)
-                        st.markdown(f"<span style='color: rgba(255, 255, 255, 0.6); font-size: 0.9rem;'>{description}</span>", unsafe_allow_html=True)
-                
-                # Add spacing between steps
-                st.markdown("<div style='margin: 1rem 0;'></div>", unsafe_allow_html=True)
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        # Show preview of next step
-        if steps_revealed < len(st.session_state.workflow_steps) and st.session_state.current_step > 0:
-            next_step_num = steps_revealed + 1
-            if next_step_num <= len(st.session_state.workflow_steps):
-                next_step_name = st.session_state.workflow_steps[next_step_num]['name']
-                st.markdown(f"""
-                <div style="background: rgba(255, 255, 255, 0.1); border: 1px dashed rgba(255, 255, 255, 0.3);
-                           border-radius: 8px; padding: 0.8rem; margin: 0.5rem 0; color: rgba(255, 255, 255, 0.7);
-                           font-style: italic; text-align: center;">
-                    🔄 Next: {next_step_name}...
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Status message
-        st.markdown("""
-        <div style="text-align: center; margin-top: 1.5rem; font-style: italic; 
-                    opacity: 0.9; font-size: 0.9rem; color: white;">
-            Comprehensive analysis in progress...
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Close the container
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-    except Exception as e:
-        logger.warning(f"Error creating progressive animation: {e}")
-        # Fallback simple display
-        st.info("🔬 Deep Research Analysis in Progress...")
-        progress = st.session_state.current_step / 8 if st.session_state.current_step > 0 else 0
-        st.progress(progress, text=f"Step {st.session_state.current_step} of 8")
-        if st.session_state.current_step > 0:
-            current_step_name = st.session_state.workflow_steps[st.session_state.current_step]['name']
-            st.write(f"Current step: {current_step_name}")
+        # Add separator
+        if i < len(st.session_state.workflow_steps) - 1:
+            st.markdown("---")
+    
+    # Current status
+    if st.session_state.current_step > 0:
+        current_step_name = st.session_state.workflow_steps[st.session_state.current_step - 1]['name']
+        st.info(f"🔄 Currently executing: **{current_step_name}**")
+    
+    # Close container
+    st.markdown("</div>", unsafe_allow_html=True)
 
 def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
     """Safely get a value from a dictionary"""
@@ -560,20 +455,16 @@ with st.container():
             "🔬 Run Deep Research Analysis", 
             use_container_width=True,
             disabled=st.session_state.analysis_running,
-            type="primary"  # This enables the green styling from CSS
+            type="primary"
         )
 
-# Analysis Status Display with Progressive Animation
+# Animation container
 animation_container = st.empty()
 
-# Show animation during analysis
+# Show animation only when running
 if st.session_state.analysis_running and st.session_state.show_animation:
     with animation_container.container():
-        display_progressive_workflow_animation()
-        
-# Clear animation when done
-elif not st.session_state.analysis_running and st.session_state.animation_complete:
-    animation_container.empty()
+        display_workflow_animation()
 
 # Run Deep Research Analysis
 if submitted and not st.session_state.analysis_running:
@@ -607,102 +498,74 @@ if submitted and not st.session_state.analysis_running:
                 st.error("💡 Please check that all required modules are installed and services are running")
                 st.stop()
         
-        # Start analysis
+        # Start analysis with proper workflow
         st.session_state.analysis_running = True
         st.session_state.show_animation = True
-        st.session_state.animation_complete = False
         
-        # Reset and initialize progressive workflow animation
-        reset_workflow_steps()
+        # Reset workflow
+        reset_workflow()
         
-        # Show starting messages
-        st.info("🔬 Starting Deep Research Analysis - Watch the progressive workflow below:")
-        st.warning("⏳ This may take 30-60 seconds. Steps will appear one by one as they execute.")
+        st.info("🔬 Starting Deep Research Analysis - Watch each step execute:")
         
-        # Progressive workflow simulation
         try:
-            # Progressive step execution with real-time animation updates
-            for step_num in range(1, 9):
-                # Start step
-                update_workflow_step(step_num, 'running')
+            # WORKING STEP-BY-STEP EXECUTION
+            for step_idx in range(len(st.session_state.workflow_steps)):
+                st.session_state.current_step = step_idx + 1
                 
-                # Update animation display in real-time
+                # Set current step to running
+                st.session_state.workflow_steps[step_idx]['status'] = 'running'
+                
+                # Update display to show running step
                 with animation_container.container():
-                    display_progressive_workflow_animation()
+                    display_workflow_animation()
                 
-                # Simulate step processing time
-                time.sleep(0.8)  # Delay to see progression
+                # Simulate processing time for this step
+                time.sleep(2.0)  # 2 seconds to see the step running
                 
-                # Complete step
-                update_workflow_step(step_num, 'completed')
+                # Mark step as completed
+                st.session_state.workflow_steps[step_idx]['status'] = 'completed'
                 
-                # Update animation to show completion
+                # Update display to show completed step
                 with animation_container.container():
-                    display_progressive_workflow_animation()
+                    display_workflow_animation()
                 
-                time.sleep(0.2)  # Brief pause
+                # Brief pause before next step
+                time.sleep(0.5)
             
-            # Execute the actual analysis
+            # Execute actual analysis after animation
             with st.spinner("🔬 Executing deep research analysis..."):
                 results = st.session_state.agent.run_analysis(patient_data)
             
-            # Complete animation and prepare for results
-            complete_animation()
+            # Store results
+            st.session_state.analysis_results = results
+            st.session_state.chatbot_context = results.get("chatbot_context", {})
             
-            # Process results
+            # Clear animation
+            animation_container.empty()
+            st.session_state.show_animation = False
+            
+            # Show completion
             if results.get("success", False):
-                # Store successful results
-                st.session_state.analysis_results = results
-                st.session_state.chatbot_context = results.get("chatbot_context", {})
-                
-                # Clear animation container
-                animation_container.empty()
-                
-                # Show completion message
-                st.success("🎉 All 8 workflow steps completed successfully!")
+                st.success("🎉 All workflow steps completed successfully!")
                 st.markdown('<div class="status-success">✅ Deep research analysis completed successfully!</div>', unsafe_allow_html=True)
                 
-                # Ensure chatbot is properly loaded
-                if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-                    st.success("💬 Medical Assistant is now available in the sidebar with full access to all claims data!")
-                    st.info("🎯 You can ask detailed questions about diagnoses, medications, dates, medical codes, and more!")
+                if results.get("chatbot_ready", False):
+                    st.success("💬 Medical Assistant is now available in the sidebar!")
+                    st.info("🎯 You can ask detailed questions about the analysis results!")
                     
-                    # Display brief summary
-                    context_summary = []
-                    if safe_get(results, 'structured_extractions', {}).get('medical', {}).get('hlth_srvc_records'):
-                        medical_count = len(safe_get(results, 'structured_extractions', {})['medical']['hlth_srvc_records'])
-                        context_summary.append(f"📋 {medical_count} medical records")
-                    
-                    if safe_get(results, 'structured_extractions', {}).get('pharmacy', {}).get('ndc_records'):
-                        pharmacy_count = len(safe_get(results, 'structured_extractions', {})['pharmacy']['ndc_records'])
-                        context_summary.append(f"💊 {pharmacy_count} pharmacy records")
-                    
-                    if safe_get(results, 'heart_attack_prediction', {}):
-                        context_summary.append("❤️ heart attack prediction")
-                    
-                    if context_summary:
-                        st.info(f"📊 Chatbot has access to: {', '.join(context_summary)}")
-                    
-                    # Force page refresh to open sidebar
+                    # Force sidebar to expand by refreshing
                     time.sleep(1)
                     st.rerun()
-                else:
-                    st.warning("⚠️ Chatbot initialization incomplete. Some features may not be available.")
             else:
-                # Handle analysis failure
-                if st.session_state.current_step > 0:
-                    update_workflow_step(st.session_state.current_step, 'error')
-                st.session_state.analysis_results = results
-                animation_container.empty()
-                st.warning("⚠️ Analysis completed with some errors.")
-            
+                st.warning("⚠️ Analysis completed with some issues.")
+                
         except Exception as e:
             # Mark current step as error
             if st.session_state.current_step > 0:
-                update_workflow_step(st.session_state.current_step, 'error')
+                current_idx = st.session_state.current_step - 1
+                st.session_state.workflow_steps[current_idx]['status'] = 'error'
             
-            logger.error(f"Deep research analysis failed: {str(e)}")
-            st.error(f"❌ Deep research analysis failed: {str(e)}")
+            st.error(f"❌ Analysis failed: {str(e)}")
             st.session_state.analysis_results = {
                 "success": False,
                 "error": str(e),
@@ -715,292 +578,287 @@ if submitted and not st.session_state.analysis_running:
             st.session_state.analysis_running = False
             st.session_state.show_animation = False
 
-# RESULTS SECTION - STABLE DISPLAY
-# This section is separate from animation and always displays when results are available
+# RESULTS SECTION - Only show when analysis is complete and not running
 if st.session_state.analysis_results and not st.session_state.analysis_running:
     results = st.session_state.analysis_results
     
-    # Create a dedicated results container
-    results_container = st.container()
+    # Add separator
+    st.markdown("---")
+    st.markdown("## 📊 Analysis Results")
     
-    with results_container:
-        # Add a separator
-        st.markdown("---")
-        st.markdown("## 📊 Analysis Results")
-        
-        # Show errors if any
-        errors = safe_get(results, 'errors', [])
-        if errors:
-            st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
-            with st.expander("🐛 Debug Information"):
-                st.write("**Errors:**")
-                for error in errors:
-                    st.write(f"• {error}")
+    # Show errors if any
+    errors = safe_get(results, 'errors', [])
+    if errors:
+        st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
+        with st.expander("🐛 Debug Information"):
+            st.write("**Errors:**")
+            for error in errors:
+                st.write(f"• {error}")
 
-        # 3. CLAIMS DATA BUTTON
-        if st.button("📊 Claims Data", use_container_width=True, key="claims_data_btn"):
-            st.session_state.show_claims_data = not st.session_state.show_claims_data
+    # 3. CLAIMS DATA BUTTON
+    if st.button("📊 Claims Data", use_container_width=True, key="claims_data_btn"):
+        st.session_state.show_claims_data = not st.session_state.show_claims_data
+    
+    if st.session_state.show_claims_data:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📊 Deidentified Claims Data</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        if st.session_state.show_claims_data:
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">📊 Deidentified Claims Data</div>
-            </div>
-            """, unsafe_allow_html=True)
+        deidentified_data = safe_get(results, 'deidentified_data', {})
+        
+        if deidentified_data:
+            tab1, tab2 = st.tabs(["🏥 Medical Claims", "💊 Pharmacy Claims"])
             
-            deidentified_data = safe_get(results, 'deidentified_data', {})
+            with tab1:
+                medical_data = safe_get(deidentified_data, 'medical', {})
+                if medical_data:
+                    st.markdown("**🏥 Deidentified Medical Claims Data:**")
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(medical_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Medical Claims Data JSON",
+                        safe_json_dumps(medical_data),
+                        f"medical_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No medical claims data available")
             
-            if deidentified_data:
-                tab1, tab2 = st.tabs(["🏥 Medical Claims", "💊 Pharmacy Claims"])
-                
-                with tab1:
-                    medical_data = safe_get(deidentified_data, 'medical', {})
-                    if medical_data:
-                        st.markdown("**🏥 Deidentified Medical Claims Data:**")
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(medical_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        st.download_button(
-                            "📥 Download Medical Claims Data JSON",
-                            safe_json_dumps(medical_data),
-                            f"medical_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json",
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning("No medical claims data available")
-                
-                with tab2:
-                    pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
-                    if pharmacy_data:
-                        st.markdown("**💊 Deidentified Pharmacy Claims Data:**")
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(pharmacy_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        st.download_button(
-                            "📥 Download Pharmacy Claims Data JSON",
-                            safe_json_dumps(pharmacy_data),
-                            f"pharmacy_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json",
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning("No pharmacy claims data available")
+            with tab2:
+                pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
+                if pharmacy_data:
+                    st.markdown("**💊 Deidentified Pharmacy Claims Data:**")
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(pharmacy_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.download_button(
+                        "📥 Download Pharmacy Claims Data JSON",
+                        safe_json_dumps(pharmacy_data),
+                        f"pharmacy_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No pharmacy claims data available")
 
-        # 4. CLAIMS DATA EXTRACTION BUTTON
-        if st.button("🔍 Claims Data Extraction", use_container_width=True, key="claims_extraction_btn"):
-            st.session_state.show_claims_extraction = not st.session_state.show_claims_extraction
+    # 4. CLAIMS DATA EXTRACTION BUTTON
+    if st.button("🔍 Claims Data Extraction", use_container_width=True, key="claims_extraction_btn"):
+        st.session_state.show_claims_extraction = not st.session_state.show_claims_extraction
+    
+    if st.session_state.show_claims_extraction:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🔍 Claims Data Field Extraction</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        if st.session_state.show_claims_extraction:
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">🔍 Claims Data Field Extraction</div>
-            </div>
-            """, unsafe_allow_html=True)
+        structured_extractions = safe_get(results, 'structured_extractions', {})
+        
+        if structured_extractions:
+            tab1, tab2 = st.tabs(["🏥 Medical Claims Extraction", "💊 Pharmacy Claims Extraction"])
             
-            structured_extractions = safe_get(results, 'structured_extractions', {})
-            
-            if structured_extractions:
-                tab1, tab2 = st.tabs(["🏥 Medical Claims Extraction", "💊 Pharmacy Claims Extraction"])
-                
-                with tab1:
-                    medical_extraction = safe_get(structured_extractions, 'medical', {})
-                    if medical_extraction and not medical_extraction.get('error'):
-                        extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
-                        
-                        st.markdown("**📊 Medical Claims Extraction Summary:**")
-                        st.markdown(f"""
-                        <div class="metric-grid">
-                            <div class="metric-card">
-                                <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
-                                <p>Health Service Records</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
-                                <p>Diagnosis Codes</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
-                                <p>Unique Service Codes</p>
-                            </div>
+            with tab1:
+                medical_extraction = safe_get(structured_extractions, 'medical', {})
+                if medical_extraction and not medical_extraction.get('error'):
+                    extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
+                    
+                    st.markdown("**📊 Medical Claims Extraction Summary:**")
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
+                            <p>Health Service Records</p>
                         </div>
-                        """, unsafe_allow_html=True)
-                        
-                        hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
-                        if hlth_srvc_records:
-                            st.markdown("**📋 Extracted Medical Claims Records:**")
-                            for i, record in enumerate(hlth_srvc_records, 1):
-                                with st.expander(f"Medical Record {i} - Service Code: {record.get('hlth_srvc_cd', 'N/A')}"):
-                                    st.write(f"**Service Code:** `{record.get('hlth_srvc_cd', 'N/A')}`")
-                                    st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
-                                    
-                                    diagnosis_codes = record.get('diagnosis_codes', [])
-                                    if diagnosis_codes:
-                                        st.write("**Diagnosis Codes:**")
-                                        for idx, diag in enumerate(diagnosis_codes, 1):
-                                            source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
-                                            st.write(f"  {idx}. `{diag.get('code', 'N/A')}`{source_info}")
-                    else:
-                        st.warning("No medical claims extraction data available")
-                
-                with tab2:
-                    pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
-                    if pharmacy_extraction and not pharmacy_extraction.get('error'):
-                        extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
-                        
-                        st.markdown("**📊 Pharmacy Claims Extraction Summary:**")
-                        st.markdown(f"""
-                        <div class="metric-grid">
-                            <div class="metric-card">
-                                <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
-                                <p>NDC Records</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
-                                <p>Unique NDC Codes</p>
-                            </div>
-                            <div class="metric-card">
-                                <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
-                                <p>Unique Medications</p>
-                            </div>
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
+                            <p>Diagnosis Codes</p>
                         </div>
-                        """, unsafe_allow_html=True)
-                        
-                        ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
-                        if ndc_records:
-                            st.markdown("**💊 Extracted Pharmacy Claims Records:**")
-                            for i, record in enumerate(ndc_records, 1):
-                                with st.expander(f"Pharmacy Record {i} - {record.get('lbl_nm', 'N/A')}"):
-                                    st.write(f"**NDC Code:** `{record.get('ndc', 'N/A')}`")
-                                    st.write(f"**Label Name:** `{record.get('lbl_nm', 'N/A')}`")
-                                    st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
-                    else:
-                        st.warning("No pharmacy claims extraction data available")
-
-        # 5. ENHANCED ENTITY EXTRACTION BUTTON
-        if st.button("🎯 Enhanced Entity Extraction", use_container_width=True, key="entity_extraction_btn"):
-            st.session_state.show_entity_extraction = not st.session_state.show_entity_extraction
-        
-        if st.session_state.show_entity_extraction:
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">🎯 Enhanced Entity Extraction</div>
-            </div>
-            """, unsafe_allow_html=True)
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
+                            <p>Unique Service Codes</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
+                    if hlth_srvc_records:
+                        st.markdown("**📋 Extracted Medical Claims Records:**")
+                        for i, record in enumerate(hlth_srvc_records, 1):
+                            with st.expander(f"Medical Record {i} - Service Code: {record.get('hlth_srvc_cd', 'N/A')}"):
+                                st.write(f"**Service Code:** `{record.get('hlth_srvc_cd', 'N/A')}`")
+                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                                
+                                diagnosis_codes = record.get('diagnosis_codes', [])
+                                if diagnosis_codes:
+                                    st.write("**Diagnosis Codes:**")
+                                    for idx, diag in enumerate(diagnosis_codes, 1):
+                                        source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
+                                        st.write(f"  {idx}. `{diag.get('code', 'N/A')}`{source_info}")
+                else:
+                    st.warning("No medical claims extraction data available")
             
-            entity_extraction = safe_get(results, 'entity_extraction', {})
-            if entity_extraction:
-                # Entity cards
-                st.markdown(f"""
-                <div class="metric-grid">
-                    <div class="metric-card">
-                        <h3>🩺</h3>
-                        <p><strong>Diabetes</strong></p>
-                        <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
+            with tab2:
+                pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
+                if pharmacy_extraction and not pharmacy_extraction.get('error'):
+                    extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
+                    
+                    st.markdown("**📊 Pharmacy Claims Extraction Summary:**")
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
+                            <p>NDC Records</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
+                            <p>Unique NDC Codes</p>
+                        </div>
+                        <div class="metric-card">
+                            <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
+                            <p>Unique Medications</p>
+                        </div>
                     </div>
-                    <div class="metric-card">
-                        <h3>👥</h3>
-                        <p><strong>Age Group</strong></p>
-                        <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>🚬</h3>
-                        <p><strong>Smoking</strong></p>
-                        <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>🍷</h3>
-                        <p><strong>Alcohol</strong></p>
-                        <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
-                    </div>
-                    <div class="metric-card">
-                        <h3>💓</h3>
-                        <p><strong>Blood Pressure</strong></p>
-                        <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
-                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
+                    if ndc_records:
+                        st.markdown("**💊 Extracted Pharmacy Claims Records:**")
+                        for i, record in enumerate(ndc_records, 1):
+                            with st.expander(f"Pharmacy Record {i} - {record.get('lbl_nm', 'N/A')}"):
+                                st.write(f"**NDC Code:** `{record.get('ndc', 'N/A')}`")
+                                st.write(f"**Label Name:** `{record.get('lbl_nm', 'N/A')}`")
+                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                else:
+                    st.warning("No pharmacy claims extraction data available")
+
+    # 5. ENHANCED ENTITY EXTRACTION BUTTON
+    if st.button("🎯 Enhanced Entity Extraction", use_container_width=True, key="entity_extraction_btn"):
+        st.session_state.show_entity_extraction = not st.session_state.show_entity_extraction
+    
+    if st.session_state.show_entity_extraction:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🎯 Enhanced Entity Extraction</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        entity_extraction = safe_get(results, 'entity_extraction', {})
+        if entity_extraction:
+            # Entity cards
+            st.markdown(f"""
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <h3>🩺</h3>
+                    <p><strong>Diabetes</strong></p>
+                    <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
                 </div>
-                """, unsafe_allow_html=True)
-                
-                # Medical conditions
-                medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
-                if medical_conditions:
-                    st.markdown("**🏥 Medical Conditions Identified:**")
-                    for condition in medical_conditions:
-                        st.write(f"• {condition}")
-                
-                # Medications identified
-                medications_identified = safe_get(entity_extraction, 'medications_identified', [])
-                if medications_identified:
-                    st.markdown("**💊 Medications Identified:**")
-                    for med in medications_identified:
-                        st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
-
-        # 6. HEALTH TRAJECTORY BUTTON
-        if st.button("📈 Health Trajectory", use_container_width=True, key="health_trajectory_btn"):
-            st.session_state.show_health_trajectory = not st.session_state.show_health_trajectory
-        
-        if st.session_state.show_health_trajectory:
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">📈 Health Trajectory Analysis</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            health_trajectory = safe_get(results, 'health_trajectory', '')
-            if health_trajectory:
-                st.markdown(health_trajectory)
-            else:
-                st.warning("Health trajectory analysis not available")
-
-        # 7. FINAL SUMMARY BUTTON
-        if st.button("📋 Final Summary", use_container_width=True, key="final_summary_btn"):
-            st.session_state.show_final_summary = not st.session_state.show_final_summary
-        
-        if st.session_state.show_final_summary:
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">📋 Clinical Summary</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            final_summary = safe_get(results, 'final_summary', '')
-            if final_summary:
-                st.markdown(final_summary)
-            else:
-                st.warning("Final summary not available")
-
-        # 8. HEART ATTACK RISK PREDICTION BUTTON
-        if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True, key="heart_attack_btn"):
-            st.session_state.show_heart_attack = not st.session_state.show_heart_attack
-        
-        if st.session_state.show_heart_attack:
-            st.markdown("""
-            <div class="section-box">
-                <div class="section-title">❤️ Heart Attack Risk Assessment</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
-            if heart_attack_prediction and not heart_attack_prediction.get('error'):
-                # Display simplified format
-                combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
-                
-                st.markdown(f"""
-                <div style="background: #f8f9fa; padding: 2rem; border-radius: 10px; border: 1px solid #dee2e6; margin: 1rem 0; text-align: center;">
-                    <h3 style="color: #2c3e50; margin-bottom: 1rem;">Heart Attack Risk Prediction</h3>
-                    <h4 style="color: #495057; font-weight: 600;">{combined_display}</h4>
-                    <p style="color: #6c757d; margin-top: 1rem; font-size: 0.9rem;">
-                        Prediction from ML Server: {heart_attack_prediction.get('fastapi_server_url', 'Unknown')}
-                    </p>
+                <div class="metric-card">
+                    <h3>👥</h3>
+                    <p><strong>Age Group</strong></p>
+                    <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
                 </div>
-                """, unsafe_allow_html=True)
-                
-            else:
-                error_msg = heart_attack_prediction.get('error', 'Heart attack prediction not available')
-                st.error(f"❌ Server Error: {error_msg}")
-                
-                # Show connection info for debugging
-                st.info(f"💡 Expected Server: {st.session_state.config.heart_attack_api_url if st.session_state.config else 'http://localhost:8080'}")
-                st.info("💡 Make sure server is running: `python app.py`")
+                <div class="metric-card">
+                    <h3>🚬</h3>
+                    <p><strong>Smoking</strong></p>
+                    <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🍷</h3>
+                    <p><strong>Alcohol</strong></p>
+                    <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>💓</h3>
+                    <p><strong>Blood Pressure</strong></p>
+                    <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Medical conditions
+            medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
+            if medical_conditions:
+                st.markdown("**🏥 Medical Conditions Identified:**")
+                for condition in medical_conditions:
+                    st.write(f"• {condition}")
+            
+            # Medications identified
+            medications_identified = safe_get(entity_extraction, 'medications_identified', [])
+            if medications_identified:
+                st.markdown("**💊 Medications Identified:**")
+                for med in medications_identified:
+                    st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
+
+    # 6. HEALTH TRAJECTORY BUTTON
+    if st.button("📈 Health Trajectory", use_container_width=True, key="health_trajectory_btn"):
+        st.session_state.show_health_trajectory = not st.session_state.show_health_trajectory
+    
+    if st.session_state.show_health_trajectory:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📈 Health Trajectory Analysis</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        health_trajectory = safe_get(results, 'health_trajectory', '')
+        if health_trajectory:
+            st.markdown(health_trajectory)
+        else:
+            st.warning("Health trajectory analysis not available")
+
+    # 7. FINAL SUMMARY BUTTON
+    if st.button("📋 Final Summary", use_container_width=True, key="final_summary_btn"):
+        st.session_state.show_final_summary = not st.session_state.show_final_summary
+    
+    if st.session_state.show_final_summary:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📋 Clinical Summary</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        final_summary = safe_get(results, 'final_summary', '')
+        if final_summary:
+            st.markdown(final_summary)
+        else:
+            st.warning("Final summary not available")
+
+    # 8. HEART ATTACK RISK PREDICTION BUTTON
+    if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True, key="heart_attack_btn"):
+        st.session_state.show_heart_attack = not st.session_state.show_heart_attack
+    
+    if st.session_state.show_heart_attack:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">❤️ Heart Attack Risk Assessment</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+        if heart_attack_prediction and not heart_attack_prediction.get('error'):
+            # Display simplified format
+            combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
+            
+            st.markdown(f"""
+            <div style="background: #f8f9fa; padding: 2rem; border-radius: 10px; border: 1px solid #dee2e6; margin: 1rem 0; text-align: center;">
+                <h3 style="color: #2c3e50; margin-bottom: 1rem;">Heart Attack Risk Prediction</h3>
+                <h4 style="color: #495057; font-weight: 600;">{combined_display}</h4>
+                <p style="color: #6c757d; margin-top: 1rem; font-size: 0.9rem;">
+                    Prediction from ML Server: {heart_attack_prediction.get('fastapi_server_url', 'Unknown')}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        else:
+            error_msg = heart_attack_prediction.get('error', 'Heart attack prediction not available')
+            st.error(f"❌ Server Error: {error_msg}")
+            
+            # Show connection info for debugging
+            st.info(f"💡 Expected Server: {st.session_state.config.heart_attack_api_url if st.session_state.config else 'http://localhost:8080'}")
+            st.info("💡 Make sure server is running: `python app.py`")
