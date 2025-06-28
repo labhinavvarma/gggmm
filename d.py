@@ -114,7 +114,42 @@ class HealthDataProcessor:
             logger.error(f"Error in enhanced medical deidentification: {e}")
             return {"error": f"Enhanced deidentification failed: {str(e)}"}
     
-    def deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
+    def deidentify_mcid_data(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced MCID data deidentification with comprehensive JSON processing"""
+        try:
+            if not mcid_data:
+                return {"error": "No MCID data to deidentify"}
+            
+            # Enhanced JSON processing - handle both 'body' and direct data
+            if 'body' in mcid_data:
+                raw_mcid_data = mcid_data['body']
+            else:
+                raw_mcid_data = mcid_data
+            
+            # Deep copy and comprehensively deidentify the entire JSON structure
+            logger.info("🔒 Starting comprehensive MCID data deidentification...")
+            deidentified_mcid_data = self._comprehensive_deidentify_json(
+                copy.deepcopy(raw_mcid_data), 
+                data_type="mcid"
+            )
+            
+            result = {
+                "mcid_data": deidentified_mcid_data,
+                "original_structure_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "deidentification_level": "comprehensive_nested",
+                "total_fields_processed": self._count_total_fields(deidentified_mcid_data),
+                "deidentification_stats": self._get_deidentification_stats()
+            }
+            
+            logger.info("✅ Successfully deidentified comprehensive MCID JSON structure")
+            logger.info(f"📊 Processed {result['total_fields_processed']} total fields")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced MCID deidentification: {e}")
+            return {"error": f"Enhanced MCID deidentification failed: {str(e)}"}
         """Enhanced pharmacy data deidentification with comprehensive JSON processing"""
         try:
             if not pharmacy_data:
@@ -299,7 +334,301 @@ class HealthDataProcessor:
         """Get deidentification statistics"""
         return getattr(self, '_deidentification_stats', {})
     
-    def extract_medical_fields(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
+    def extract_medical_fields_with_llm_meanings(self, deidentified_medical: Dict[str, Any], llm_caller_func) -> Dict[str, Any]:
+        """Enhanced medical field extraction with LLM-powered code meanings and date extraction"""
+        extraction_result = {
+            "hlth_srvc_records": [],
+            "extraction_summary": {
+                "total_hlth_srvc_records": 0,
+                "total_diagnosis_codes": 0,
+                "unique_service_codes": set(),
+                "unique_diagnosis_codes": set(),
+                "dates_extracted": 0
+            },
+            "llm_enhanced": True
+        }
+        
+        try:
+            logger.info("🔍 Starting enhanced medical field extraction with LLM meanings...")
+            
+            medical_data = deidentified_medical.get("medical_data", {})
+            if not medical_data:
+                logger.warning("No medical data found in deidentified medical data")
+                return extraction_result
+            
+            # Enhanced recursive extraction from the entire JSON structure
+            self._enhanced_recursive_medical_extraction_with_llm(medical_data, extraction_result, llm_caller_func)
+            
+            # Convert sets to lists for JSON serialization
+            extraction_result["extraction_summary"]["unique_service_codes"] = list(
+                extraction_result["extraction_summary"]["unique_service_codes"]
+            )
+            extraction_result["extraction_summary"]["unique_diagnosis_codes"] = list(
+                extraction_result["extraction_summary"]["unique_diagnosis_codes"]
+            )
+            
+            logger.info(f"📋 Enhanced medical extraction with LLM completed: "
+                       f"{extraction_result['extraction_summary']['total_hlth_srvc_records']} health service records, "
+                       f"{extraction_result['extraction_summary']['total_diagnosis_codes']} diagnosis codes, "
+                       f"{extraction_result['extraction_summary']['dates_extracted']} dates extracted")
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced medical field extraction with LLM: {e}")
+            extraction_result["error"] = f"Enhanced medical extraction with LLM failed: {str(e)}"
+        
+        return extraction_result
+    
+    def _enhanced_recursive_medical_extraction_with_llm(self, data: Any, result: Dict[str, Any], llm_caller_func, path: str = ""):
+        """Enhanced recursive search with LLM meanings and date extraction"""
+        if isinstance(data, dict):
+            current_record = {}
+            
+            # Extract health service code with multiple possible field names
+            service_code_fields = ['hlth_srvc_cd', 'health_service_code', 'service_code', 'procedure_code']
+            for field in service_code_fields:
+                if field in data and data[field]:
+                    service_code = str(data[field])
+                    current_record["hlth_srvc_cd"] = service_code
+                    result["extraction_summary"]["unique_service_codes"].add(service_code)
+                    
+                    # Get LLM meaning for service code
+                    try:
+                        service_meaning = self._get_llm_code_meaning(service_code, "medical_service", llm_caller_func)
+                        current_record["hlth_srvc_cd_meaning"] = service_meaning
+                    except Exception as e:
+                        current_record["hlth_srvc_cd_meaning"] = f"Error getting meaning: {str(e)}"
+                    break
+            
+            # Extract claim received date
+            date_fields = ['CLM_RCVD_DT', 'clm_rcvd_dt', 'claim_received_date', 'received_date']
+            for field in date_fields:
+                if field in data and data[field]:
+                    current_record["claim_received_date"] = str(data[field])
+                    result["extraction_summary"]["dates_extracted"] += 1
+                    break
+            
+            diagnosis_codes = []
+            
+            # Enhanced diagnosis code extraction with LLM meanings
+            diag_combo_fields = ['diag_1_50_cd', 'diagnosis_codes', 'icd_codes']
+            for field in diag_combo_fields:
+                if field in data and data[field]:
+                    diag_value = str(data[field]).strip()
+                    if diag_value and diag_value.lower() not in ['null', 'none', '']:
+                        # Enhanced separation
+                        separators = [',', ';', '|', '\n']
+                        individual_codes = [diag_value]
+                        
+                        for sep in separators:
+                            temp_codes = []
+                            for code in individual_codes:
+                                temp_codes.extend([c.strip() for c in code.split(sep) if c.strip()])
+                            individual_codes = temp_codes
+                        
+                        for i, code in enumerate(individual_codes, 1):
+                            if code and code.lower() not in ['null', 'none', '']:
+                                # Get LLM meaning for diagnosis code
+                                try:
+                                    diag_meaning = self._get_llm_code_meaning(code, "diagnosis", llm_caller_func)
+                                except Exception as e:
+                                    diag_meaning = f"Error getting meaning: {str(e)}"
+                                
+                                diagnosis_codes.append({
+                                    "code": code,
+                                    "position": i,
+                                    "source": f"{field} (separated)",
+                                    "path": path,
+                                    "llm_meaning": diag_meaning
+                                })
+                                result["extraction_summary"]["unique_diagnosis_codes"].add(code)
+            
+            # Individual diagnosis fields with LLM meanings
+            for i in range(1, 51):
+                diag_key = f"diag_{i}_cd"
+                if diag_key in data and data[diag_key]:
+                    diag_code = str(data[diag_key]).strip()
+                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
+                        # Get LLM meaning
+                        try:
+                            diag_meaning = self._get_llm_code_meaning(diag_code, "diagnosis", llm_caller_func)
+                        except Exception as e:
+                            diag_meaning = f"Error getting meaning: {str(e)}"
+                        
+                        diagnosis_codes.append({
+                            "code": diag_code,
+                            "position": i,
+                            "source": f"individual field ({diag_key})",
+                            "path": path,
+                            "llm_meaning": diag_meaning
+                        })
+                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
+            
+            if diagnosis_codes:
+                current_record["diagnosis_codes"] = diagnosis_codes
+                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
+            
+            if current_record:
+                current_record["data_path"] = path
+                result["hlth_srvc_records"].append(current_record)
+                result["extraction_summary"]["total_hlth_srvc_records"] += 1
+            
+            # Continue recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._enhanced_recursive_medical_extraction_with_llm(value, result, llm_caller_func, new_path)
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._enhanced_recursive_medical_extraction_with_llm(item, result, llm_caller_func, new_path)
+    
+    def extract_pharmacy_fields_with_llm_meanings(self, deidentified_pharmacy: Dict[str, Any], llm_caller_func) -> Dict[str, Any]:
+        """Enhanced pharmacy field extraction with LLM-powered NDC/label meanings and date extraction"""
+        extraction_result = {
+            "ndc_records": [],
+            "extraction_summary": {
+                "total_ndc_records": 0,
+                "unique_ndc_codes": set(),
+                "unique_label_names": set(),
+                "dates_extracted": 0
+            },
+            "llm_enhanced": True
+        }
+        
+        try:
+            logger.info("🔍 Starting enhanced pharmacy field extraction with LLM meanings...")
+            
+            pharmacy_data = deidentified_pharmacy.get("pharmacy_data", {})
+            if not pharmacy_data:
+                logger.warning("No pharmacy data found in deidentified pharmacy data")
+                return extraction_result
+            
+            self._enhanced_recursive_pharmacy_extraction_with_llm(pharmacy_data, extraction_result, llm_caller_func)
+            
+            # Convert sets to lists for JSON serialization
+            extraction_result["extraction_summary"]["unique_ndc_codes"] = list(
+                extraction_result["extraction_summary"]["unique_ndc_codes"]
+            )
+            extraction_result["extraction_summary"]["unique_label_names"] = list(
+                extraction_result["extraction_summary"]["unique_label_names"]
+            )
+            
+            logger.info(f"💊 Enhanced pharmacy extraction with LLM completed: "
+                       f"{extraction_result['extraction_summary']['total_ndc_records']} NDC records, "
+                       f"{extraction_result['extraction_summary']['dates_extracted']} dates extracted")
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced pharmacy field extraction with LLM: {e}")
+            extraction_result["error"] = f"Enhanced pharmacy extraction with LLM failed: {str(e)}"
+        
+        return extraction_result
+    
+    def _enhanced_recursive_pharmacy_extraction_with_llm(self, data: Any, result: Dict[str, Any], llm_caller_func, path: str = ""):
+        """Enhanced recursive search for pharmacy fields with LLM meanings and date extraction"""
+        if isinstance(data, dict):
+            current_record = {}
+            
+            # Enhanced NDC field detection with LLM meaning
+            ndc_field_names = [
+                'ndc', 'ndc_code', 'ndc_number', 'national_drug_code', 
+                'drug_code', 'product_ndc', 'ndc_id'
+            ]
+            ndc_found = False
+            for field in ndc_field_names:
+                if field in data and data[field]:
+                    ndc_code = str(data[field])
+                    current_record["ndc"] = ndc_code
+                    result["extraction_summary"]["unique_ndc_codes"].add(ndc_code)
+                    
+                    # Get LLM meaning for NDC code
+                    try:
+                        ndc_meaning = self._get_llm_code_meaning(ndc_code, "ndc", llm_caller_func)
+                        current_record["ndc_llm_meaning"] = ndc_meaning
+                    except Exception as e:
+                        current_record["ndc_llm_meaning"] = f"Error getting meaning: {str(e)}"
+                    
+                    ndc_found = True
+                    break
+            
+            # Enhanced label name field detection with LLM description
+            label_field_names = [
+                'lbl_nm', 'label_name', 'drug_name', 'medication_name', 
+                'product_name', 'brand_name', 'generic_name', 'drug_label',
+                'medication', 'product_label'
+            ]
+            label_found = False
+            for field in label_field_names:
+                if field in data and data[field]:
+                    label_name = str(data[field])
+                    current_record["lbl_nm"] = label_name
+                    result["extraction_summary"]["unique_label_names"].add(label_name)
+                    
+                    # Get LLM description for label name
+                    try:
+                        label_description = self._get_llm_code_meaning(label_name, "medication_label", llm_caller_func)
+                        current_record["lbl_nm_llm_description"] = label_description
+                    except Exception as e:
+                        current_record["lbl_nm_llm_description"] = f"Error getting description: {str(e)}"
+                    
+                    label_found = True
+                    break
+            
+            # Extract prescription filled date
+            date_fields = ['RX_FILLED_DT', 'rx_filled_dt', 'prescription_filled_date', 'filled_date']
+            for field in date_fields:
+                if field in data and data[field]:
+                    current_record["prescription_filled_date"] = str(data[field])
+                    result["extraction_summary"]["dates_extracted"] += 1
+                    break
+            
+            # Extract additional pharmacy fields
+            additional_fields = ['strength', 'dosage', 'quantity', 'days_supply', 'refills']
+            for field in additional_fields:
+                if field in data and data[field]:
+                    current_record[field] = data[field]
+            
+            if ndc_found or label_found:
+                current_record["data_path"] = path
+                result["ndc_records"].append(current_record)
+                result["extraction_summary"]["total_ndc_records"] += 1
+            
+            # Continue recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._enhanced_recursive_pharmacy_extraction_with_llm(value, result, llm_caller_func, new_path)
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._enhanced_recursive_pharmacy_extraction_with_llm(item, result, llm_caller_func, new_path)
+    
+    def _get_llm_code_meaning(self, code: str, code_type: str, llm_caller_func) -> str:
+        """Get LLM-powered meaning/description for medical/pharmacy codes"""
+        try:
+            if code_type == "medical_service":
+                prompt = f"Explain what medical service code '{code}' means. Provide a brief, professional explanation (1-2 sentences)."
+            elif code_type == "diagnosis":
+                prompt = f"Explain what diagnosis code '{code}' means. If it's an ICD-10 code, provide the medical condition it represents (1-2 sentences)."
+            elif code_type == "ndc":
+                prompt = f"Explain what NDC code '{code}' represents. Provide information about the medication/product (1-2 sentences)."
+            elif code_type == "medication_label":
+                prompt = f"Provide a brief medical description of medication '{code}'. Include what it's used for and key information (1-2 sentences)."
+            else:
+                prompt = f"Provide a brief explanation of medical code '{code}' (1-2 sentences)."
+            
+            response = llm_caller_func(prompt)
+            
+            # Clean up the response
+            if response and not response.startswith("Error"):
+                # Take first 2 sentences to keep it concise
+                sentences = response.split('.')[:2]
+                return '.'.join(sentences).strip() + '.' if sentences else response[:200]
+            else:
+                return f"Unable to get meaning for {code_type} code: {code}"
+                
+        except Exception as e:
+            logger.warning(f"Error getting LLM meaning for {code}: {str(e)}")
+            return f"Error getting meaning for {code_type} code: {code}"
         """Enhanced medical field extraction with better comma-separated diagnosis handling"""
         extraction_result = {
             "hlth_srvc_records": [],
@@ -696,7 +1025,7 @@ class HealthDataProcessor:
                             )
     
     def prepare_complete_deidentified_context(self, chat_context: Dict[str, Any]) -> str:
-        """Prepare COMPLETE deidentified context - NO truncation, NO summarization - ENTIRE JSON data"""
+        """Prepare COMPLETE deidentified context including MCID - NO truncation, NO summarization - ENTIRE JSON data"""
         try:
             context_sections = []
             
@@ -705,7 +1034,28 @@ class HealthDataProcessor:
             if patient_overview:
                 context_sections.append(f"PATIENT OVERVIEW:\n{json.dumps(patient_overview, indent=2)}")
             
-            # 2. COMPLETE DEIDENTIFIED MEDICAL DATA - ENTIRE JSON STRUCTURE
+            # 2. COMPLETE DEIDENTIFIED MCID DATA - ENTIRE JSON STRUCTURE
+            deidentified_mcid = chat_context.get("deidentified_mcid", {})
+            if deidentified_mcid:
+                logger.info("🆔 Including COMPLETE deidentified MCID JSON - no truncation")
+                
+                # Get the ENTIRE mcid_data JSON - this is the complete deidentified structure
+                complete_mcid_json = deidentified_mcid.get('mcid_data', {})
+                
+                # Convert ENTIRE MCID JSON to string with full detail
+                complete_mcid_str = json.dumps(complete_mcid_json, indent=2, default=str, ensure_ascii=False)
+                
+                # Add MCID metadata
+                mcid_context = f"""COMPLETE DEIDENTIFIED MCID DATA (ENTIRE JSON):
+Deidentification Level: {deidentified_mcid.get('deidentification_level', 'standard')}
+Total Fields Processed: {deidentified_mcid.get('total_fields_processed', 0)}
+
+COMPLETE MCID JSON DATA (All nested structures included):
+{complete_mcid_str}"""
+                
+                context_sections.append(mcid_context)
+            
+            # 3. COMPLETE DEIDENTIFIED MEDICAL DATA - ENTIRE JSON STRUCTURE
             deidentified_medical = chat_context.get("deidentified_medical", {})
             if deidentified_medical:
                 logger.info("📋 Including COMPLETE deidentified medical JSON - no truncation")
@@ -729,7 +1079,7 @@ COMPLETE MEDICAL JSON DATA (All nested structures included):
                 
                 context_sections.append(medical_context)
             
-            # 3. COMPLETE DEIDENTIFIED PHARMACY DATA - ENTIRE JSON STRUCTURE
+            # 4. COMPLETE DEIDENTIFIED PHARMACY DATA - ENTIRE JSON STRUCTURE
             deidentified_pharmacy = chat_context.get("deidentified_pharmacy", {})
             if deidentified_pharmacy:
                 logger.info("💊 Including COMPLETE deidentified pharmacy JSON - no truncation")
@@ -750,30 +1100,30 @@ COMPLETE PHARMACY JSON DATA (All nested structures included):
                 
                 context_sections.append(pharmacy_context)
             
-            # 4. COMPLETE Structured Extractions (also full data)
+            # 5. COMPLETE Structured Extractions with LLM meanings (also full data)
             medical_extraction = chat_context.get("medical_extraction", {})
             if medical_extraction and not medical_extraction.get('error'):
                 extraction_str = json.dumps(medical_extraction, indent=2, default=str)
-                context_sections.append(f"COMPLETE MEDICAL DATA EXTRACTIONS:\n{extraction_str}")
+                context_sections.append(f"COMPLETE MEDICAL DATA EXTRACTIONS (WITH LLM MEANINGS):\n{extraction_str}")
             
             pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
             if pharmacy_extraction and not pharmacy_extraction.get('error'):
                 extraction_str = json.dumps(pharmacy_extraction, indent=2, default=str)
-                context_sections.append(f"COMPLETE PHARMACY DATA EXTRACTIONS:\n{extraction_str}")
+                context_sections.append(f"COMPLETE PHARMACY DATA EXTRACTIONS (WITH LLM MEANINGS):\n{extraction_str}")
             
-            # 5. Complete Entity Extraction
+            # 6. Complete Entity Extraction
             entity_extraction = chat_context.get("entity_extraction", {})
             if entity_extraction:
                 entity_str = json.dumps(entity_extraction, indent=2, default=str)
                 context_sections.append(f"COMPLETE HEALTH ENTITIES:\n{entity_str}")
             
-            # 6. Heart Attack Prediction
+            # 7. Heart Attack Prediction
             heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
             if heart_attack_prediction:
                 prediction_str = json.dumps(heart_attack_prediction, indent=2, default=str)
                 context_sections.append(f"HEART ATTACK PREDICTION:\n{prediction_str}")
             
-            # 7. Clinical Analysis (full text)
+            # 8. Clinical Analysis (full text)
             health_trajectory = chat_context.get("health_trajectory", "")
             if health_trajectory:
                 context_sections.append(f"HEALTH TRAJECTORY ANALYSIS:\n{health_trajectory}")
@@ -782,15 +1132,15 @@ COMPLETE PHARMACY JSON DATA (All nested structures included):
             if final_summary:
                 context_sections.append(f"CLINICAL SUMMARY:\n{final_summary}")
             
-            # Join all sections - COMPLETE DATA, NO TRUNCATION
+            # Join all sections - COMPLETE DATA INCLUDING MCID, NO TRUNCATION
             complete_context = "\n\n" + ("\n" + "="*100 + "\n").join(context_sections)
             
-            logger.info(f"📋 Prepared COMPLETE deidentified context with {len(context_sections)} sections")
+            logger.info(f"📋 Prepared COMPLETE deidentified context including MCID with {len(context_sections)} sections")
             logger.info(f"📊 Total COMPLETE context length: {len(complete_context)} characters")
-            logger.info("🔍 LLM will have access to ENTIRE deidentified JSON structures")
+            logger.info("🔍 LLM will have access to ENTIRE deidentified JSON structures including MCID")
             
             return complete_context
             
         except Exception as e:
-            logger.error(f"Error preparing COMPLETE deidentified context: {e}")
-            return "Error: Could not prepare complete deidentified data context."
+            logger.error(f"Error preparing COMPLETE deidentified context with MCID: {e}")
+            return "Error: Could not prepare complete deidentified data context including MCID."
