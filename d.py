@@ -1,769 +1,577 @@
-# Configure Streamlit page FIRST - before any other Streamlit commands
-import streamlit as st
-
-# Determine sidebar state based on chatbot readiness
-if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
-    sidebar_state = "expanded"
-else:
-    sidebar_state = "collapsed"
-
-st.set_page_config(
-    page_title="Health Analysis Agent",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state=sidebar_state
-)
-
-# Now import other modules
 import json
-import pandas as pd
-from datetime import datetime, timedelta
-import time
-import sys
-import os
-from typing import Dict, Any, Optional
-import asyncio
+import re
+from datetime import datetime, date
+from typing import Dict, Any, List
+import logging
 
-# Add current directory to path for importing the agent
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Import the Enhanced Modular LangGraph health analysis agent
-AGENT_AVAILABLE = False
-import_error = None
-HealthAnalysisAgent = None
-Config = None
-
-try:
-    from health_agent_core import HealthAnalysisAgent, Config
-    AGENT_AVAILABLE = True
-except ImportError as e:
-    AGENT_AVAILABLE = False
-    import_error = str(e)
-
-# Custom CSS for clean layout
-st.markdown("""
-<style>
-.main-header {
-    font-size: 2.5rem;
-    color: #2c3e50;
-    text-align: center;
-    margin-bottom: 2rem;
-    font-weight: 600;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.section-box {
-    background: white;
-    padding: 1.5rem;
-    border-radius: 12px;
-    border: 1px solid #e9ecef;
-    margin: 1rem 0;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-}
-
-.section-title {
-    font-size: 1.3rem;
-    color: #2c3e50;
-    font-weight: 600;
-    margin-bottom: 1rem;
-    border-bottom: 2px solid #3498db;
-    padding-bottom: 0.5rem;
-}
-
-.status-success {
-    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
-    padding: 1rem;
-    border-radius: 8px;
-    border-left: 4px solid #28a745;
-    margin: 1rem 0;
-}
-
-.status-error {
-    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
-    padding: 1rem;
-    border-radius: 8px;
-    border-left: 4px solid #dc3545;
-    margin: 1rem 0;
-}
-
-.metric-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 1rem;
-    margin: 1rem 0;
-}
-
-.metric-card {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1rem;
-    border-radius: 8px;
-    text-align: center;
-    border: 1px solid #dee2e6;
-}
-
-.risk-high {
-    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
-    border: 2px solid #dc3545;
-    color: #721c24;
-    padding: 1.5rem;
-    border-radius: 10px;
-    font-weight: bold;
-    margin: 1rem 0;
-}
-
-.risk-moderate {
-    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-    border: 2px solid #ffc107;
-    color: #856404;
-    padding: 1.5rem;
-    border-radius: 10px;
-    font-weight: bold;
-    margin: 1rem 0;
-}
-
-.risk-low {
-    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
-    border: 2px solid #28a745;
-    color: #155724;
-    padding: 1.5rem;
-    border-radius: 10px;
-    font-weight: bold;
-    margin: 1rem 0;
-}
-
-.json-container {
-    background: #f8f9fa;
-    padding: 1rem;
-    border-radius: 8px;
-    border: 1px solid #dee2e6;
-    max-height: 400px;
-    overflow-y: auto;
-    font-family: monospace;
-    font-size: 0.85rem;
-}
-
-.chat-message {
-    padding: 0.8rem 1rem;
-    margin: 0.5rem 0;
-    border-radius: 8px;
-}
-
-.user-message {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    border-left: 3px solid #2196f3;
-}
-
-.assistant-message {
-    background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
-    border-left: 3px solid #9c27b0;
-}
-
-/* Sidebar styling */
-.css-1d391kg {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.css-1d391kg .css-10trblm {
-    color: white;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-def initialize_session_state():
-    """Initialize session state variables"""
-    if 'analysis_results' not in st.session_state:
-        st.session_state.analysis_results = None
-    if 'analysis_running' not in st.session_state:
-        st.session_state.analysis_running = False
-    if 'agent' not in st.session_state:
-        st.session_state.agent = None
-    if 'config' not in st.session_state:
-        st.session_state.config = None
-    if 'chatbot_messages' not in st.session_state:
-        st.session_state.chatbot_messages = []
-    if 'chatbot_context' not in st.session_state:
-        st.session_state.chatbot_context = None
-
-def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
-    """Safely get a value from a dictionary"""
-    try:
-        return data.get(key, default) if data else default
-    except:
-        return default
-
-def safe_str(value: Any) -> str:
-    """Safely convert any value to string"""
-    try:
-        return str(value) if value is not None else "unknown"
-    except:
-        return "unknown"
-
-def safe_json_dumps(data: Any, default: str = "{}") -> str:
-    """Safely convert data to JSON string"""
-    try:
-        return json.dumps(data, indent=2) if data else default
-    except Exception as e:
-        return f'{{"error": "JSON serialization failed: {str(e)}"}}'
-
-def calculate_age(birth_date):
-    """Calculate age from birth date"""
-    if not birth_date:
-        return None
+class HealthDataProcessor:
+    """Handles all data processing, extraction, and deidentification"""
     
-    today = datetime.now().date()
-    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-    return age
-
-def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
-    """Validate patient data and return validation status and errors"""
-    errors = []
-    required_fields = {
-        'first_name': 'First Name',
-        'last_name': 'Last Name', 
-        'ssn': 'SSN',
-        'date_of_birth': 'Date of Birth',
-        'gender': 'Gender',
-        'zip_code': 'Zip Code'
-    }
+    def __init__(self):
+        logger.info("🔧 HealthDataProcessor initialized")
     
-    for field, display_name in required_fields.items():
-        if not data.get(field):
-            errors.append(f"{display_name} is required")
-        elif field == 'ssn' and len(str(data[field])) < 9:
-            errors.append("SSN must be at least 9 digits")
-        elif field == 'zip_code' and len(str(data[field])) < 5:
-            errors.append("Zip code must be at least 5 digits")
-    
-    if data.get('date_of_birth'):
+    def deidentify_medical_data(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Deidentify medical data with complete JSON processing"""
         try:
-            birth_date = datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date()
-            age = calculate_age(birth_date)
+            if not medical_data:
+                return {"error": "No medical data to deidentify"}
             
-            if age and age > 150:
-                errors.append("Age cannot be greater than 150 years")
-            elif age and age < 0:
-                errors.append("Date of birth cannot be in the future")
-        except:
-            errors.append("Invalid date format")
-    
-    return len(errors) == 0, errors
-
-# Initialize session state
-initialize_session_state()
-
-# Main Title
-st.markdown('<h1 class="main-header">🏥 Health Analysis Agent</h1>', unsafe_allow_html=True)
-
-# Display import status
-if not AGENT_AVAILABLE:
-    st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
-    st.stop()
-
-# SIDEBAR CHATBOT
-with st.sidebar:
-    if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-        st.title("💬 Medical Assistant")
-        st.markdown("---")
-        
-        # Chat history at top
-        chat_container = st.container()
-        with chat_container:
-            if st.session_state.chatbot_messages:
-                for message in st.session_state.chatbot_messages:
-                    with st.chat_message(message["role"]):
-                        st.write(message["content"])
+            # Calculate age
+            try:
+                dob_str = patient_data.get('date_of_birth', '')
+                if dob_str:
+                    dob = datetime.strptime(dob_str, '%Y-%m-%d').date()
+                    today = date.today()
+                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                else:
+                    age = "unknown"
+            except Exception as e:
+                logger.warning(f"Error calculating age: {e}")
+                age = "unknown"
+            
+            # Process the entire JSON structure properly
+            if 'body' in medical_data:
+                raw_medical_data = medical_data['body']
             else:
-                st.info("👋 Hello! I can answer questions about the claims data analysis. Ask me anything!")
-        
-        # Chat input at bottom (always visible)
-        st.markdown("---")
-        user_question = st.chat_input("Ask about the claims data...")
-        
-        # Handle chat input
-        if user_question:
-            # Add user message
-            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
+                raw_medical_data = medical_data
             
-            # Get bot response
-            try:
-                with st.spinner("Processing..."):
-                    chatbot_response = st.session_state.agent.chat_with_data(
-                        user_question, 
-                        st.session_state.chatbot_context, 
-                        st.session_state.chatbot_messages
-                    )
-                
-                # Add assistant response
-                st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-        
-        # Clear chat button at bottom
-        if st.button("🗑️ Clear Chat History", use_container_width=True):
-            st.session_state.chatbot_messages = []
-            st.rerun()
+            # Deep copy and process the entire JSON structure
+            deidentified_medical_data = self._deep_deidentify_json(raw_medical_data)
+            
+            deidentified = {
+                "src_mbr_first_nm": "john",
+                "src_mbr_last_nm": "smith", 
+                "src_mbr_mid_init_nm": None,
+                "src_mbr_age": age,
+                "src_mbr_zip_cd": "12345",
+                "medical_claims_data": deidentified_medical_data,  # Complete processed JSON
+                "original_structure_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "data_type": "medical_claims"
+            }
+            
+            logger.info("✅ Successfully deidentified complete medical claims JSON structure")
+            return deidentified
+            
+        except Exception as e:
+            logger.error(f"Error in medical deidentification: {e}")
+            return {"error": f"Deidentification failed: {str(e)}"}
     
-    else:
-        # Show placeholder when chatbot is not ready
-        st.title("💬 Medical Assistant")
-        st.info("💤 Chatbot will be available after running health analysis")
-        st.markdown("---")
-        st.markdown("**Features:**")
-        st.markdown("• Answer questions about claims data")
-        st.markdown("• Analyze diagnoses and medications") 
-        st.markdown("• Explain heart attack risk factors")
-        st.markdown("• Provide detailed medical insights")
-
-# 1. PATIENT INFORMATION BOX
-st.markdown("""
-<div class="section-box">
-    <div class="section-title">👤 Patient Information</div>
-</div>
-""", unsafe_allow_html=True)
-
-
-with st.container():
-    with st.form("patient_input_form"):
-        col1, col2, col3 = st.columns(3)
+    def deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Deidentify pharmacy data with complete JSON processing"""
+        try:
+            if not pharmacy_data:
+                return {"error": "No pharmacy data to deidentify"}
+            
+            # Process the entire JSON structure properly
+            if 'body' in pharmacy_data:
+                raw_pharmacy_data = pharmacy_data['body']
+            else:
+                raw_pharmacy_data = pharmacy_data
+            
+            # Deep copy and process the entire JSON structure
+            deidentified_pharmacy_data = self._deep_deidentify_json(raw_pharmacy_data)
+            
+            result = {
+                "pharmacy_claims_data": deidentified_pharmacy_data,  # Complete processed JSON
+                "original_structure_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "data_type": "pharmacy_claims"
+            }
+            
+            logger.info("✅ Successfully deidentified complete pharmacy claims JSON structure")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in pharmacy deidentification: {e}")
+            return {"error": f"Deidentification failed: {str(e)}"}
+    
+    def deidentify_mcid_data(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Deidentify MCID data with complete JSON processing"""
+        try:
+            if not mcid_data:
+                return {"error": "No MCID data to deidentify"}
+            
+            # Process the entire JSON structure properly
+            if 'body' in mcid_data:
+                raw_mcid_data = mcid_data['body']
+            else:
+                raw_mcid_data = mcid_data
+            
+            # Deep copy and process the entire JSON structure
+            deidentified_mcid_data = self._deep_deidentify_json(raw_mcid_data)
+            
+            result = {
+                "mcid_claims_data": deidentified_mcid_data,  # Complete processed JSON
+                "original_structure_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "data_type": "mcid_claims"
+            }
+            
+            logger.info("✅ Successfully deidentified complete MCID claims JSON structure")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error in MCID deidentification: {e}")
+            return {"error": f"Deidentification failed: {str(e)}"}
+    
+    def _deep_deidentify_json(self, data: Any) -> Any:
+        """Deep deidentification of entire JSON structure"""
+        try:
+            if isinstance(data, dict):
+                # Process dictionary recursively
+                deidentified_dict = {}
+                for key, value in data.items():
+                    # Deidentify the key if it contains PII indicators
+                    clean_key = self._deidentify_string(key) if isinstance(key, str) else key
+                    # Recursively process the value
+                    deidentified_dict[clean_key] = self._deep_deidentify_json(value)
+                return deidentified_dict
+                
+            elif isinstance(data, list):
+                # Process list recursively
+                return [self._deep_deidentify_json(item) for item in data]
+                
+            elif isinstance(data, str):
+                # Deidentify string values
+                return self._deidentify_string(data)
+                
+            else:
+                # Return primitive types as-is (int, float, bool, None)
+                return data
+                
+        except Exception as e:
+            logger.warning(f"Error in deep deidentification: {e}")
+            return data  # Return original data if deidentification fails
+    
+    def _deidentify_string(self, data: str) -> str:
+        """Enhanced string deidentification"""
+        try:
+            if not isinstance(data, str) or not data.strip():
+                return data
+            
+            # Create a copy to work with
+            deidentified = str(data)
+            
+            # Remove common PII patterns
+            # SSN patterns
+            deidentified = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[SSN_MASKED]', deidentified)
+            
+            # Phone number patterns
+            deidentified = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[PHONE_MASKED]', deidentified)
+            deidentified = re.sub(r'\(\d{3}\)\s?\d{3}[-.]?\d{4}', '[PHONE_MASKED]', deidentified)
+            
+            # Email patterns
+            deidentified = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL_MASKED]', deidentified)
+            
+            # Name patterns (be careful not to remove medical terms)
+            # Only replace if it looks like a full name (First Last)
+            deidentified = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', '[NAME_MASKED]', deidentified)
+            
+            # Address patterns
+            deidentified = re.sub(r'\b\d+\s+[A-Za-z\s]+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd)\b', '[ADDRESS_MASKED]', deidentified, flags=re.IGNORECASE)
+            
+            # Credit card patterns
+            deidentified = re.sub(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b', '[CARD_MASKED]', deidentified)
+            
+            # Date of birth patterns (but keep medical dates)
+            deidentified = re.sub(r'\bDOB:?\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', 'DOB: [DATE_MASKED]', deidentified, flags=re.IGNORECASE)
+            
+            return deidentified
+            
+        except Exception as e:
+            logger.warning(f"Error deidentifying string: {e}")
+            return data  # Return original if deidentification fails
+    
+    def extract_medical_fields(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract hlth_srvc_cd and diag_1_50_cd fields from deidentified medical data"""
+        extraction_result = {
+            "hlth_srvc_records": [],
+            "extraction_summary": {
+                "total_hlth_srvc_records": 0,
+                "total_diagnosis_codes": 0,
+                "unique_service_codes": set(),
+                "unique_diagnosis_codes": set()
+            }
+        }
         
-        with col1:
-            first_name = st.text_input("First Name *", value="")
-            last_name = st.text_input("Last Name *", value="")
-        
-        with col2:
-            ssn = st.text_input("SSN *", value="")
-            date_of_birth = st.date_input(
-                "Date of Birth *", 
-                value=datetime.now().date(),
-                min_value=datetime(1900, 1, 1).date(),
-                max_value=datetime.now().date()
+        try:
+            logger.info("🔍 Starting medical field extraction...")
+            
+            medical_data = deidentified_medical.get("medical_claims_data", {})
+            if not medical_data:
+                logger.warning("No medical claims data found in deidentified medical data")
+                return extraction_result
+            
+            # Recursively extract from the entire JSON structure
+            self._recursive_medical_extraction(medical_data, extraction_result)
+            
+            # Convert sets to lists for JSON serialization
+            extraction_result["extraction_summary"]["unique_service_codes"] = list(
+                extraction_result["extraction_summary"]["unique_service_codes"]
             )
+            extraction_result["extraction_summary"]["unique_diagnosis_codes"] = list(
+                extraction_result["extraction_summary"]["unique_diagnosis_codes"]
+            )
+            
+            logger.info(f"📋 Medical extraction completed: "
+                       f"{extraction_result['extraction_summary']['total_hlth_srvc_records']} health service records, "
+                       f"{extraction_result['extraction_summary']['total_diagnosis_codes']} diagnosis codes")
+            
+        except Exception as e:
+            logger.error(f"Error in medical field extraction: {e}")
+            extraction_result["error"] = f"Medical extraction failed: {str(e)}"
         
-        with col3:
-            gender = st.selectbox("Gender *", ["F", "M"])
-            zip_code = st.text_input("Zip Code *", value="")
-        
-        # Show calculated age
-        if date_of_birth:
-            calculated_age = calculate_age(date_of_birth)
-            if calculated_age is not None:
-                st.info(f"📅 **Calculated Age:** {calculated_age} years old")
-        
-        # 2. RUN HEALTH ANALYSIS BUTTON
-        submitted = st.form_submit_button(
-            "🚀 Run Health Analysis", 
-            use_container_width=True,
-            disabled=st.session_state.analysis_running
-        )
-
-# Analysis Status
-if st.session_state.analysis_running:
-    st.markdown('<div class="status-success">🔄 Health analysis workflow executing... Please wait.</div>', unsafe_allow_html=True)
-
-# Run Health Analysis
-if submitted and not st.session_state.analysis_running:
-    # Prepare patient data
-    patient_data = {
-        "first_name": first_name.strip(),
-        "last_name": last_name.strip(),
-        "ssn": ssn.strip(),
-        "date_of_birth": date_of_birth.strftime("%Y-%m-%d"),
-        "gender": gender,
-        "zip_code": zip_code.strip()
-    }
+        return extraction_result
     
-    # Validate patient data
-    is_valid, validation_errors = validate_patient_data(patient_data)
+    def _recursive_medical_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Recursively search for medical fields in nested data structures"""
+        if isinstance(data, dict):
+            current_record = {}
+            
+            # Extract health service code
+            if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
+                current_record["hlth_srvc_cd"] = data["hlth_srvc_cd"]
+                result["extraction_summary"]["unique_service_codes"].add(str(data["hlth_srvc_cd"]))
+            
+            # Extract claim received date
+            if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
+                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
+            
+            diagnosis_codes = []
+            
+            # Handle comma-separated diagnosis codes in diag_1_50_cd field
+            if "diag_1_50_cd" in data and data["diag_1_50_cd"]:
+                diag_value = str(data["diag_1_50_cd"]).strip()
+                if diag_value and diag_value.lower() not in ['null', 'none', '']:
+                    # Split by comma and process each diagnosis code
+                    individual_codes = [code.strip() for code in diag_value.split(',') if code.strip()]
+                    for i, code in enumerate(individual_codes, 1):
+                        if code and code.lower() not in ['null', 'none', '']:
+                            diagnosis_codes.append({
+                                "code": code,
+                                "position": i,
+                                "source": "diag_1_50_cd (comma-separated)"
+                            })
+                            result["extraction_summary"]["unique_diagnosis_codes"].add(code)
+            
+            # Also handle individual diagnosis fields (diag_1_cd, diag_2_cd, etc.) for backwards compatibility
+            for i in range(1, 51):
+                diag_key = f"diag_{i}_cd"
+                if diag_key in data and data[diag_key]:
+                    diag_code = str(data[diag_key]).strip()
+                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
+                        diagnosis_codes.append({
+                            "code": diag_code,
+                            "position": i,
+                            "source": f"individual field ({diag_key})"
+                        })
+                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
+            
+            if diagnosis_codes:
+                current_record["diagnosis_codes"] = diagnosis_codes
+                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
+            
+            if current_record:
+                current_record["data_path"] = path
+                result["hlth_srvc_records"].append(current_record)
+                result["extraction_summary"]["total_hlth_srvc_records"] += 1
+            
+            # Continue recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._recursive_medical_extraction(value, result, new_path)
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._recursive_medical_extraction(item, result, new_path)
     
-    if not is_valid:
-        st.error("❌ Please fix the following errors:")
-        for error in validation_errors:
-            st.error(f"• {error}")
-    else:
-        # Initialize Health Agent
-        if st.session_state.agent is None:
-            try:
-                config = st.session_state.config or Config()
-                st.session_state.agent = HealthAnalysisAgent(config)
-                st.success("✅ Health Analysis Agent initialized")
-            except Exception as e:
-                st.error(f"❌ Failed to initialize Health Agent: {str(e)}")
-                st.stop()
+    def extract_pharmacy_fields(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract Ndc and lbl_nm fields from deidentified pharmacy data"""
+        extraction_result = {
+            "ndc_records": [],
+            "extraction_summary": {
+                "total_ndc_records": 0,
+                "unique_ndc_codes": set(),
+                "unique_label_names": set()
+            }
+        }
         
-        st.session_state.analysis_running = True
+        try:
+            logger.info("🔍 Starting pharmacy field extraction...")
+            
+            pharmacy_data = deidentified_pharmacy.get("pharmacy_claims_data", {})
+            if not pharmacy_data:
+                logger.warning("No pharmacy claims data found in deidentified pharmacy data")
+                return extraction_result
+            
+            self._recursive_pharmacy_extraction(pharmacy_data, extraction_result)
+            
+            # Convert sets to lists for JSON serialization
+            extraction_result["extraction_summary"]["unique_ndc_codes"] = list(
+                extraction_result["extraction_summary"]["unique_ndc_codes"]
+            )
+            extraction_result["extraction_summary"]["unique_label_names"] = list(
+                extraction_result["extraction_summary"]["unique_label_names"]
+            )
+            
+            logger.info(f"💊 Pharmacy extraction completed: "
+                       f"{extraction_result['extraction_summary']['total_ndc_records']} NDC records")
+            
+        except Exception as e:
+            logger.error(f"Error in pharmacy field extraction: {e}")
+            extraction_result["error"] = f"Pharmacy extraction failed: {str(e)}"
         
-        # Progress tracking
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        return extraction_result
+    
+    def _recursive_pharmacy_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Recursively search for pharmacy fields in nested data structures"""
+        if isinstance(data, dict):
+            current_record = {}
+            
+            # Look for NDC fields with various naming conventions
+            ndc_found = False
+            for key in data:
+                if key.lower() in ['ndc', 'ndc_code', 'ndc_number', 'national_drug_code']:
+                    current_record["ndc"] = data[key]
+                    result["extraction_summary"]["unique_ndc_codes"].add(str(data[key]))
+                    ndc_found = True
+                    break
+            
+            # Look for label name fields with various naming conventions
+            label_found = False
+            for key in data:
+                if key.lower() in ['lbl_nm', 'label_name', 'drug_name', 'medication_name', 'product_name']:
+                    current_record["lbl_nm"] = data[key]
+                    result["extraction_summary"]["unique_label_names"].add(str(data[key]))
+                    label_found = True
+                    break
+            
+            # Extract prescription filled date
+            if "rx_filled_dt" in data and data["rx_filled_dt"]:
+                current_record["rx_filled_dt"] = data["rx_filled_dt"]
+            
+            if ndc_found or label_found or "rx_filled_dt" in current_record:
+                current_record["data_path"] = path
+                result["ndc_records"].append(current_record)
+                result["extraction_summary"]["total_ndc_records"] += 1
+            
+            # Continue recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._recursive_pharmacy_extraction(value, result, new_path)
+                
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._recursive_pharmacy_extraction(item, result, new_path)
+    
+    def extract_health_entities_enhanced(self, pharmacy_data: Dict[str, Any], 
+                                        pharmacy_extraction: Dict[str, Any],
+                                        medical_extraction: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced health entity extraction using pharmacy data, extractions, and medical codes"""
+        entities = {
+            "diabetics": "no",
+            "age_group": "unknown", 
+            "smoking": "no",
+            "alcohol": "no",
+            "blood_pressure": "unknown",
+            "analysis_details": [],
+            "medical_conditions": [],
+            "medications_identified": []
+        }
         
-        with st.spinner("🚀 Executing health analysis..."):
-            try:
-                # Progress updates
-                for i, step in enumerate([
-                    "Initializing workflow...",
-                    "Fetching claims data...", 
-                    "Deidentifying claims data...",
-                    "Extracting claims information...",
-                    "Analyzing health trajectory...",
-                    "Predicting heart attack risk...",
-                    "Initializing chatbot..."
-                ]):
-                    status_text.text(f"🔄 {step}")
-                    progress_bar.progress(int((i + 1) * 14))
-                    time.sleep(0.3)
+        try:
+            # Analyze original pharmacy data
+            if pharmacy_data:
+                data_str = json.dumps(pharmacy_data).lower()
+                self._analyze_pharmacy_for_entities(data_str, entities)
+            
+            # Analyze structured pharmacy extraction
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                self._analyze_pharmacy_extraction_for_entities(pharmacy_extraction, entities)
+            
+            # Analyze medical extraction for conditions
+            if medical_extraction and medical_extraction.get("hlth_srvc_records"):
+                self._analyze_medical_extraction_for_entities(medical_extraction, entities)
+            
+            entities["analysis_details"].append(f"Total analysis sources: Pharmacy data, {len(pharmacy_extraction.get('ndc_records', []))} pharmacy records, {len(medical_extraction.get('hlth_srvc_records', []))} medical records")
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced entity extraction: {e}")
+            entities["analysis_details"].append(f"Error in entity extraction: {str(e)}")
+        
+        return entities
+    
+    def _analyze_pharmacy_for_entities(self, data_str: str, entities: Dict[str, Any]):
+        """Original pharmacy data analysis for entities"""
+        diabetes_keywords = [
+            'insulin', 'metformin', 'glipizide', 'diabetes', 'diabetic', 
+            'glucophage', 'lantus', 'humalog', 'novolog', 'levemir'
+        ]
+        for keyword in diabetes_keywords:
+            if keyword in data_str:
+                entities["diabetics"] = "yes"
+                entities["analysis_details"].append(f"Diabetes indicator found in pharmacy data: {keyword}")
+                break
+        
+        senior_medications = [
+            'aricept', 'warfarin', 'lisinopril', 'atorvastatin', 'metoprolol',
+            'furosemide', 'amlodipine', 'simvastatin'
+        ]
+        adult_medications = [
+            'adderall', 'vyvanse', 'accutane', 'birth control'
+        ]
+        
+        for med in senior_medications:
+            if med in data_str:
+                entities["age_group"] = "senior"
+                entities["analysis_details"].append(f"Senior medication found: {med}")
+                break
+        
+        if entities["age_group"] == "unknown":
+            for med in adult_medications:
+                if med in data_str:
+                    entities["age_group"] = "adult"
+                    entities["analysis_details"].append(f"Adult medication found: {med}")
+                    break
+    
+    def _analyze_pharmacy_extraction_for_entities(self, pharmacy_extraction: Dict[str, Any], entities: Dict[str, Any]):
+        """Analyze structured pharmacy extraction for health entities"""
+        ndc_records = pharmacy_extraction.get("ndc_records", [])
+        
+        for record in ndc_records:
+            ndc = record.get("ndc", "")
+            lbl_nm = record.get("lbl_nm", "")
+            
+            if lbl_nm:
+                entities["medications_identified"].append({
+                    "ndc": ndc,
+                    "label_name": lbl_nm,
+                    "path": record.get("data_path", "")
+                })
                 
-                # Execute analysis
-                results = st.session_state.agent.run_analysis(patient_data)
+                lbl_lower = lbl_nm.lower()
                 
-                if results.get("success", False):
-                    progress_bar.progress(100)
-                    status_text.text("✅ Analysis completed successfully!")
-                    st.session_state.analysis_results = results
-                    st.session_state.chatbot_context = results.get("chatbot_context", {})
-                    st.markdown('<div class="status-success">✅ Health analysis completed successfully!</div>', unsafe_allow_html=True)
-                    
-                    # Ensure chatbot is properly loaded with comprehensive context
-                    if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-                        st.success("💬 Medical Assistant is now available in the sidebar with full access to all claims data!")
-                        st.info("🎯 You can ask detailed questions about diagnoses, medications, dates, medical codes, and more!")
-                        
-                        # Display brief summary of available data for chatbot
-                        context_summary = []
-                        if safe_get(results, 'structured_extractions', {}).get('medical', {}).get('hlth_srvc_records'):
-                            medical_count = len(safe_get(results, 'structured_extractions', {})['medical']['hlth_srvc_records'])
-                            context_summary.append(f"📋 {medical_count} medical records")
-                        
-                        if safe_get(results, 'structured_extractions', {}).get('pharmacy', {}).get('ndc_records'):
-                            pharmacy_count = len(safe_get(results, 'structured_extractions', {})['pharmacy']['ndc_records'])
-                            context_summary.append(f"💊 {pharmacy_count} pharmacy records")
-                        
-                        if safe_get(results, 'heart_attack_prediction', {}):
-                            context_summary.append("❤️ heart attack prediction")
-                        
-                        if context_summary:
-                            st.info(f"📊 Chatbot has access to: {', '.join(context_summary)}")
-                        
-                        # Force page refresh to open sidebar
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("⚠️ Chatbot initialization incomplete. Some features may not be available.")
-                else:
-                    st.session_state.analysis_results = results
-                    st.warning("⚠️ Analysis completed with some errors.")
+                if any(word in lbl_lower for word in ['insulin', 'metformin', 'glucophage', 'diabetes']):
+                    entities["diabetics"] = "yes"
+                    entities["analysis_details"].append(f"Diabetes medication found in extraction: {lbl_nm}")
                 
-            except Exception as e:
-                st.error(f"❌ Analysis failed: {str(e)}")
-                st.session_state.analysis_results = {
-                    "success": False,
-                    "error": str(e),
-                    "patient_data": patient_data,
-                    "errors": [str(e)]
+                if any(word in lbl_lower for word in ['lisinopril', 'amlodipine', 'metoprolol', 'blood pressure']):
+                    entities["blood_pressure"] = "managed"
+                    entities["analysis_details"].append(f"Blood pressure medication found in extraction: {lbl_nm}")
+    
+    def _analyze_medical_extraction_for_entities(self, medical_extraction: Dict[str, Any], entities: Dict[str, Any]):
+        """Analyze medical codes for health conditions"""
+        hlth_srvc_records = medical_extraction.get("hlth_srvc_records", [])
+        
+        condition_mappings = {
+            "diabetes": ["E10", "E11", "E12", "E13", "E14"],
+            "hypertension": ["I10", "I11", "I12", "I13", "I15"],
+            "smoking": ["Z72.0", "F17"],
+            "alcohol": ["F10", "Z72.1"],
+        }
+        
+        for record in hlth_srvc_records:
+            diagnosis_codes = record.get("diagnosis_codes", [])
+            for diag in diagnosis_codes:
+                diag_code = diag.get("code", "")
+                if diag_code:
+                    for condition, code_prefixes in condition_mappings.items():
+                        if any(diag_code.startswith(prefix) for prefix in code_prefixes):
+                            if condition == "diabetes":
+                                entities["diabetics"] = "yes"
+                                entities["medical_conditions"].append(f"Diabetes (ICD-10: {diag_code})")
+                            elif condition == "hypertension":
+                                entities["blood_pressure"] = "diagnosed"
+                                entities["medical_conditions"].append(f"Hypertension (ICD-10: {diag_code})")
+                            elif condition == "smoking":
+                                entities["smoking"] = "yes"
+                                entities["medical_conditions"].append(f"Smoking (ICD-10: {diag_code})")
+                            
+                            entities["analysis_details"].append(f"Medical condition identified from ICD-10 {diag_code}: {condition}")
+    
+    def prepare_chunked_context(self, chat_context: Dict[str, Any]) -> str:
+        """Prepare comprehensive context in chunks to avoid payload issues"""
+        try:
+            context_sections = []
+            
+            # 1. Patient Overview (small)
+            patient_overview = chat_context.get("patient_overview", {})
+            if patient_overview:
+                context_sections.append(f"PATIENT OVERVIEW:\n{json.dumps(patient_overview, indent=2)}")
+            
+            # 2. Deidentified Claims Data (chunked)
+            deidentified_medical = chat_context.get("deidentified_medical", {})
+            if deidentified_medical:
+                medical_summary = {
+                    "patient_info": {
+                        "name": f"{deidentified_medical.get('src_mbr_first_nm', 'N/A')} {deidentified_medical.get('src_mbr_last_nm', 'N/A')}",
+                        "age": deidentified_medical.get('src_mbr_age', 'N/A'),
+                        "zip": deidentified_medical.get('src_mbr_zip_cd', 'N/A')
+                    },
+                    "complete_medical_claims_data": deidentified_medical.get('medical_claims_data', {})
                 }
-            finally:
-                st.session_state.analysis_running = False
-
-# Display Results if Available
-if st.session_state.analysis_results:
-    results = st.session_state.analysis_results
-    
-    # Show errors if any
-    errors = safe_get(results, 'errors', [])
-    if errors:
-        st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
-
-    # 3. CLAIMS DATA BUTTON
-    if st.button("📊 Claims Data", use_container_width=True):
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">📊 Deidentified Claims Data</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        deidentified_data = safe_get(results, 'deidentified_data', {})
-        
-        if deidentified_data:
-            tab1, tab2, tab3 = st.tabs(["🏥 Medical Claims", "💊 Pharmacy Claims", "🆔 MCID Claims"])
+                context_sections.append(f"DEIDENTIFIED MEDICAL CLAIMS DATA:\n{json.dumps(medical_summary, indent=2)}")
             
-            with tab1:
-                medical_data = safe_get(deidentified_data, 'medical', {})
-                if medical_data:
-                    st.markdown("**🏥 Deidentified Medical Claims Data (Complete Raw JSON):**")
-                    
-                    # Show the complete medical claims data
-                    medical_claims_data = medical_data.get('medical_claims_data', {})
-                    if medical_claims_data:
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(medical_claims_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.json(medical_data)
-                    
-                    st.download_button(
-                        "📥 Download Medical Claims Data JSON",
-                        safe_json_dumps(medical_data),
-                        f"medical_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("No medical claims data available")
+            # 3. Deidentified Pharmacy Claims Data
+            deidentified_pharmacy = chat_context.get("deidentified_pharmacy", {})
+            if deidentified_pharmacy:
+                pharmacy_summary = {
+                    "complete_pharmacy_claims_data": deidentified_pharmacy.get('pharmacy_claims_data', {})
+                }
+                context_sections.append(f"DEIDENTIFIED PHARMACY CLAIMS DATA:\n{json.dumps(pharmacy_summary, indent=2)}")
             
-            with tab2:
-                pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
-                if pharmacy_data:
-                    st.markdown("**💊 Deidentified Pharmacy Claims Data (Complete Raw JSON):**")
-                    
-                    # Show the complete pharmacy claims data
-                    pharmacy_claims_data = pharmacy_data.get('pharmacy_claims_data', {})
-                    if pharmacy_claims_data:
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(pharmacy_claims_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.json(pharmacy_data)
-                    
-                    st.download_button(
-                        "📥 Download Pharmacy Claims Data JSON",
-                        safe_json_dumps(pharmacy_data),
-                        f"pharmacy_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("No pharmacy claims data available")
+            # 4. Deidentified MCID Claims Data
+            deidentified_mcid = chat_context.get("deidentified_mcid", {})
+            if deidentified_mcid:
+                mcid_summary = {
+                    "complete_mcid_claims_data": deidentified_mcid.get('mcid_claims_data', {})
+                }
+                context_sections.append(f"DEIDENTIFIED MCID CLAIMS DATA:\n{json.dumps(mcid_summary, indent=2)}")
             
-            with tab3:
-                mcid_data = safe_get(deidentified_data, 'mcid', {})
-                if mcid_data:
-                    st.markdown("**🆔 Deidentified MCID Claims Data (Complete Raw JSON):**")
-                    
-                    # Show the complete MCID claims data
-                    mcid_claims_data = mcid_data.get('mcid_claims_data', {})
-                    if mcid_claims_data:
-                        st.markdown('<div class="json-container">', unsafe_allow_html=True)
-                        st.json(mcid_claims_data)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.json(mcid_data)
-                    
-                    st.download_button(
-                        "📥 Download MCID Claims Data JSON",
-                        safe_json_dumps(mcid_data),
-                        f"mcid_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-                else:
-                    st.warning("No MCID claims data available")
-
-    # 4. MEDICAL/PHARMACY CLAIMS DATA EXTRACTION BUTTON
-    if st.button("🔍 Claims Data Extraction", use_container_width=True):
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">🔍 Claims Data Field Extraction</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        structured_extractions = safe_get(results, 'structured_extractions', {})
-        
-        if structured_extractions:
-            tab1, tab2 = st.tabs(["🏥 Medical Claims Extraction", "💊 Pharmacy Claims Extraction"])
+            # 5. Medical Extractions (detailed)
+            medical_extraction = chat_context.get("medical_extraction", {})
+            if medical_extraction and not medical_extraction.get('error'):
+                extraction_summary = medical_extraction.get('extraction_summary', {})
+                hlth_records = medical_extraction.get('hlth_srvc_records', [])
+                
+                medical_details = {
+                    "summary": extraction_summary,
+                    "health_service_records": hlth_records[:10] if len(hlth_records) > 10 else hlth_records
+                }
+                context_sections.append(f"MEDICAL EXTRACTIONS:\n{json.dumps(medical_details, indent=2)}")
             
-            with tab1:
-                medical_extraction = safe_get(structured_extractions, 'medical', {})
-                if medical_extraction and not medical_extraction.get('error'):
-                    extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
-                    
-                    st.markdown("**📊 Medical Claims Extraction Summary:**")
-                    st.markdown(f"""
-                    <div class="metric-grid">
-                        <div class="metric-card">
-                            <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
-                            <p>Health Service Records</p>
-                        </div>
-                        <div class="metric-card">
-                            <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
-                            <p>Diagnosis Codes</p>
-                        </div>
-                        <div class="metric-card">
-                            <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
-                            <p>Unique Service Codes</p>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
-                    if hlth_srvc_records:
-                        st.markdown("**📋 Extracted Medical Claims Records:**")
-                        for i, record in enumerate(hlth_srvc_records, 1):
-                            with st.expander(f"Medical Record {i} - Service Code: {record.get('hlth_srvc_cd', 'N/A')}"):
-                                st.write(f"**Service Code:** `{record.get('hlth_srvc_cd', 'N/A')}`")
-                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
-                                
-                                diagnosis_codes = record.get('diagnosis_codes', [])
-                                if diagnosis_codes:
-                                    st.write("**Diagnosis Codes:**")
-                                    for idx, diag in enumerate(diagnosis_codes, 1):
-                                        source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
-                                        st.write(f"  {idx}. `{diag.get('code', 'N/A')}`{source_info}")
-                else:
-                    st.warning("No medical claims extraction data available")
+            # 6. Pharmacy Extractions (detailed)
+            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
+            if pharmacy_extraction and not pharmacy_extraction.get('error'):
+                extraction_summary = pharmacy_extraction.get('extraction_summary', {})
+                ndc_records = pharmacy_extraction.get('ndc_records', [])
+                
+                pharmacy_details = {
+                    "summary": extraction_summary,
+                    "ndc_records": ndc_records[:15] if len(ndc_records) > 15 else ndc_records
+                }
+                context_sections.append(f"PHARMACY EXTRACTIONS:\n{json.dumps(pharmacy_details, indent=2)}")
             
-            with tab2:
-                pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
-                if pharmacy_extraction and not pharmacy_extraction.get('error'):
-                    extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
-                    
-                    st.markdown("**📊 Pharmacy Claims Extraction Summary:**")
-                    st.markdown(f"""
-                    <div class="metric-grid">
-                        <div class="metric-card">
-                            <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
-                            <p>NDC Records</p>
-                        </div>
-                        <div class="metric-card">
-                            <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
-                            <p>Unique NDC Codes</p>
-                        </div>
-                        <div class="metric-card">
-                            <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
-                            <p>Unique Medications</p>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
-                    if ndc_records:
-                        st.markdown("**💊 Extracted Pharmacy Claims Records:**")
-                        for i, record in enumerate(ndc_records, 1):
-                            with st.expander(f"Pharmacy Record {i} - {record.get('lbl_nm', 'N/A')}"):
-                                st.write(f"**NDC Code:** `{record.get('ndc', 'N/A')}`")
-                                st.write(f"**Label Name:** `{record.get('lbl_nm', 'N/A')}`")
-                                st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
-                else:
-                    st.warning("No pharmacy claims extraction data available")
-
-    # 5. ENHANCED ENTITY EXTRACTION BUTTON
-    if st.button("🎯 Enhanced Entity Extraction", use_container_width=True):
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">🎯 Enhanced Entity Extraction</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        entity_extraction = safe_get(results, 'entity_extraction', {})
-        if entity_extraction:
-            # Entity cards
-            st.markdown(f"""
-            <div class="metric-grid">
-                <div class="metric-card">
-                    <h3>🩺</h3>
-                    <p><strong>Diabetes</strong></p>
-                    <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
-                </div>
-                <div class="metric-card">
-                    <h3>👥</h3>
-                    <p><strong>Age Group</strong></p>
-                    <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
-                </div>
-                <div class="metric-card">
-                    <h3>🚬</h3>
-                    <p><strong>Smoking</strong></p>
-                    <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
-                </div>
-                <div class="metric-card">
-                    <h3>🍷</h3>
-                    <p><strong>Alcohol</strong></p>
-                    <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
-                </div>
-                <div class="metric-card">
-                    <h3>💓</h3>
-                    <p><strong>Blood Pressure</strong></p>
-                    <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            # 7. Entity Extraction (small)
+            entity_extraction = chat_context.get("entity_extraction", {})
+            if entity_extraction:
+                context_sections.append(f"HEALTH ENTITIES:\n{json.dumps(entity_extraction, indent=2)}")
             
-            # Medical conditions
-            medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
-            if medical_conditions:
-                st.markdown("**🏥 Medical Conditions Identified:**")
-                for condition in medical_conditions:
-                    st.write(f"• {condition}")
+            # 8. Heart Attack Prediction (small)
+            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
+            if heart_attack_prediction:
+                context_sections.append(f"HEART ATTACK PREDICTION:\n{json.dumps(heart_attack_prediction, indent=2)}")
             
-            # Medications identified
-            medications_identified = safe_get(entity_extraction, 'medications_identified', [])
-            if medications_identified:
-                st.markdown("**💊 Medications Identified:**")
-                for med in medications_identified:
-                    st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
-
-    # 6. HEALTH TRAJECTORY BUTTON
-    if st.button("📈 Health Trajectory", use_container_width=True):
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">📈 Health Trajectory Analysis</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        health_trajectory = safe_get(results, 'health_trajectory', '')
-        if health_trajectory:
-            st.markdown(health_trajectory)
-        else:
-            st.warning("Health trajectory analysis not available")
-
-    # 7. FINAL SUMMARY BUTTON
-    if st.button("📋 Final Summary", use_container_width=True):
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">📋 Clinical Summary</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        final_summary = safe_get(results, 'final_summary', '')
-        if final_summary:
-            st.markdown(final_summary)
-        else:
-            st.warning("Final summary not available")
-
-    # 8. HEART ATTACK RISK PREDICTION BUTTON
-    if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True):
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">❤️ Heart Attack Risk Assessment (FastAPI Server)</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
-        if heart_attack_prediction and not heart_attack_prediction.get('error'):
-            # Display simplified format as requested
-            combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
-            risk_display = heart_attack_prediction.get("risk_display", "Heart Disease Risk: Not available")
-            confidence_display = heart_attack_prediction.get("confidence_display", "Confidence: Not available")
+            # Join all sections
+            return "\n\n" + "\n\n".join(context_sections)
             
-            # Clean display without extra styling
-            st.markdown(f"""
-            <div style="background: #f8f9fa; padding: 2rem; border-radius: 10px; border: 1px solid #dee2e6; margin: 1rem 0; text-align: center;">
-                <h3 style="color: #2c3e50; margin-bottom: 1rem;">FastAPI Heart Attack Prediction</h3>
-                <h4 style="color: #495057; font-weight: 600;">{combined_display}</h4>
-                <p style="color: #6c757d; margin-top: 1rem; font-size: 0.9rem;">
-                    Prediction from FastAPI ML Server: {heart_attack_prediction.get('fastapi_server_url', 'Unknown')}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        else:
-            error_msg = heart_attack_prediction.get('error', 'Heart attack prediction not available')
-            st.error(f"❌ FastAPI Server Error: {error_msg}")
-            
-            # Show connection info for debugging
-            st.info(f"💡 Expected FastAPI Server: {st.session_state.config.heart_attack_api_url if st.session_state.config else 'http://localhost:8080'}")
-            st.info("💡 Make sure FastAPI server is running: `python app.py`")
+        except Exception as e:
+            logger.error(f"Error preparing chunked context: {e}")
+            return "Patient claims data available for analysis."
