@@ -45,7 +45,7 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
-# Advanced CSS for sophisticated animation and UI
+# Simplified CSS that actually works with Streamlit
 st.markdown("""
 <style>
 .main-header {
@@ -138,368 +138,14 @@ st.markdown("""
     box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
 }
 
-/* Advanced Deep Research Workflow Container */
-.advanced-workflow-container {
+/* Simple workflow container that works */
+.workflow-container {
     background: linear-gradient(135deg, #2c3e50 0%, #3498db 50%, #9b59b6 100%);
-    padding: 2.5rem;
+    padding: 2rem;
     border-radius: 20px;
     margin: 2rem 0;
     color: white;
     box-shadow: 0 15px 35px rgba(52, 152, 219, 0.3);
-    border: 2px solid rgba(255, 255, 255, 0.1);
-    position: relative;
-    overflow: hidden;
-}
-
-.advanced-workflow-container::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(45deg, rgba(255,255,255,0.1) 0%, transparent 50%, rgba(255,255,255,0.1) 100%);
-    animation: shimmer 3s infinite;
-}
-
-@keyframes shimmer {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
-}
-
-.workflow-header {
-    text-align: center;
-    margin-bottom: 2rem;
-    position: relative;
-    z-index: 2;
-}
-
-.workflow-title {
-    font-size: 2rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-}
-
-.workflow-subtitle {
-    font-size: 1.1rem;
-    opacity: 0.9;
-    margin-bottom: 1.5rem;
-}
-
-.progress-section {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 15px;
-    padding: 1.5rem;
-    margin-bottom: 2rem;
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    position: relative;
-    z-index: 2;
-}
-
-.progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-}
-
-.progress-stats {
-    display: flex;
-    gap: 2rem;
-    justify-content: center;
-    margin-bottom: 1rem;
-}
-
-.progress-stat {
-    text-align: center;
-    background: rgba(255, 255, 255, 0.15);
-    padding: 1rem;
-    border-radius: 10px;
-    min-width: 120px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.progress-stat-number {
-    font-size: 1.8rem;
-    font-weight: 700;
-    display: block;
-    color: #fff;
-}
-
-.progress-stat-label {
-    font-size: 0.9rem;
-    opacity: 0.8;
-    margin-top: 0.5rem;
-}
-
-.advanced-progress-bar {
-    height: 12px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 20px;
-    overflow: hidden;
-    position: relative;
-    margin: 1rem 0;
-}
-
-.advanced-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #00ff87, #60efff, #ff6b9d);
-    border-radius: 20px;
-    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-}
-
-.advanced-progress-fill::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
-    animation: progress-shine 2s infinite;
-}
-
-@keyframes progress-shine {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
-}
-
-.steps-container {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 15px;
-    padding: 1.5rem;
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    position: relative;
-    z-index: 2;
-}
-
-.step-item {
-    display: flex;
-    align-items: center;
-    padding: 1.2rem;
-    margin: 0.8rem 0;
-    border-radius: 12px;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-}
-
-.step-item::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 12px;
-    transition: all 0.4s ease;
-}
-
-.step-pending {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.step-running {
-    background: linear-gradient(135deg, rgba(255, 193, 7, 0.2), rgba(255, 152, 0, 0.2));
-    border: 1px solid rgba(255, 193, 7, 0.4);
-    animation: pulse-glow 1.5s infinite;
-    box-shadow: 0 8px 25px rgba(255, 193, 7, 0.3);
-}
-
-.step-completed {
-    background: linear-gradient(135deg, rgba(40, 167, 69, 0.2), rgba(32, 201, 151, 0.2));
-    border: 1px solid rgba(40, 167, 69, 0.4);
-    box-shadow: 0 8px 25px rgba(40, 167, 69, 0.2);
-}
-
-.step-error {
-    background: linear-gradient(135deg, rgba(220, 53, 69, 0.2), rgba(255, 107, 107, 0.2));
-    border: 1px solid rgba(220, 53, 69, 0.4);
-    animation: error-shake 0.6s ease-in-out;
-}
-
-@keyframes pulse-glow {
-    0%, 100% { 
-        box-shadow: 0 8px 25px rgba(255, 193, 7, 0.3);
-        transform: scale(1);
-    }
-    50% { 
-        box-shadow: 0 12px 35px rgba(255, 193, 7, 0.5);
-        transform: scale(1.02);
-    }
-}
-
-@keyframes error-shake {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-8px); }
-    75% { transform: translateX(8px); }
-}
-
-.step-icon {
-    width: 50px;
-    height: 50px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2rem;
-    font-weight: 700;
-    margin-right: 1.5rem;
-    transition: all 0.4s ease;
-    position: relative;
-    z-index: 3;
-}
-
-.step-icon-pending {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.6);
-    border: 2px solid rgba(255, 255, 255, 0.2);
-}
-
-.step-icon-running {
-    background: linear-gradient(135deg, #ffc107, #ff8f00);
-    color: #000;
-    border: 2px solid #ffca28;
-    animation: icon-spin 2s linear infinite;
-    box-shadow: 0 0 20px rgba(255, 193, 7, 0.6);
-}
-
-.step-icon-completed {
-    background: linear-gradient(135deg, #28a745, #20c997);
-    color: white;
-    border: 2px solid #34ce57;
-    box-shadow: 0 0 15px rgba(40, 167, 69, 0.5);
-}
-
-.step-icon-error {
-    background: linear-gradient(135deg, #dc3545, #ff6b6b);
-    color: white;
-    border: 2px solid #e74c3c;
-    box-shadow: 0 0 15px rgba(220, 53, 69, 0.5);
-}
-
-@keyframes icon-spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.step-content {
-    flex: 1;
-    position: relative;
-    z-index: 3;
-}
-
-.step-title {
-    font-size: 1.2rem;
-    font-weight: 600;
-    margin-bottom: 0.5rem;
-    transition: all 0.3s ease;
-}
-
-.step-description {
-    font-size: 0.95rem;
-    opacity: 0.85;
-    line-height: 1.4;
-}
-
-.step-status {
-    margin-left: auto;
-    padding: 0.5rem 1rem;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    position: relative;
-    z-index: 3;
-}
-
-.status-pending {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.7);
-}
-
-.status-running {
-    background: linear-gradient(135deg, #ffc107, #ff8f00);
-    color: #000;
-    animation: status-pulse 1.5s infinite;
-}
-
-.status-completed {
-    background: linear-gradient(135deg, #28a745, #20c997);
-    color: white;
-}
-
-.status-error {
-    background: linear-gradient(135deg, #dc3545, #ff6b6b);
-    color: white;
-}
-
-@keyframes status-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.8; }
-}
-
-.current-step-highlight {
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 4px;
-    height: 60%;
-    background: linear-gradient(180deg, #00ff87, #60efff);
-    border-radius: 2px;
-    animation: highlight-pulse 2s infinite;
-}
-
-@keyframes highlight-pulse {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
-}
-
-.next-step-preview {
-    background: rgba(255, 255, 255, 0.08);
-    border: 2px dashed rgba(255, 255, 255, 0.3);
-    border-radius: 12px;
-    padding: 1rem;
-    margin-top: 1rem;
-    text-align: center;
-    color: rgba(255, 255, 255, 0.8);
-    font-style: italic;
-    animation: preview-fade 2s infinite;
-    position: relative;
-    z-index: 2;
-}
-
-@keyframes preview-fade {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 0.9; }
-}
-
-.workflow-footer {
-    text-align: center;
-    margin-top: 2rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    position: relative;
-    z-index: 2;
-}
-
-.analysis-status {
-    font-size: 1.1rem;
-    font-weight: 500;
-    opacity: 0.9;
-    animation: status-breathe 3s infinite;
-}
-
-@keyframes status-breathe {
-    0%, 100% { opacity: 0.7; }
-    50% { opacity: 1; }
 }
 
 /* Sidebar styling */
@@ -543,7 +189,7 @@ def initialize_session_state():
     if 'show_heart_attack' not in st.session_state:
         st.session_state.show_heart_attack = False
     
-    # Advanced workflow steps tracking
+    # Workflow steps tracking using native Streamlit components
     if 'workflow_steps' not in st.session_state:
         st.session_state.workflow_steps = [
             {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡'},
@@ -574,8 +220,8 @@ def reset_workflow():
     ]
     st.session_state.current_step = 0
 
-def display_advanced_workflow_animation():
-    """Display advanced professional workflow animation"""
+def display_native_workflow_animation():
+    """Display workflow animation using ONLY Streamlit native components"""
     
     # Calculate progress statistics
     total_steps = len(st.session_state.workflow_steps)
@@ -583,43 +229,33 @@ def display_advanced_workflow_animation():
     running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
     progress_percentage = (completed_steps / total_steps) * 100
     
-    # Main container with advanced styling
-    st.markdown("""
-    <div class="advanced-workflow-container">
-        <div class="workflow-header">
-            <div class="workflow-title">🔬 Deep Research Analysis</div>
-            <div class="workflow-subtitle">Advanced Healthcare Data Processing Pipeline</div>
-        </div>
-        
-        <div class="progress-section">
-            <div class="progress-stats">
-                <div class="progress-stat">
-                    <span class="progress-stat-number">{}</span>
-                    <div class="progress-stat-label">Total Steps</div>
-                </div>
-                <div class="progress-stat">
-                    <span class="progress-stat-number">{}</span>
-                    <div class="progress-stat-label">Completed</div>
-                </div>
-                <div class="progress-stat">
-                    <span class="progress-stat-number">{}</span>
-                    <div class="progress-stat-label">Running</div>
-                </div>
-                <div class="progress-stat">
-                    <span class="progress-stat-number">{:.0f}%</span>
-                    <div class="progress-stat-label">Progress</div>
-                </div>
-            </div>
-            
-            <div class="advanced-progress-bar">
-                <div class="advanced-progress-fill" style="width: {}%;"></div>
-            </div>
-        </div>
-        
-        <div class="steps-container">
-    """.format(total_steps, completed_steps, running_steps, progress_percentage, progress_percentage), unsafe_allow_html=True)
+    # Container with simple styling that works
+    st.markdown('<div class="workflow-container">', unsafe_allow_html=True)
     
-    # Display each step with advanced styling
+    # Header - using native Streamlit
+    st.markdown("### 🔬 Deep Research Analysis Workflow")
+    st.markdown("*Advanced Healthcare Data Processing Pipeline*")
+    
+    # Progress stats using native columns
+    st.markdown("---")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Steps", total_steps)
+    with col2:
+        st.metric("Completed", completed_steps)
+    with col3:
+        st.metric("Running", running_steps)
+    with col4:
+        st.metric("Progress", f"{progress_percentage:.0f}%")
+    
+    # Progress bar using native Streamlit
+    st.progress(progress_percentage / 100, text=f"Overall Progress: {progress_percentage:.0f}%")
+    
+    st.markdown("---")
+    st.markdown("#### Workflow Steps:")
+    
+    # Display steps using native Streamlit components
     for i, step in enumerate(st.session_state.workflow_steps):
         step_number = i + 1
         name = step['name']
@@ -627,83 +263,59 @@ def display_advanced_workflow_animation():
         description = step['description']
         icon = step['icon']
         
-        # Determine CSS classes based on status
-        if status == 'pending':
-            step_class = "step-pending"
-            icon_class = "step-icon-pending"
-            status_class = "status-pending"
-            icon_content = str(step_number)
-            status_text = "Pending"
-        elif status == 'running':
-            step_class = "step-running"
-            icon_class = "step-icon-running"
-            status_class = "status-running"
-            icon_content = "●"
-            status_text = "Processing"
-        elif status == 'completed':
-            step_class = "step-completed"
-            icon_class = "step-icon-completed"
-            status_class = "status-completed"
-            icon_content = "✓"
-            status_text = "Complete"
-        elif status == 'error':
-            step_class = "step-error"
-            icon_class = "step-icon-error"
-            status_class = "status-error"
-            icon_content = "✗"
-            status_text = "Error"
-        else:
-            step_class = "step-pending"
-            icon_class = "step-icon-pending"
-            status_class = "status-pending"
-            icon_content = str(step_number)
-            status_text = "Waiting"
+        # Create columns for each step
+        icon_col, content_col, status_col = st.columns([1, 6, 2])
         
-        # Add current step highlight
-        highlight = '<div class="current-step-highlight"></div>' if status == 'running' else ''
+        with icon_col:
+            if status == 'pending':
+                st.write(f"**{step_number}**")
+            elif status == 'running':
+                st.write("🔄")
+            elif status == 'completed':
+                st.write("✅")
+            elif status == 'error':
+                st.write("❌")
         
-        st.markdown(f"""
-            <div class="step-item {step_class}">
-                {highlight}
-                <div class="step-icon {icon_class}">
-                    {icon_content}
-                </div>
-                <div class="step-content">
-                    <div class="step-title">{icon} {name}</div>
-                    <div class="step-description">{description}</div>
-                </div>
-                <div class="step-status {status_class}">
-                    {status_text}
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
+        with content_col:
+            if status == 'running':
+                st.markdown(f"**{icon} {name}** ⚡")
+                st.caption(f"🔄 {description}")
+            elif status == 'completed':
+                st.markdown(f"~~{icon} {name}~~ ✅")
+                st.caption(f"✅ {description}")
+            elif status == 'error':
+                st.markdown(f"**{icon} {name}** ❌")
+                st.caption(f"❌ {description}")
+            else:
+                st.markdown(f"{icon} {name}")
+                st.caption(description)
+        
+        with status_col:
+            if status == 'running':
+                st.info("Processing")
+            elif status == 'completed':
+                st.success("Complete")
+            elif status == 'error':
+                st.error("Failed")
+            else:
+                st.write("Waiting")
+        
+        # Add separator between steps
+        if i < len(st.session_state.workflow_steps) - 1:
+            st.markdown("---")
     
-    # Show next step preview if applicable
-    if st.session_state.current_step > 0 and st.session_state.current_step < total_steps:
-        next_step = st.session_state.workflow_steps[st.session_state.current_step]
-        st.markdown(f"""
-            <div class="next-step-preview">
-                🔄 Next: {next_step['icon']} {next_step['name']}
-            </div>
-        """, unsafe_allow_html=True)
-    
-    # Workflow footer
+    # Current status message
+    st.markdown("---")
     if running_steps > 0:
         current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
-        status_message = f"Currently executing: {current_step_name}"
+        st.info(f"🔄 **Currently executing:** {current_step_name}")
     elif completed_steps == total_steps:
-        status_message = "All workflow steps completed successfully!"
+        st.success("🎉 **All workflow steps completed successfully!**")
     else:
-        status_message = "Comprehensive healthcare data analysis in progress..."
+        st.info("⏳ **Comprehensive healthcare data analysis in progress...**")
     
-    st.markdown(f"""
-        </div>
-        
-        <div class="workflow-footer">
-            <div class="analysis-status">{status_message}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Close container
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
     """Safely get a value from a dictionary"""
@@ -881,13 +493,13 @@ with st.container():
             type="primary"
         )
 
-# Advanced Animation container
+# Animation container
 animation_container = st.empty()
 
-# Show advanced animation when running
+# Show native animation when running
 if st.session_state.analysis_running and st.session_state.show_animation:
     with animation_container.container():
-        display_advanced_workflow_animation()
+        display_native_workflow_animation()
 
 # Run Deep Research Analysis
 if submitted and not st.session_state.analysis_running:
@@ -921,42 +533,42 @@ if submitted and not st.session_state.analysis_running:
                 st.error("💡 Please check that all required modules are installed and services are running")
                 st.stop()
         
-        # Start analysis with advanced workflow
+        # Start analysis with native workflow
         st.session_state.analysis_running = True
         st.session_state.show_animation = True
         
         # Reset workflow
         reset_workflow()
         
-        st.info("🔬 Starting Advanced Deep Research Analysis - Watch the sophisticated workflow:")
+        st.info("🔬 Starting Deep Research Analysis - Watch the workflow execute step by step:")
         
         try:
-            # ADVANCED STEP-BY-STEP EXECUTION
+            # NATIVE STEP-BY-STEP EXECUTION
             for step_idx in range(len(st.session_state.workflow_steps)):
                 st.session_state.current_step = step_idx + 1
                 
                 # Set current step to running
                 st.session_state.workflow_steps[step_idx]['status'] = 'running'
                 
-                # Update display to show running step with advanced animation
+                # Update display to show running step
                 with animation_container.container():
-                    display_advanced_workflow_animation()
+                    display_native_workflow_animation()
                 
-                # Simulate processing time for this step (longer for visual effect)
-                time.sleep(2.5)  # 2.5 seconds to see the advanced animations
+                # Simulate processing time for this step
+                time.sleep(2.0)  # 2 seconds to see the step running
                 
                 # Mark step as completed
                 st.session_state.workflow_steps[step_idx]['status'] = 'completed'
                 
                 # Update display to show completed step
                 with animation_container.container():
-                    display_advanced_workflow_animation()
+                    display_native_workflow_animation()
                 
                 # Brief pause before next step
-                time.sleep(0.7)
+                time.sleep(0.5)
             
             # Execute actual analysis after animation
-            with st.spinner("🔬 Executing advanced deep research analysis..."):
+            with st.spinner("🔬 Executing deep research analysis..."):
                 results = st.session_state.agent.run_analysis(patient_data)
             
             # Store results
@@ -969,12 +581,12 @@ if submitted and not st.session_state.analysis_running:
             
             # Show completion
             if results.get("success", False):
-                st.success("🎉 All advanced workflow steps completed successfully!")
-                st.markdown('<div class="status-success">✅ Advanced deep research analysis completed successfully!</div>', unsafe_allow_html=True)
+                st.success("🎉 All workflow steps completed successfully!")
+                st.markdown('<div class="status-success">✅ Deep research analysis completed successfully!</div>', unsafe_allow_html=True)
                 
                 if results.get("chatbot_ready", False):
-                    st.success("💬 Advanced Medical Assistant is now available in the sidebar!")
-                    st.info("🎯 You can ask detailed questions about the comprehensive analysis results!")
+                    st.success("💬 Medical Assistant is now available in the sidebar!")
+                    st.info("🎯 You can ask detailed questions about the analysis results!")
                     
                     # Force sidebar to expand by refreshing
                     time.sleep(1)
@@ -988,7 +600,7 @@ if submitted and not st.session_state.analysis_running:
                 current_idx = st.session_state.current_step - 1
                 st.session_state.workflow_steps[current_idx]['status'] = 'error'
             
-            st.error(f"❌ Advanced analysis failed: {str(e)}")
+            st.error(f"❌ Analysis failed: {str(e)}")
             st.session_state.analysis_results = {
                 "success": False,
                 "error": str(e),
