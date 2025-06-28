@@ -21,12 +21,16 @@ from datetime import datetime, timedelta
 import time
 import sys
 import os
+import logging
 from typing import Dict, Any, Optional
 import asyncio
 
 # Add current directory to path for importing the agent
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Import the Enhanced Modular LangGraph health analysis agent
 AGENT_AVAILABLE = False
@@ -183,18 +187,19 @@ st.markdown("""
 /* Deep Research Animation */
 .deep-research-container {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 1.5rem;
+    padding: 2rem;
     border-radius: 12px;
-    margin: 1rem 0;
+    margin: 2rem 0;
     color: white;
-    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+    border: 2px solid rgba(255, 255, 255, 0.2);
 }
 
 .research-step {
     display: flex;
     align-items: center;
-    padding: 0.8rem 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 1rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     transition: all 0.5s ease;
 }
 
@@ -203,57 +208,75 @@ st.markdown("""
 }
 
 .research-step-icon {
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
-    margin-right: 1rem;
+    margin-right: 1.5rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: bold;
     transition: all 0.3s ease;
+    border: 2px solid transparent;
 }
 
 .step-pending {
     background: rgba(255, 255, 255, 0.2);
     color: rgba(255, 255, 255, 0.6);
+    border-color: rgba(255, 255, 255, 0.3);
 }
 
 .step-running {
     background: #ffc107;
     color: #000;
-    animation: pulse 1.5s infinite;
+    border-color: #ffca2c;
+    animation: pulse-strong 1.2s infinite;
+    box-shadow: 0 0 15px rgba(255, 193, 7, 0.6);
 }
 
 .step-completed {
     background: #28a745;
     color: white;
+    border-color: #34ce57;
+    box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
 }
 
 .step-error {
     background: #dc3545;
     color: white;
+    border-color: #e4606d;
 }
 
 .research-step-text {
     flex: 1;
     font-weight: 500;
     transition: all 0.3s ease;
+    font-size: 1rem;
 }
 
 .step-running .research-step-text {
     font-weight: 600;
+    color: #fff;
 }
 
 .step-completed .research-step-text {
     opacity: 0.8;
 }
 
-@keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.1); }
-    100% { transform: scale(1); }
+@keyframes pulse-strong {
+    0% { 
+        transform: scale(1); 
+        box-shadow: 0 0 15px rgba(255, 193, 7, 0.6);
+    }
+    50% { 
+        transform: scale(1.15); 
+        box-shadow: 0 0 25px rgba(255, 193, 7, 0.8);
+    }
+    100% { 
+        transform: scale(1); 
+        box-shadow: 0 0 15px rgba(255, 193, 7, 0.6);
+    }
 }
 
 /* Sidebar styling */
@@ -336,18 +359,18 @@ def calculate_age(birth_date):
     return age
 
 def display_deep_research_animation():
-    """Display the deep research animation - simplified version"""
-    if st.session_state.show_research_animation:
-        st.markdown("""
-        <div class="deep-research-container">
-            <h3 style="margin-bottom: 1rem; color: white;">🔬 Deep Research Analysis in Progress</h3>
-            <div style="background: rgba(255, 255, 255, 0.1); padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+    """Display the deep research animation - visible version"""
+    st.markdown("""
+    <div class="deep-research-container">
+        <h3 style="margin-bottom: 1rem; color: white; text-align: center;">🔬 Deep Research Analysis in Progress</h3>
+        <div style="background: rgba(255, 255, 255, 0.1); padding: 1.5rem; border-radius: 8px; margin: 1rem 0;">
+            <div class="research-step">
+                <div class="research-step-icon step-running">●</div>
+                <div class="research-step-text" style="font-weight: 600;">Processing comprehensive claims data analysis...</div>
+            </div>
+            <div style="margin: 1rem 0; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 1rem;">
                 <div class="research-step">
-                    <div class="research-step-icon step-running">●</div>
-                    <div class="research-step-text">Processing comprehensive claims data analysis...</div>
-                </div>
-                <div class="research-step">
-                    <div class="research-step-icon step-pending">○</div>
+                    <div class="research-step-icon step-running">⟳</div>
                     <div class="research-step-text">Fetching Claims Data</div>
                 </div>
                 <div class="research-step">
@@ -379,8 +402,12 @@ def display_deep_research_animation():
                     <div class="research-step-text">Initializing Assistant</div>
                 </div>
             </div>
+            <div style="text-align: center; margin-top: 1rem; font-style: italic; opacity: 0.8;">
+                Deep analysis may take 30-60 seconds...
+            </div>
         </div>
-        """, unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
 def update_research_step(step_key: str, status: str):
     """Update the status of a research step"""
@@ -534,12 +561,14 @@ with st.container():
             type="primary"  # This enables the green styling from CSS
         )
 
-# Analysis Status and Deep Research Animation
+# Analysis Status Display
 if st.session_state.analysis_running:
-    st.session_state.show_research_animation = True
-    display_deep_research_animation()
-else:
-    st.session_state.show_research_animation = False
+    st.info("🔬 Deep Research Analysis is running...")
+elif st.session_state.analysis_results:
+    if st.session_state.analysis_results.get("success", False):
+        st.success("✅ Deep Research Analysis completed successfully!")
+    else:
+        st.error("❌ Deep Research Analysis encountered some issues.")
 
 # Run Health Analysis
 if submitted and not st.session_state.analysis_running:
@@ -601,6 +630,28 @@ if submitted and not st.session_state.analysis_running:
                 results = st.session_state.agent.run_analysis(patient_data)
                 
                 if results.get("success", False):
+                    # Show completion animation
+                    animation_placeholder.empty()
+                    with animation_placeholder.container():
+                        st.markdown("""
+                        <div class="deep-research-container">
+                            <h3 style="margin-bottom: 1rem; color: white; text-align: center;">✅ Deep Research Analysis Complete!</h3>
+                            <div style="background: rgba(255, 255, 255, 0.1); padding: 1.5rem; border-radius: 8px; margin: 1rem 0;">
+                                <div class="research-step">
+                                    <div class="research-step-icon step-completed">✓</div>
+                                    <div class="research-step-text" style="font-weight: 600;">All analysis steps completed successfully!</div>
+                                </div>
+                                <div style="text-align: center; margin-top: 1rem; font-size: 1.1rem;">
+                                    🎉 Ready to explore your comprehensive health insights!
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Clear completion animation after 3 seconds
+                    time.sleep(3)
+                    animation_placeholder.empty()
+                    
                     # All steps completed successfully
                     st.session_state.analysis_results = results
                     st.session_state.chatbot_context = results.get("chatbot_context", {})
@@ -637,6 +688,23 @@ if submitted and not st.session_state.analysis_running:
                     st.warning("⚠️ Analysis completed with some errors.")
                 
             except Exception as e:
+                # Show error animation
+                animation_placeholder.empty()
+                with animation_placeholder.container():
+                    st.markdown("""
+                    <div style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); padding: 2rem; border-radius: 12px; margin: 2rem 0; color: white; box-shadow: 0 8px 25px rgba(220, 53, 69, 0.4);">
+                        <h3 style="margin-bottom: 1rem; text-align: center;">❌ Analysis Error</h3>
+                        <div style="background: rgba(255, 255, 255, 0.1); padding: 1.5rem; border-radius: 8px;">
+                            <div style="text-align: center;">
+                                An error occurred during deep research analysis. Please check the debug information below.
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                time.sleep(2)
+                animation_placeholder.empty()
+                
                 logger.error(f"Deep research analysis failed: {str(e)}")
                 st.error(f"❌ Deep research analysis failed: {str(e)}")
                 st.session_state.analysis_results = {
@@ -647,7 +715,10 @@ if submitted and not st.session_state.analysis_running:
                 }
             finally:
                 st.session_state.analysis_running = False
-                st.session_state.show_research_animation = False  # Hide animation when done
+                st.session_state.show_research_animation = False
+                # Clear the animation
+                if 'animation_placeholder' in locals():
+                    animation_placeholder.empty()
 
 # Display Results if Available
 if st.session_state.analysis_results:
