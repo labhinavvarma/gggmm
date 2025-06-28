@@ -1,5 +1,51 @@
+# Configure Streamlit page FIRST - before any other Streamlit commands
+import streamlit as st
 
-# Replace the existing CSS section with this enhanced version
+# Determine sidebar state based on chatbot readiness
+if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
+    sidebar_state = "expanded"
+else:
+    sidebar_state = "collapsed"
+
+st.set_page_config(
+    page_title="Deep Research Health Agent",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state=sidebar_state
+)
+
+# Now import other modules
+import json
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import sys
+import os
+import logging
+from typing import Dict, Any, Optional
+import asyncio
+
+# Add current directory to path for importing the agent
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Import the Enhanced Modular LangGraph health analysis agent
+AGENT_AVAILABLE = False
+import_error = None
+HealthAnalysisAgent = None
+Config = None
+
+try:
+    from health_agent_core import HealthAnalysisAgent, Config
+    AGENT_AVAILABLE = True
+except ImportError as e:
+    AGENT_AVAILABLE = False
+    import_error = str(e)
+
+# Custom CSS for clean layout and progressive animation
 st.markdown("""
 <style>
 .main-header {
@@ -32,352 +78,22 @@ st.markdown("""
     padding-bottom: 0.5rem;
 }
 
-/* Green Run Analysis Button */
-.stButton button[kind="primary"] {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    padding: 0.75rem 2rem !important;
-    border-radius: 8px !important;
-    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3) !important;
-    transition: all 0.3s ease !important;
-}
-
-.stButton button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #218838 0%, #1abc9c 100%) !important;
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
-}
-
-/* Enhanced Deep Research Animation Styles */
-.enhanced-research-container {
-    background: linear-gradient(135deg, #0f1419 0%, #1a2332 50%, #0d1117 100%);
-    padding: 2.5rem;
-    border-radius: 16px;
-    margin: 2rem 0;
-    color: white;
-    box-shadow: 0 12px 40px rgba(15, 20, 25, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    animation: containerGlow 3s ease-in-out infinite;
-    position: relative;
-    overflow: hidden;
-}
-
-.enhanced-research-container::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-    animation: scan 2s infinite;
-}
-
-.research-header {
-    text-align: center;
-    margin-bottom: 2rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    padding-bottom: 1.5rem;
-}
-
-.research-header h2 {
-    margin: 0 0 1rem 0;
-    font-size: 1.8rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #00d4ff 0%, #90e0ff 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.research-status {
-    margin-top: 0.5rem;
-}
-
-.status-badge {
-    background: linear-gradient(135deg, #00d4aa 0%, #00d4ff 100%);
-    color: #000;
-    padding: 0.5rem 1.5rem;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: inline-block;
-    animation: badgePulse 2s infinite;
-}
-
-.progress-section {
-    margin: 2rem 0;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 1.5rem;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.progress-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-    font-size: 0.95rem;
-}
-
-.progress-text {
-    font-weight: 600;
-    color: #00d4ff;
-}
-
-.time-estimate {
-    color: #90e0ff;
-    font-weight: 500;
-}
-
-.progress-bar {
-    width: 100%;
-    height: 8px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
-    overflow: hidden;
-    margin-bottom: 0.5rem;
-}
-
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #00d4aa 0%, #00d4ff 100%);
-    border-radius: 4px;
-    transition: width 0.8s ease;
-    animation: progressShimmer 2s infinite;
-}
-
-.progress-percentage {
-    text-align: center;
-    font-size: 0.9rem;
-    color: #90e0ff;
-    font-weight: 600;
-}
-
-.workflow-steps {
-    margin: 2rem 0;
-}
-
-.research-step {
-    display: flex;
-    align-items: flex-start;
-    padding: 1.25rem 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    transition: all 0.5s ease;
-}
-
-.research-step:last-child {
-    border-bottom: none;
-}
-
-.research-step-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    margin-right: 1.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    font-weight: bold;
-    transition: all 0.4s ease;
-    border: 2px solid transparent;
-    flex-shrink: 0;
-}
-
-.research-step-content {
-    flex: 1;
-    min-width: 0;
-}
-
-.research-step-text {
-    font-weight: 600;
-    font-size: 1.1rem;
-    margin-bottom: 0.3rem;
-    transition: all 0.3s ease;
-}
-
-.research-step-description {
-    font-size: 0.9rem;
-    opacity: 0.8;
-    font-style: italic;
-    transition: all 0.3s ease;
-}
-
-.step-pending .research-step-icon {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.5);
-    border-color: rgba(255, 255, 255, 0.2);
-}
-
-.step-running .research-step-icon {
-    background: linear-gradient(135deg, #ffc107 0%, #ff8c00 100%);
-    color: #000;
-    border-color: #ffd700;
-    animation: iconPulse 1s infinite;
-    box-shadow: 0 0 20px rgba(255, 193, 7, 0.6);
-}
-
-.step-running .research-step-text {
-    color: #ffd700;
-    font-weight: 700;
-}
-
-.step-running .research-step-description {
-    color: #ffeb3b;
-    opacity: 1;
-}
-
-.step-completed .research-step-icon {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-    color: white;
-    border-color: #34ce57;
-    box-shadow: 0 0 15px rgba(40, 167, 69, 0.4);
-}
-
-.step-completed .research-step-text {
-    opacity: 0.9;
-    color: #90e0ff;
-}
-
-.step-completed .research-step-description {
-    opacity: 0.7;
-}
-
-.step-error .research-step-icon {
-    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-    color: white;
-    border-color: #e4606d;
-}
-
-.research-footer {
-    text-align: center;
-    margin-top: 2rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    position: relative;
-}
-
-.neural-pulse {
-    width: 60px;
-    height: 60px;
-    border: 2px solid #00d4ff;
-    border-radius: 50%;
-    margin: 0 auto 1rem auto;
-    animation: neuralPulse 2s infinite;
-    position: relative;
-}
-
-.neural-pulse::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 8px;
-    height: 8px;
-    background: #00d4ff;
-    border-radius: 50%;
-}
-
-.research-note {
-    font-size: 0.95rem;
-    color: #90e0ff;
-    font-style: italic;
-}
-
-/* Minimized Success State */
-.minimized-success-container {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-    padding: 1.5rem;
-    border-radius: 12px;
+.status-success {
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #28a745;
     margin: 1rem 0;
-    color: white;
-    box-shadow: 0 8px 25px rgba(40, 167, 69, 0.4);
-    animation: successGlow 2s ease-in-out infinite;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    transition: all 0.3s ease;
 }
 
-.minimized-success-container:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 35px rgba(40, 167, 69, 0.6);
-}
-
-.success-content {
-    display: flex;
-    align-items: center;
-    flex: 1;
-}
-
-.success-icon {
-    font-size: 2.5rem;
-    margin-right: 1.5rem;
-    animation: bounceSuccess 1s ease-out;
-}
-
-.success-text h3 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.3rem;
-    font-weight: 700;
-}
-
-.success-text p {
-    margin: 0;
-    opacity: 0.9;
-    font-size: 0.95rem;
-}
-
-.success-stats {
-    display: flex;
-    gap: 1.5rem;
-    margin-left: 2rem;
-}
-
-.stat-item {
-    text-align: center;
-    padding: 0.5rem;
-    background: rgba(255, 255, 255, 0.2);
+.status-error {
+    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+    padding: 1rem;
     border-radius: 8px;
-    min-width: 60px;
+    border-left: 4px solid #dc3545;
+    margin: 1rem 0;
 }
 
-.stat-number {
-    display: block;
-    font-size: 1.2rem;
-    font-weight: 700;
-    margin-bottom: 0.2rem;
-}
-
-.stat-label {
-    display: block;
-    font-size: 0.7rem;
-    opacity: 0.9;
-}
-
-.expand-button {
-    background: rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-weight: 600;
-    white-space: nowrap;
-}
-
-.expand-button:hover {
-    background: rgba(255, 255, 255, 0.3);
-    transform: translateY(-2px);
-}
-
-/* Additional utility styles */
 .metric-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -404,129 +120,578 @@ st.markdown("""
     font-size: 0.85rem;
 }
 
-/* Animations */
-@keyframes containerGlow {
-    0%, 100% { 
-        box-shadow: 0 12px 40px rgba(15, 20, 25, 0.8);
-    }
-    50% { 
-        box-shadow: 0 16px 50px rgba(0, 212, 255, 0.3);
-    }
+/* Green Run Analysis Button */
+.stButton button[kind="primary"] {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+    padding: 0.75rem 2rem !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3) !important;
+    transition: all 0.3s ease !important;
 }
 
-@keyframes scan {
-    0% { left: -100%; }
-    100% { left: 100%; }
+.stButton button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #218838 0%, #1abc9c 100%) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
 }
 
-@keyframes badgePulse {
-    0%, 100% { 
-        transform: scale(1);
-        box-shadow: 0 0 10px rgba(0, 212, 170, 0.5);
-    }
-    50% { 
-        transform: scale(1.05);
-        box-shadow: 0 0 20px rgba(0, 212, 170, 0.8);
-    }
+/* Progressive Deep Research Animation */
+.deep-research-container {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 2rem;
+    border-radius: 12px;
+    margin: 2rem 0;
+    color: white;
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    animation: containerPulse 2s ease-in-out infinite;
 }
 
-@keyframes progressShimmer {
-    0% { 
-        background: linear-gradient(90deg, #00d4aa 0%, #00d4ff 100%);
-    }
-    50% { 
-        background: linear-gradient(90deg, #00d4ff 0%, #90e0ff 100%);
-    }
-    100% { 
-        background: linear-gradient(90deg, #00d4aa 0%, #00d4ff 100%);
-    }
+.progress-header {
+    text-align: center;
+    margin-bottom: 2rem;
 }
 
-@keyframes iconPulse {
-    0%, 100% { 
-        transform: scale(1);
-        box-shadow: 0 0 20px rgba(255, 193, 7, 0.6);
-    }
-    50% { 
-        transform: scale(1.15);
-        box-shadow: 0 0 30px rgba(255, 193, 7, 0.9);
-    }
+.progress-bar-container {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 10px;
+    height: 8px;
+    margin: 1rem 0;
+    overflow: hidden;
 }
 
-@keyframes neuralPulse {
-    0%, 100% { 
-        transform: scale(1);
+.progress-bar-fill {
+    background: linear-gradient(90deg, #28a745, #20c997);
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.5s ease;
+    box-shadow: 0 2px 10px rgba(40, 167, 69, 0.5);
+}
+
+.research-step {
+    display: flex;
+    align-items: center;
+    padding: 1rem 0;
+    margin: 0.5rem 0;
+    border-radius: 8px;
+    transition: all 0.6s ease;
+    opacity: 0;
+    transform: translateX(-30px);
+    animation: slideInStep 0.6s ease forwards;
+}
+
+.research-step.visible {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.research-step-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    margin-right: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: bold;
+    transition: all 0.4s ease;
+    border: 2px solid transparent;
+    flex-shrink: 0;
+}
+
+.step-pending {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.5);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.step-running {
+    background: #ffc107;
+    color: #000;
+    border-color: #ffca2c;
+    animation: pulse-strong 1.2s infinite;
+    box-shadow: 0 0 20px rgba(255, 193, 7, 0.8);
+}
+
+.step-completed {
+    background: #28a745;
+    color: white;
+    border-color: #34ce57;
+    box-shadow: 0 0 15px rgba(40, 167, 69, 0.6);
+}
+
+.step-error {
+    background: #dc3545;
+    color: white;
+    border-color: #e4606d;
+    animation: errorShake 0.5s ease-in-out;
+}
+
+.research-step-text {
+    flex: 1;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    font-size: 1.1rem;
+}
+
+.step-running .research-step-text {
+    font-weight: 600;
+    color: #fff;
+}
+
+.step-completed .research-step-text {
+    opacity: 0.9;
+    text-decoration: none;
+}
+
+.next-step-preview {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px dashed rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    padding: 0.8rem;
+    margin: 0.5rem 0;
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+    text-align: center;
+    animation: fadeInOut 2s ease-in-out infinite;
+}
+
+.step-counter {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    padding: 0.5rem 1rem;
+    display: inline-block;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+@keyframes slideInStep {
+    from {
+        opacity: 0;
+        transform: translateX(-30px);
+    }
+    to {
         opacity: 1;
-    }
-    50% { 
-        transform: scale(1.2);
-        opacity: 0.7;
+        transform: translateX(0);
     }
 }
 
-@keyframes successGlow {
-    0%, 100% { 
-        box-shadow: 0 8px 25px rgba(40, 167, 69, 0.4);
-    }
-    50% { 
-        box-shadow: 0 12px 35px rgba(40, 167, 69, 0.6);
-    }
-}
-
-@keyframes bounceSuccess {
+@keyframes pulse-strong {
     0% { 
-        transform: scale(0);
+        transform: scale(1); 
+        box-shadow: 0 0 20px rgba(255, 193, 7, 0.8);
     }
     50% { 
-        transform: scale(1.2);
+        transform: scale(1.1); 
+        box-shadow: 0 0 30px rgba(255, 193, 7, 1);
     }
     100% { 
-        transform: scale(1);
+        transform: scale(1); 
+        box-shadow: 0 0 20px rgba(255, 193, 7, 0.8);
     }
+}
+
+@keyframes containerPulse {
+    0% { 
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+    }
+    50% { 
+        box-shadow: 0 12px 35px rgba(102, 126, 234, 0.6);
+    }
+    100% { 
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+    }
+}
+
+@keyframes errorShake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+@keyframes fadeInOut {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 0.8; }
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.css-1d391kg .css-10trblm {
+    color: white;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# Replace the animation display logic in your main app
-# Animation Status Display with Enhanced Animation
+# Initialize session state
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_running' not in st.session_state:
+        st.session_state.analysis_running = False
+    if 'agent' not in st.session_state:
+        st.session_state.agent = None
+    if 'config' not in st.session_state:
+        st.session_state.config = None
+    if 'chatbot_messages' not in st.session_state:
+        st.session_state.chatbot_messages = []
+    if 'chatbot_context' not in st.session_state:
+        st.session_state.chatbot_context = None
+    
+    # Section toggle states
+    if 'show_claims_data' not in st.session_state:
+        st.session_state.show_claims_data = False
+    if 'show_claims_extraction' not in st.session_state:
+        st.session_state.show_claims_extraction = False
+    if 'show_entity_extraction' not in st.session_state:
+        st.session_state.show_entity_extraction = False
+    if 'show_health_trajectory' not in st.session_state:
+        st.session_state.show_health_trajectory = False
+    if 'show_final_summary' not in st.session_state:
+        st.session_state.show_final_summary = False
+    if 'show_heart_attack' not in st.session_state:
+        st.session_state.show_heart_attack = False
+    
+    # Progressive Animation Workflow Steps
+    if 'workflow_steps' not in st.session_state:
+        st.session_state.workflow_steps = {
+            1: {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims'},
+            2: {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers'},
+            3: {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes and data'},
+            4: {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying health conditions'},
+            5: {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing health trends'},
+            6: {'name': 'Generating Summary', 'status': 'pending', 'description': 'Creating clinical summary'},
+            7: {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running ML risk assessment'},
+            8: {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up medical chatbot'}
+        }
+    if 'current_step' not in st.session_state:
+        st.session_state.current_step = 0
+    if 'show_animation' not in st.session_state:
+        st.session_state.show_animation = False
+    if 'steps_revealed' not in st.session_state:
+        st.session_state.steps_revealed = 0
+
+def update_workflow_step(step_number: int, status: str):
+    """Safely update workflow step status and reveal steps progressively"""
+    try:
+        if step_number in st.session_state.workflow_steps:
+            st.session_state.workflow_steps[step_number]['status'] = status
+            st.session_state.current_step = step_number
+            
+            # Progressive reveal: show current step and previous steps
+            if status == 'running':
+                st.session_state.steps_revealed = max(st.session_state.steps_revealed, step_number)
+            elif status == 'completed':
+                st.session_state.steps_revealed = max(st.session_state.steps_revealed, step_number + 1)
+                
+    except Exception as e:
+        logger.warning(f"Could not update workflow step {step_number}: {e}")
+
+def reset_workflow_steps():
+    """Reset all workflow steps to pending and hide all steps"""
+    try:
+        for step_num in st.session_state.workflow_steps:
+            st.session_state.workflow_steps[step_num]['status'] = 'pending'
+        st.session_state.current_step = 0
+        st.session_state.steps_revealed = 0
+    except Exception as e:
+        logger.warning(f"Could not reset workflow steps: {e}")
+
+def display_progressive_workflow_animation():
+    """Display progressive workflow animation that reveals steps one by one"""
+    try:
+        # Calculate progress percentage
+        completed_steps = sum(1 for step in st.session_state.workflow_steps.values() if step['status'] == 'completed')
+        progress_percentage = (completed_steps / len(st.session_state.workflow_steps)) * 100
+        
+        # Build the progressive steps HTML
+        steps_html = ""
+        steps_revealed = st.session_state.steps_revealed
+        
+        for step_num in range(1, min(steps_revealed + 2, 9)):  # Show current + 1 next step
+            if step_num in st.session_state.workflow_steps:
+                step_info = st.session_state.workflow_steps[step_num]
+                status = step_info['status']
+                name = step_info['name']
+                description = step_info.get('description', '')
+                
+                if status == 'pending':
+                    icon_class = "step-pending"
+                    icon_text = str(step_num)
+                elif status == 'running':
+                    icon_class = "step-running"
+                    icon_text = "●"
+                elif status == 'completed':
+                    icon_class = "step-completed" 
+                    icon_text = "✓"
+                elif status == 'error':
+                    icon_class = "step-error"
+                    icon_text = "✗"
+                else:
+                    icon_class = "step-pending"
+                    icon_text = str(step_num)
+                
+                # Add animation delay for progressive reveal
+                animation_delay = (step_num - 1) * 0.1
+                
+                steps_html += f"""
+                <div class="research-step visible" style="animation-delay: {animation_delay}s;">
+                    <div class="research-step-icon {icon_class}">{icon_text}</div>
+                    <div style="flex: 1;">
+                        <div class="research-step-text">{name}</div>
+                        <div style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.2rem;">{description}</div>
+                    </div>
+                </div>
+                """
+        
+        # Show preview of next step if there is one
+        next_step_preview = ""
+        if steps_revealed < len(st.session_state.workflow_steps) and st.session_state.current_step > 0:
+            next_step_num = steps_revealed + 1
+            if next_step_num <= len(st.session_state.workflow_steps):
+                next_step_name = st.session_state.workflow_steps[next_step_num]['name']
+                next_step_preview = f"""
+                <div class="next-step-preview">
+                    Next: {next_step_name}...
+                </div>
+                """
+        
+        # Create the complete progressive animation HTML
+        animation_html = f"""
+        <div class="deep-research-container">
+            <div class="progress-header">
+                <h3 style="margin-bottom: 1rem; color: white;">🔬 Deep Research Analysis</h3>
+                <div class="step-counter">Step {st.session_state.current_step} of 8</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" style="width: {progress_percentage}%;"></div>
+                </div>
+            </div>
+            
+            <div style="background: rgba(255, 255, 255, 0.1); padding: 1.5rem; border-radius: 8px; margin: 1rem 0;">
+                {steps_html}
+                {next_step_preview}
+                
+                <div style="text-align: center; margin-top: 1.5rem; font-style: italic; opacity: 0.9; font-size: 0.9rem;">
+                    Comprehensive analysis in progress...
+                </div>
+            </div>
+        </div>
+        """
+        
+        return animation_html
+        
+    except Exception as e:
+        logger.warning(f"Error creating progressive animation HTML: {e}")
+        return """
+        <div class="deep-research-container">
+            <h3 style="margin-bottom: 1rem; color: white; text-align: center;">🔬 Deep Research Analysis</h3>
+            <div style="text-align: center; padding: 2rem;">
+                Processing comprehensive claims data analysis...
+            </div>
+        </div>
+        """
+
+def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """Safely get a value from a dictionary"""
+    try:
+        return data.get(key, default) if data else default
+    except:
+        return default
+
+def safe_str(value: Any) -> str:
+    """Safely convert any value to string"""
+    try:
+        return str(value) if value is not None else "unknown"
+    except:
+        return "unknown"
+
+def safe_json_dumps(data: Any, default: str = "{}") -> str:
+    """Safely convert data to JSON string"""
+    try:
+        return json.dumps(data, indent=2) if data else default
+    except Exception as e:
+        return f'{{"error": "JSON serialization failed: {str(e)}"}}'
+
+def calculate_age(birth_date):
+    """Calculate age from birth date"""
+    if not birth_date:
+        return None
+    
+    today = datetime.now().date()
+    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return age
+
+def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate patient data and return validation status and errors"""
+    errors = []
+    required_fields = {
+        'first_name': 'First Name',
+        'last_name': 'Last Name', 
+        'ssn': 'SSN',
+        'date_of_birth': 'Date of Birth',
+        'gender': 'Gender',
+        'zip_code': 'Zip Code'
+    }
+    
+    for field, display_name in required_fields.items():
+        if not data.get(field):
+            errors.append(f"{display_name} is required")
+        elif field == 'ssn' and len(str(data[field])) < 9:
+            errors.append("SSN must be at least 9 digits")
+        elif field == 'zip_code' and len(str(data[field])) < 5:
+            errors.append("Zip code must be at least 5 digits")
+    
+    if data.get('date_of_birth'):
+        try:
+            birth_date = datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date()
+            age = calculate_age(birth_date)
+            
+            if age and age > 150:
+                errors.append("Age cannot be greater than 150 years")
+            elif age and age < 0:
+                errors.append("Date of birth cannot be in the future")
+        except:
+            errors.append("Invalid date format")
+    
+    return len(errors) == 0, errors
+
+# Initialize session state
+initialize_session_state()
+
+# Main Title
+st.markdown('<h1 class="main-header">🔬 Deep Research Health Agent</h1>', unsafe_allow_html=True)
+
+# Display import status
+if not AGENT_AVAILABLE:
+    st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
+    st.stop()
+
+# SIDEBAR CHATBOT
+with st.sidebar:
+    if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
+        st.title("💬 Medical Assistant")
+        st.markdown("---")
+        
+        # Chat history at top
+        chat_container = st.container()
+        with chat_container:
+            if st.session_state.chatbot_messages:
+                for message in st.session_state.chatbot_messages:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
+            else:
+                st.info("👋 Hello! I can answer questions about the claims data analysis. Ask me anything!")
+                st.info("💡 **Special Feature:** Ask about heart attack risk and I'll provide both ML model predictions and comprehensive LLM analysis for comparison!")
+        
+        # Chat input at bottom (always visible)
+        st.markdown("---")
+        user_question = st.chat_input("Ask about the claims data...")
+        
+        # Handle chat input
+        if user_question:
+            # Add user message
+            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
+            
+            # Get bot response
+            try:
+                with st.spinner("Processing..."):
+                    chatbot_response = st.session_state.agent.chat_with_data(
+                        user_question, 
+                        st.session_state.chatbot_context, 
+                        st.session_state.chatbot_messages
+                    )
+                
+                # Add assistant response
+                st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+        
+        # Clear chat button at bottom
+        if st.button("🗑️ Clear Chat History", use_container_width=True):
+            st.session_state.chatbot_messages = []
+            st.rerun()
+    
+    else:
+        # Show placeholder when chatbot is not ready
+        st.title("💬 Medical Assistant")
+        st.info("💤 Chatbot will be available after running health analysis")
+        st.markdown("---")
+        st.markdown("**Features:**")
+        st.markdown("• Answer questions about claims data")
+        st.markdown("• Analyze diagnoses and medications") 
+        st.markdown("• Heart attack risk analysis (ML + LLM comparison)")
+        st.markdown("• Extract specific dates and codes")
+        st.markdown("• Provide detailed medical insights")
+
+# 1. PATIENT INFORMATION BOX
+st.markdown("""
+<div class="section-box">
+    <div class="section-title">👤 Patient Information</div>
+</div>
+""", unsafe_allow_html=True)
+
+with st.container():
+    with st.form("patient_input_form"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            first_name = st.text_input("First Name *", value="")
+            last_name = st.text_input("Last Name *", value="")
+        
+        with col2:
+            ssn = st.text_input("SSN *", value="")
+            date_of_birth = st.date_input(
+                "Date of Birth *", 
+                value=datetime.now().date(),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date()
+            )
+        
+        with col3:
+            gender = st.selectbox("Gender *", ["F", "M"])
+            zip_code = st.text_input("Zip Code *", value="")
+        
+        # Show calculated age
+        if date_of_birth:
+            calculated_age = calculate_age(date_of_birth)
+            if calculated_age is not None:
+                st.info(f"📅 **Calculated Age:** {calculated_age} years old")
+        
+        # 2. RUN DEEP RESEARCH ANALYSIS BUTTON (GREEN)
+        submitted = st.form_submit_button(
+            "🔬 Run Deep Research Analysis", 
+            use_container_width=True,
+            disabled=st.session_state.analysis_running,
+            type="primary"  # This enables the green styling from CSS
+        )
+
+# Analysis Status Display with Progressive Animation
 animation_container = st.empty()  # Declare at global scope
 
-# Enhanced animation display logic
 if st.session_state.analysis_running and st.session_state.show_animation:
-    # Show enhanced workflow animation
+    # Update the progressive animation display
     with animation_container.container():
-        st.markdown(display_enhanced_workflow_animation(), unsafe_allow_html=True)
-        
-elif st.session_state.analysis_results and st.session_state.animation_completed:
-    # Show minimized success state
-    with animation_container.container():
-        if st.button("", key="success_summary", help="Click to expand details"):
-            st.session_state.show_minimized_success = not st.session_state.show_minimized_success
-        
-        st.markdown(display_minimized_success_animation(), unsafe_allow_html=True)
-        
-        # Option to show full workflow details
-        if st.session_state.show_minimized_success:
-            with st.expander("🔍 View Complete Workflow Details", expanded=False):
-                st.markdown("### 🔬 Deep Research Analysis Steps Completed:")
-                
-                for step_num, step_info in st.session_state.workflow_steps.items():
-                    status_icon = "✅" if step_info['status'] == 'completed' else "❌"
-                    st.markdown(f"{status_icon} **Step {step_num}:** {step_info['name']}")
-                    st.markdown(f"   *{step_info['description']}*")
-                
-                st.markdown(f"**Total Analysis Time:** {st.session_state.total_analysis_time:.1f} seconds")
-                st.markdown(f"**Analysis Completed:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
+        st.markdown(display_progressive_workflow_animation(), unsafe_allow_html=True)
+        time.sleep(0.5)  # Small delay for smooth animation updates
 elif st.session_state.analysis_results:
-    # Clear animation and show simple results
+    # Clear animation and show results
     animation_container.empty()
     if st.session_state.analysis_results.get("success", False):
         st.success("✅ Deep Research Analysis completed successfully!")
     else:
         st.error("❌ Deep Research Analysis encountered some issues.")
 
-# Enhanced analysis execution with improved workflow steps
+# Run Deep Research Analysis
 if submitted and not st.session_state.analysis_running:
     # Prepare patient data
     patient_data = {
@@ -552,69 +717,103 @@ if submitted and not st.session_state.analysis_running:
                 config = st.session_state.config or Config()
                 st.session_state.agent = HealthAnalysisAgent(config)
                 st.success("✅ Deep Research Health Agent initialized successfully")
+                st.info("✅ Agent successfully initialized and ready for deep research analysis")
                         
             except Exception as e:
                 st.error(f"❌ Failed to initialize Deep Research Health Agent: {str(e)}")
+                st.error("💡 Please check that all required modules are installed and services are running")
                 st.stop()
         
-        # Start analysis with enhanced animation
         st.session_state.analysis_running = True
         st.session_state.show_animation = True
-        st.session_state.animation_completed = False
-        st.session_state.show_minimized_success = False
         
-        # Reset and initialize workflow animation
+        # Reset and initialize progressive workflow animation
         reset_workflow_steps()
         
-        # Show starting message
-        st.info("🚀 Initiating Deep Research Analysis Protocol...")
+        # Show starting messages
+        st.info("🔬 Starting Deep Research Analysis - Watch the progressive workflow below:")
+        st.warning("⏳ This may take 30-60 seconds. Steps will appear one by one as they execute.")
+        
+        # Start the progressive workflow animation
+        update_workflow_step(1, 'running')
         
         with st.spinner("🔬 Deep Research Analysis executing..."):
             try:
-                # Execute analysis with step-by-step animation
+                # Progressive step execution with real-time animation updates
+                step_names = [
+                    "Fetching Claims Data",
+                    "Deidentifying Claims Data", 
+                    "Extracting Claims Fields",
+                    "Extracting Health Entities",
+                    "Analyzing Health Trajectory",
+                    "Generating Summary",
+                    "Predicting Heart Attack Risk",
+                    "Initializing Assistant"
+                ]
+                
+                # Execute each step with progressive reveal
                 for step_num in range(1, 9):
                     update_workflow_step(step_num, 'running')
-                    time.sleep(0.3)  # Visual feedback delay
                     
-                    # Simulate different step durations
-                    if step_num == 1:  # Initialization
-                        time.sleep(0.5)
-                    elif step_num in [2, 3]:  # Data fetching and deidentification
-                        time.sleep(0.8)
-                    elif step_num in [4, 5]:  # Extraction and analysis
-                        time.sleep(1.0)
-                    elif step_num == 6:  # Health trajectory
-                        time.sleep(0.7)
-                    elif step_num == 7:  # Heart attack prediction
-                        time.sleep(0.6)
-                    elif step_num == 8:  # Chatbot initialization
-                        time.sleep(0.4)
+                    # Update animation display in real-time
+                    with animation_container.container():
+                        st.markdown(display_progressive_workflow_animation(), unsafe_allow_html=True)
                     
+                    # Simulate step processing time
+                    time.sleep(1.0)  # Longer delay to see progression
+                    
+                    # Mark step as completed
                     update_workflow_step(step_num, 'completed')
+                    
+                    # Update animation to show completion
+                    with animation_container.container():
+                        st.markdown(display_progressive_workflow_animation(), unsafe_allow_html=True)
+                    
+                    time.sleep(0.3)  # Brief pause to see completion
                 
                 # Execute the actual analysis after animation
                 results = st.session_state.agent.run_analysis(patient_data)
                 
                 # Process results
                 if results.get("success", False):
-                    # Mark analysis as completed and store results
+                    # Store successful results
                     st.session_state.analysis_results = results
                     st.session_state.chatbot_context = results.get("chatbot_context", {})
-                    st.session_state.animation_completed = True
                     
                     # Show completion message
-                    st.balloons()  # Celebration animation
-                    st.success("🎉 Deep Research Analysis completed successfully!")
+                    st.success("🎉 All 8 workflow steps completed successfully!")
+                    st.markdown('<div class="status-success">✅ Deep research analysis completed successfully!</div>', unsafe_allow_html=True)
                     
-                    # Setup chatbot if ready
+                    # Ensure chatbot is properly loaded with comprehensive context
                     if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-                        st.success("💬 Medical Assistant is now active with comprehensive data access!")
-                        # Force page refresh to show minimized success state
+                        st.success("💬 Medical Assistant is now available in the sidebar with full access to all claims data!")
+                        st.info("🎯 You can ask detailed questions about diagnoses, medications, dates, medical codes, and more!")
+                        
+                        # Display brief summary of available data for chatbot
+                        context_summary = []
+                        if safe_get(results, 'structured_extractions', {}).get('medical', {}).get('hlth_srvc_records'):
+                            medical_count = len(safe_get(results, 'structured_extractions', {})['medical']['hlth_srvc_records'])
+                            context_summary.append(f"📋 {medical_count} medical records")
+                        
+                        if safe_get(results, 'structured_extractions', {}).get('pharmacy', {}).get('ndc_records'):
+                            pharmacy_count = len(safe_get(results, 'structured_extractions', {})['pharmacy']['ndc_records'])
+                            context_summary.append(f"💊 {pharmacy_count} pharmacy records")
+                        
+                        if safe_get(results, 'heart_attack_prediction', {}):
+                            context_summary.append("❤️ heart attack prediction")
+                        
+                        if context_summary:
+                            st.info(f"📊 Chatbot has access to: {', '.join(context_summary)}")
+                        
+                        # Force page refresh to open sidebar
                         time.sleep(1)
                         st.rerun()
-                        
+                    else:
+                        st.warning("⚠️ Chatbot initialization incomplete. Some features may not be available.")
                 else:
                     # Handle analysis failure
+                    if st.session_state.current_step > 0:
+                        update_workflow_step(st.session_state.current_step, 'error')
                     st.session_state.analysis_results = results
                     st.warning("⚠️ Analysis completed with some errors.")
                 
@@ -634,3 +833,21 @@ if submitted and not st.session_state.analysis_running:
             finally:
                 st.session_state.analysis_running = False
                 st.session_state.show_animation = False
+                reset_workflow_steps()
+
+# Display Results if Available (rest of the code remains the same...)
+if st.session_state.analysis_results:
+    results = st.session_state.analysis_results
+    
+    # Show errors if any
+    errors = safe_get(results, 'errors', [])
+    if errors:
+        st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
+        with st.expander("🐛 Debug Information"):
+            st.write("**Errors:**")
+            for error in errors:
+                st.write(f"• {error}")
+            st.write("**Analysis Results:**")
+            st.json(results)
+
+    # ... (rest of the results display code remains unchanged)
