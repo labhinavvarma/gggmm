@@ -45,7 +45,7 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
-# Advanced CSS for sophisticated professional animation
+# Advanced CSS for sophisticated professional animation with DARK TEXT
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -145,20 +145,20 @@ st.markdown("""
     box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
 }
 
-/* Advanced Professional Workflow Container */
+/* Advanced Professional Workflow Container with Lighter Background */
 .advanced-workflow-container {
-    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 25%, #667eea 50%, #764ba2 75%, #f093fb 100%);
+    background: linear-gradient(135deg, #e8f0fe 0%, #f3e5f5 25%, #e1f5fe 50%, #f1f8e9 75%, #fff8e1 100%);
     padding: 3rem;
     border-radius: 25px;
     margin: 2rem 0;
-    color: white;
+    color: #2c3e50;
     box-shadow: 
-        0 25px 50px rgba(52, 152, 219, 0.3),
-        0 0 0 1px rgba(255, 255, 255, 0.1),
-        inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        0 25px 50px rgba(52, 152, 219, 0.2),
+        0 0 0 1px rgba(0, 0, 0, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.8);
     position: relative;
     overflow: hidden;
-    border: 2px solid rgba(255, 255, 255, 0.1);
+    border: 2px solid rgba(0, 0, 0, 0.1);
 }
 
 .advanced-workflow-container::before {
@@ -168,7 +168,7 @@ st.markdown("""
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
     animation: rotate 20s linear infinite;
     pointer-events: none;
 }
@@ -182,7 +182,7 @@ st.markdown("""
     bottom: 0;
     background: linear-gradient(45deg, 
         transparent 30%, 
-        rgba(255,255,255,0.1) 50%, 
+        rgba(255,255,255,0.4) 50%, 
         transparent 70%);
     animation: shimmer 3s ease-in-out infinite;
     pointer-events: none;
@@ -209,28 +209,25 @@ st.markdown("""
     font-size: 2.5rem;
     font-weight: 700;
     margin-bottom: 0.5rem;
-    text-shadow: 3px 3px 6px rgba(0,0,0,0.3);
-    background: linear-gradient(135deg, #fff 0%, #f0f8ff 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    text-shadow: 2px 2px 4px rgba(255,255,255,0.8);
+    color: #2c3e50;
 }
 
 .workflow-subtitle {
     font-size: 1.2rem;
-    opacity: 0.9;
     margin-bottom: 2rem;
-    font-weight: 300;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    font-weight: 500;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+    color: #34495e;
 }
 
 .progress-dashboard {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.7);
     border-radius: 20px;
     padding: 2rem;
     margin-bottom: 2rem;
     backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(0, 0, 0, 0.1);
     position: relative;
     z-index: 10;
     box-shadow: 
@@ -247,8 +244,8 @@ st.markdown("""
     font-size: 1.5rem;
     font-weight: 600;
     margin-bottom: 1rem;
-    color: #fff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
 }
 
 .stats-grid {
@@ -259,11 +256,11 @@ st.markdown("""
 }
 
 .stat-card {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.8);
     padding: 1.5rem;
     border-radius: 15px;
     text-align: center;
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    border: 1px solid rgba(0, 0, 0, 0.1);
     backdrop-filter: blur(10px);
     transition: all 0.3s ease;
     position: relative;
@@ -277,7 +274,7 @@ st.markdown("""
     left: -100%;
     width: 100%;
     height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
     transition: left 0.5s ease;
 }
 
@@ -287,23 +284,23 @@ st.markdown("""
 
 .stat-card:hover {
     transform: translateY(-5px);
-    box-shadow: 0 15px 35px rgba(255, 255, 255, 0.2);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
 }
 
 .stat-number {
     font-size: 2.5rem;
     font-weight: 700;
-    color: #fff;
-    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
     margin-bottom: 0.5rem;
 }
 
 .stat-label {
     font-size: 1rem;
-    opacity: 0.9;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 1px;
+    color: #34495e;
 }
 
 .advanced-progress-container {
@@ -311,11 +308,12 @@ st.markdown("""
 }
 
 .progress-bar-wrapper {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.6);
     border-radius: 25px;
     padding: 8px;
     position: relative;
     overflow: hidden;
+    border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .progress-bar-fill {
@@ -348,11 +346,11 @@ st.markdown("""
 }
 
 .steps-section {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.5);
     border-radius: 20px;
     padding: 2rem;
     backdrop-filter: blur(15px);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(0, 0, 0, 0.1);
     position: relative;
     z-index: 10;
 }
@@ -362,19 +360,19 @@ st.markdown("""
     font-weight: 600;
     margin-bottom: 2rem;
     text-align: center;
-    color: #fff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
 }
 
 .step-item {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.6);
     border-radius: 15px;
     padding: 1.5rem;
     margin: 1rem 0;
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     position: relative;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .step-item::before {
@@ -384,14 +382,14 @@ st.markdown("""
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.3);
     border-radius: 15px;
     transition: all 0.3s ease;
     z-index: -1;
 }
 
 .step-pending {
-    border-left: 4px solid rgba(255, 255, 255, 0.3);
+    border-left: 4px solid #6c757d;
 }
 
 .step-running {
@@ -451,9 +449,9 @@ st.markdown("""
 }
 
 .step-icon-pending {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.6);
-    border: 2px solid rgba(255, 255, 255, 0.2);
+    background: rgba(108, 117, 125, 0.2);
+    color: #6c757d;
+    border: 2px solid #6c757d;
 }
 
 .step-icon-running {
@@ -491,15 +489,14 @@ st.markdown("""
     font-size: 1.3rem;
     font-weight: 600;
     margin-bottom: 0.5rem;
-    color: #fff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
 }
 
 .step-description {
     font-size: 1rem;
-    opacity: 0.9;
     line-height: 1.5;
-    color: rgba(255, 255, 255, 0.8);
+    color: #34495e;
 }
 
 .step-status {
@@ -513,8 +510,8 @@ st.markdown("""
 }
 
 .status-pending {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.7);
+    background: rgba(108, 117, 125, 0.2);
+    color: #6c757d;
 }
 
 .status-running {
@@ -542,7 +539,7 @@ st.markdown("""
     text-align: center;
     margin-top: 3rem;
     padding-top: 2rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
     position: relative;
     z-index: 10;
 }
@@ -550,8 +547,8 @@ st.markdown("""
 .footer-status {
     font-size: 1.2rem;
     font-weight: 500;
-    color: #fff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
     animation: breathe 3s infinite;
 }
 
@@ -1124,13 +1121,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     st.json(medical_data)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.download_button(
-                        "📥 Download Medical Claims Data JSON",
-                        safe_json_dumps(medical_data),
-                        f"medical_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
+
                 else:
                     st.warning("No medical claims data available")
             
@@ -1142,13 +1133,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     st.json(pharmacy_data)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.download_button(
-                        "📥 Download Pharmacy Claims Data JSON",
-                        safe_json_dumps(pharmacy_data),
-                        f"pharmacy_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
+
                 else:
                     st.warning("No pharmacy claims data available")
             
@@ -1161,13 +1146,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     st.json(mcid_data)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    st.download_button(
-                        "📥 Download MCID Claims Data JSON",
-                        safe_json_dumps(mcid_data),
-                        f"mcid_claims_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
+
                     
                     # Show MCID summary if available
                     if mcid_data.get('status_code') == 200 and mcid_data.get('body'):
@@ -1319,20 +1298,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            
-            # Medical conditions
-            medical_conditions = safe_get(entity_extraction, 'medical_conditions', [])
-            if medical_conditions:
-                st.markdown("**🏥 Medical Conditions Identified:**")
-                for condition in medical_conditions:
-                    st.write(f"• {condition}")
-            
-            # Medications identified
-            medications_identified = safe_get(entity_extraction, 'medications_identified', [])
-            if medications_identified:
-                st.markdown("**💊 Medications Identified:**")
-                for med in medications_identified:
-                    st.write(f"• **{med.get('label_name', 'N/A')}** (NDC: {med.get('ndc', 'N/A')})")
+
 
     # 6. HEALTH TRAJECTORY BUTTON
     if st.button("📈 Health Trajectory", use_container_width=True, key="health_trajectory_btn"):
@@ -1388,9 +1354,6 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
             <div style="background: #f8f9fa; padding: 2rem; border-radius: 10px; border: 1px solid #dee2e6; margin: 1rem 0; text-align: center;">
                 <h3 style="color: #2c3e50; margin-bottom: 1rem;">Heart Attack Risk Prediction</h3>
                 <h4 style="color: #495057; font-weight: 600;">{combined_display}</h4>
-                <p style="color: #6c757d; margin-top: 1rem; font-size: 0.9rem;">
-                    Prediction from ML Server: {heart_attack_prediction.get('fastapi_server_url', 'Unknown')}
-                </p>
             </div>
             """, unsafe_allow_html=True)
             
