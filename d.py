@@ -869,7 +869,7 @@ def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
 
 def display_code_with_explanation(code: str, explanation: str, code_type: str = "Code"):
     """Display a code with its explanation in a formatted way"""
-    if code and explanation and explanation != "Explanation unavailable" and explanation != "Explanation not available":
+    if code and explanation and explanation != "Explanation unavailable" and explanation != "Explanation not available" and not explanation.startswith("Click"):
         st.markdown(f"""
         <div style="margin: 0.5rem 0;">
             <span class="code-container">{code_type}: {code}</span>
@@ -878,8 +878,21 @@ def display_code_with_explanation(code: str, explanation: str, code_type: str = 
             </div>
         </div>
         """, unsafe_allow_html=True)
+    elif explanation.startswith("Click"):
+        st.markdown(f"""
+        <div style="margin: 0.5rem 0;">
+            <span class="code-container">{code_type}: {code}</span>
+            <div style="background: #fff3cd; padding: 0.8rem; border-radius: 6px; border-left: 3px solid #ffc107; margin: 0.5rem 0; font-size: 0.9rem; color: #856404;">
+                🔮 <strong>LLM Explanation:</strong> {explanation}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.write(f"**{code_type}:** `{code}`")
+        st.markdown(f"""
+        <div style="margin: 0.5rem 0;">
+            <span class="code-container">{code_type}: {code}</span>
+        </div>
+        """, unsafe_allow_html=True)
         if explanation == "Explanation unavailable":
             st.caption("⚠️ Explanation temporarily unavailable")
 
@@ -912,23 +925,47 @@ def display_enhanced_medical_extraction(structured_extractions, agent):
             st.markdown("**📋 Medical Records with LLM Code Explanations:**")
             st.info("💡 Each medical code and diagnosis code now includes a 1-2 line explanation from our LLM!")
             
+            # Initialize explanation cache in session state
+            if 'medical_explanations_cache' not in st.session_state:
+                st.session_state.medical_explanations_cache = {}
+            
+            # Add "Generate All Explanations" button
+            if st.button("🔮 Generate All LLM Explanations", key="generate_medical_explanations"):
+                with st.spinner("🤖 Generating LLM explanations for all medical codes... Please wait."):
+                    progress_bar = st.progress(0)
+                    for i, record in enumerate(hlth_srvc_records):
+                        record_key = f"medical_record_{i}"
+                        if record_key not in st.session_state.medical_explanations_cache:
+                            if agent:
+                                try:
+                                    explanations = agent.get_code_explanations_for_record(record, "medical")
+                                    st.session_state.medical_explanations_cache[record_key] = explanations
+                                except Exception as e:
+                                    st.session_state.medical_explanations_cache[record_key] = {"error": str(e)}
+                        progress_bar.progress((i + 1) / len(hlth_srvc_records))
+                    
+                    st.success("✅ All LLM explanations generated successfully!")
+                    st.balloons()
+            
+            # Display records with cached explanations
             for i, record in enumerate(hlth_srvc_records, 1):
                 service_code = record.get('hlth_srvc_cd', 'N/A')
+                record_key = f"medical_record_{i-1}"
                 
                 with st.expander(f"Medical Record {i} - Service Code: {service_code}"):
-                    # Get explanations for this record
-                    if agent:
-                        try:
-                            explanations = agent.get_code_explanations_for_record(record, "medical")
-                        except Exception as e:
-                            st.warning(f"Could not get explanations: {str(e)}")
+                    # Get explanations from cache or show placeholder
+                    if record_key in st.session_state.medical_explanations_cache:
+                        explanations = st.session_state.medical_explanations_cache[record_key]
+                        if "error" in explanations:
+                            st.warning(f"Could not get explanations: {explanations['error']}")
                             explanations = {}
                     else:
                         explanations = {}
+                        st.info("🔮 Click 'Generate All LLM Explanations' button above to get AI explanations for this record.")
                     
                     # Display service code with explanation
                     if service_code != 'N/A':
-                        service_explanation = explanations.get("service_code_explanation", "Explanation unavailable")
+                        service_explanation = explanations.get("service_code_explanation", "Click 'Generate All LLM Explanations' to get explanation")
                         display_code_with_explanation(service_code, service_explanation, "Service Code")
                     
                     st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
@@ -949,7 +986,7 @@ def display_enhanced_medical_extraction(structured_extractions, agent):
                             source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
                             
                             # Find matching explanation
-                            diag_explanation = "Explanation unavailable"
+                            diag_explanation = "Click 'Generate All LLM Explanations' to get explanation"
                             for expl in diagnosis_explanations:
                                 if expl.get('code') == diag_code:
                                     diag_explanation = expl.get('explanation', "Explanation unavailable")
@@ -989,29 +1026,53 @@ def display_enhanced_pharmacy_extraction(structured_extractions, agent):
             st.markdown("**💊 Pharmacy Records with LLM Code Explanations:**")
             st.info("💡 Each NDC code and medication name now includes a 1-2 line explanation from our LLM!")
             
+            # Initialize explanation cache in session state
+            if 'pharmacy_explanations_cache' not in st.session_state:
+                st.session_state.pharmacy_explanations_cache = {}
+            
+            # Add "Generate All Explanations" button
+            if st.button("🔮 Generate All LLM Explanations", key="generate_pharmacy_explanations"):
+                with st.spinner("🤖 Generating LLM explanations for all pharmacy codes... Please wait."):
+                    progress_bar = st.progress(0)
+                    for i, record in enumerate(ndc_records):
+                        record_key = f"pharmacy_record_{i}"
+                        if record_key not in st.session_state.pharmacy_explanations_cache:
+                            if agent:
+                                try:
+                                    explanations = agent.get_code_explanations_for_record(record, "pharmacy")
+                                    st.session_state.pharmacy_explanations_cache[record_key] = explanations
+                                except Exception as e:
+                                    st.session_state.pharmacy_explanations_cache[record_key] = {"error": str(e)}
+                        progress_bar.progress((i + 1) / len(ndc_records))
+                    
+                    st.success("✅ All LLM explanations generated successfully!")
+                    st.balloons()
+            
+            # Display records with cached explanations
             for i, record in enumerate(ndc_records, 1):
                 medication_name = record.get('lbl_nm', 'N/A')
                 ndc_code = record.get('ndc', 'N/A')
+                record_key = f"pharmacy_record_{i-1}"
                 
                 with st.expander(f"Pharmacy Record {i} - {medication_name}"):
-                    # Get explanations for this record
-                    if agent:
-                        try:
-                            explanations = agent.get_code_explanations_for_record(record, "pharmacy")
-                        except Exception as e:
-                            st.warning(f"Could not get explanations: {str(e)}")
+                    # Get explanations from cache or show placeholder
+                    if record_key in st.session_state.pharmacy_explanations_cache:
+                        explanations = st.session_state.pharmacy_explanations_cache[record_key]
+                        if "error" in explanations:
+                            st.warning(f"Could not get explanations: {explanations['error']}")
                             explanations = {}
                     else:
                         explanations = {}
+                        st.info("🔮 Click 'Generate All LLM Explanations' button above to get AI explanations for this record.")
                     
                     # Display NDC code with explanation
                     if ndc_code != 'N/A':
-                        ndc_explanation = explanations.get("ndc_explanation", "Explanation unavailable")
+                        ndc_explanation = explanations.get("ndc_explanation", "Click 'Generate All LLM Explanations' to get explanation")
                         display_code_with_explanation(ndc_code, ndc_explanation, "NDC Code")
                     
                     # Display medication with explanation
                     if medication_name != 'N/A':
-                        medication_explanation = explanations.get("medication_explanation", "Explanation unavailable")
+                        medication_explanation = explanations.get("medication_explanation", "Click 'Generate All LLM Explanations' to get explanation")
                         display_code_with_explanation(medication_name, medication_explanation, "Medication")
                     
                     st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
@@ -1352,6 +1413,27 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
             <div class="section-title">🔍 Claims Data Extraction with LLM Code Explanations</div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # Add Clear Cache buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🗑️ Clear Medical Explanations Cache", key="clear_medical_cache"):
+                if 'medical_explanations_cache' in st.session_state:
+                    del st.session_state.medical_explanations_cache
+                st.success("Medical explanations cache cleared!")
+        
+        with col2:
+            if st.button("🗑️ Clear Pharmacy Explanations Cache", key="clear_pharmacy_cache"):
+                if 'pharmacy_explanations_cache' in st.session_state:
+                    del st.session_state.pharmacy_explanations_cache
+                st.success("Pharmacy explanations cache cleared!")
+        
+        # Show cache status
+        medical_cache_count = len(st.session_state.get('medical_explanations_cache', {}))
+        pharmacy_cache_count = len(st.session_state.get('pharmacy_explanations_cache', {}))
+        
+        if medical_cache_count > 0 or pharmacy_cache_count > 0:
+            st.info(f"📋 Cached explanations: {medical_cache_count} medical records, {pharmacy_cache_count} pharmacy records")
         
         structured_extractions = safe_get(results, 'structured_extractions', {})
         
