@@ -1,405 +1,4 @@
-
-# Add this to your health_agent_core.py file
-
-# Add these imports at the top of your file
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-
-class HealthGraphGenerator:
-    """Graph generation capabilities for health data"""
-    
-    def __init__(self):
-        self.colors = {
-            'primary': '#3498db',
-            'secondary': '#2ecc71', 
-            'warning': '#f39c12',
-            'danger': '#e74c3c',
-            'info': '#9b59b6',
-            'success': '#27ae60'
-        }
-        logger.info("🎨 HealthGraphGenerator initialized")
-    
-    def detect_graph_request(self, user_query: str) -> Dict[str, Any]:
-        """Detect if user is requesting a graph/visualization"""
-        graph_keywords = [
-            'graph', 'chart', 'plot', 'visualize', 'visualization', 'show me a',
-            'timeline', 'trend', 'over time', 'histogram', 'bar chart', 'line chart',
-            'scatter plot', 'pie chart', 'heatmap', 'dashboard', 'visual'
-        ]
-        
-        query_lower = user_query.lower()
-        has_graph_keyword = any(keyword in query_lower for keyword in graph_keywords)
-        
-        if not has_graph_keyword:
-            return {"is_graph_request": False}
-        
-        # Determine graph type
-        graph_type = "timeline"  # default
-        
-        if any(word in query_lower for word in ['timeline', 'over time', 'chronological']):
-            graph_type = "timeline"
-        elif any(word in query_lower for word in ['bar chart', 'bar graph', 'count']):
-            graph_type = "bar"
-        elif any(word in query_lower for word in ['pie chart', 'pie graph', 'distribution']):
-            graph_type = "pie"
-        elif any(word in query_lower for word in ['risk', 'factors', 'assessment', 'dashboard']):
-            graph_type = "risk_dashboard"
-        elif any(word in query_lower for word in ['medication', 'drug', 'pharmacy']):
-            graph_type = "medication_timeline"
-        elif any(word in query_lower for word in ['diagnosis', 'condition', 'medical']):
-            graph_type = "diagnosis_timeline"
-        
-        return {
-            "is_graph_request": True,
-            "graph_type": graph_type,
-            "query": user_query
-        }
-    
-    def generate_medication_timeline(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medication timeline visualization"""
-        try:
-            pharmacy_extraction = chat_context.get('pharmacy_extraction', {})
-            ndc_records = pharmacy_extraction.get('ndc_records', [])
-            
-            if not ndc_records:
-                return "No pharmacy data available for visualization."
-            
-            # Prepare data for timeline
-            med_data = []
-            for record in ndc_records:
-                rx_date = record.get('rx_filled_dt')
-                med_name = record.get('lbl_nm', 'Unknown Medication')
-                ndc_code = record.get('ndc', 'Unknown')
-                
-                if rx_date:
-                    try:
-                        # Parse date (handle different formats)
-                        if isinstance(rx_date, str):
-                            for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%Y-%m-%d %H:%M:%S']:
-                                try:
-                                    parsed_date = datetime.strptime(rx_date, fmt)
-                                    break
-                                except:
-                                    continue
-                            else:
-                                parsed_date = datetime.now()
-                        else:
-                            parsed_date = datetime.now()
-                        
-                        med_data.append({
-                            'date': parsed_date,
-                            'medication': med_name,
-                            'ndc': ndc_code
-                        })
-                    except:
-                        continue
-            
-            if not med_data:
-                return "No valid medication timeline data found."
-            
-            # Create DataFrame
-            df = pd.DataFrame(med_data)
-            df = df.sort_values('date')
-            
-            # Create scatter plot timeline
-            fig = px.scatter(
-                df,
-                x='date',
-                y='medication',
-                title='💊 Medication Timeline',
-                labels={'date': 'Date', 'medication': 'Medication'},
-                hover_data=['ndc']
-            )
-            
-            fig.update_traces(marker=dict(size=12, symbol='circle'))
-            fig.update_layout(
-                height=600,
-                xaxis_title="Date",
-                yaxis_title="Medications",
-                showlegend=False,
-                plot_bgcolor='white'
-            )
-            
-            # Convert to HTML
-            html_str = fig.to_html(include_plotlyjs='cdn')
-            
-            return f"""
-## 💊 Medication Timeline
-
-{html_str}
-
-**Summary:** Found {len(med_data)} medication records spanning from {df['date'].min().strftime('%Y-%m-%d')} to {df['date'].max().strftime('%Y-%m-%d')}.
-
-**Key Medications:**
-{chr(10).join([f"• {med}" for med in df['medication'].unique()[:10]])}
-"""
-            
-        except Exception as e:
-            logger.error(f"Error generating medication timeline: {e}")
-            return f"Error generating medication timeline: {str(e)}"
-    
-    def generate_diagnosis_timeline(self, chat_context: Dict[str, Any]) -> str:
-        """Generate diagnosis timeline visualization"""
-        try:
-            medical_extraction = chat_context.get('medical_extraction', {})
-            hlth_srvc_records = medical_extraction.get('hlth_srvc_records', [])
-            
-            if not hlth_srvc_records:
-                return "No medical diagnosis data available for visualization."
-            
-            # Prepare data for timeline
-            diag_data = []
-            for record in hlth_srvc_records:
-                claim_date = record.get('clm_rcvd_dt')
-                service_code = record.get('hlth_srvc_cd')
-                diagnosis_codes = record.get('diagnosis_codes', [])
-                
-                if claim_date and diagnosis_codes:
-                    try:
-                        # Parse date
-                        if isinstance(claim_date, str):
-                            for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%Y-%m-%d %H:%M:%S']:
-                                try:
-                                    parsed_date = datetime.strptime(claim_date, fmt)
-                                    break
-                                except:
-                                    continue
-                            else:
-                                parsed_date = datetime.now()
-                        else:
-                            parsed_date = datetime.now()
-                        
-                        for diag in diagnosis_codes:
-                            diag_code = diag.get('code', 'Unknown')
-                            diag_data.append({
-                                'date': parsed_date,
-                                'diagnosis_code': diag_code,
-                                'service_code': service_code
-                            })
-                    except:
-                        continue
-            
-            if not diag_data:
-                return "No valid diagnosis timeline data found."
-            
-            # Create DataFrame
-            df = pd.DataFrame(diag_data)
-            df = df.sort_values('date')
-            
-            # Count diagnoses by month
-            df['month'] = df['date'].dt.to_period('M')
-            monthly_counts = df.groupby('month').size().reset_index(name='count')
-            monthly_counts['month_str'] = monthly_counts['month'].astype(str)
-            
-            # Create bar chart
-            fig = px.bar(
-                monthly_counts,
-                x='month_str',
-                y='count',
-                title='🏥 Medical Diagnoses Over Time',
-                labels={'month_str': 'Month', 'count': 'Number of Diagnoses'},
-                color='count',
-                color_continuous_scale='viridis'
-            )
-            
-            fig.update_layout(
-                height=500,
-                xaxis_title="Month",
-                yaxis_title="Number of Diagnoses",
-                showlegend=False,
-                plot_bgcolor='white'
-            )
-            
-            # Convert to HTML
-            html_str = fig.to_html(include_plotlyjs='cdn')
-            
-            # Top diagnoses
-            top_diagnoses = df['diagnosis_code'].value_counts().head(10)
-            
-            return f"""
-## 🏥 Medical Diagnosis Timeline
-
-{html_str}
-
-**Summary:** Found {len(diag_data)} diagnosis records spanning from {df['date'].min().strftime('%Y-%m-%d')} to {df['date'].max().strftime('%Y-%m-%d')}.
-
-**Top Diagnosis Codes:**
-{chr(10).join([f"• {code}: {count} occurrences" for code, count in top_diagnoses.items()])}
-"""
-            
-        except Exception as e:
-            logger.error(f"Error generating diagnosis timeline: {e}")
-            return f"Error generating diagnosis timeline: {str(e)}"
-    
-    def generate_risk_dashboard(self, chat_context: Dict[str, Any]) -> str:
-        """Generate comprehensive risk assessment dashboard"""
-        try:
-            entity_extraction = chat_context.get('entity_extraction', {})
-            heart_attack_prediction = chat_context.get('heart_attack_prediction', {})
-            
-            # Prepare risk data
-            risk_factors = {
-                'Diabetes': 1 if entity_extraction.get('diabetics', 'no') == 'yes' else 0,
-                'High Blood Pressure': 1 if entity_extraction.get('blood_pressure', 'unknown') in ['managed', 'diagnosed'] else 0,
-                'Smoking': 1 if entity_extraction.get('smoking', 'no') == 'yes' else 0,
-                'Alcohol Use': 1 if entity_extraction.get('alcohol', 'no') == 'yes' else 0
-            }
-            
-            # Create subplots
-            fig = make_subplots(
-                rows=2, cols=2,
-                subplot_titles=('Risk Factors Distribution', 'Heart Attack Risk Score', 'Risk Factor Breakdown', 'Health Conditions'),
-                specs=[[{"type": "pie"}, {"type": "indicator"}],
-                       [{"type": "bar"}, {"type": "bar"}]]
-            )
-            
-            # Risk factors pie chart
-            risk_labels = list(risk_factors.keys())
-            risk_values = list(risk_factors.values())
-            
-            fig.add_trace(
-                go.Pie(labels=risk_labels, values=risk_values, name="Risk Factors"),
-                row=1, col=1
-            )
-            
-            # Heart attack risk gauge
-            heart_risk_score = heart_attack_prediction.get('raw_risk_score', 0.0) * 100
-            fig.add_trace(
-                go.Indicator(
-                    mode="gauge+number",
-                    value=heart_risk_score,
-                    domain={'x': [0, 1], 'y': [0, 1]},
-                    title={'text': "Heart Attack Risk %"},
-                    gauge={'axis': {'range': [None, 100]},
-                           'bar': {'color': "darkblue"},
-                           'steps': [
-                               {'range': [0, 25], 'color': "lightgreen"},
-                               {'range': [25, 50], 'color': "yellow"},
-                               {'range': [50, 75], 'color': "orange"},
-                               {'range': [75, 100], 'color': "red"}],
-                           'threshold': {'line': {'color': "red", 'width': 4},
-                                        'thickness': 0.75, 'value': 75}}
-                ),
-                row=1, col=2
-            )
-            
-            # Risk factor breakdown
-            colors = ['red' if val == 1 else 'lightgray' for val in risk_values]
-            fig.add_trace(
-                go.Bar(x=risk_labels, y=risk_values, name="Risk Factors", marker_color=colors),
-                row=2, col=1
-            )
-            
-            # Medical conditions count
-            medical_conditions = entity_extraction.get('medical_conditions', [])
-            condition_counts = {'Identified': len(medical_conditions), 'Not Identified': max(0, 5 - len(medical_conditions))}
-            
-            fig.add_trace(
-                go.Bar(x=list(condition_counts.keys()), y=list(condition_counts.values()), 
-                       name="Conditions", marker_color=['blue', 'lightblue']),
-                row=2, col=2
-            )
-            
-            fig.update_layout(height=800, title_text="📊 Comprehensive Health Risk Dashboard")
-            
-            # Convert to HTML
-            html_str = fig.to_html(include_plotlyjs='cdn')
-            
-            return f"""
-## 📊 Health Risk Assessment Dashboard
-
-{html_str}
-
-**Risk Summary:**
-- **Heart Attack Risk:** {heart_attack_prediction.get('risk_display', 'Not calculated')}
-- **Active Risk Factors:** {sum(risk_values)} out of {len(risk_values)}
-- **Medical Conditions:** {len(medical_conditions)} identified conditions
-
-**Risk Factors Present:**
-{chr(10).join([f"• {factor}" for factor, present in risk_factors.items() if present])}
-
-**Recommendations:**
-- Regular monitoring of identified risk factors
-- Lifestyle modifications based on risk profile
-- Continued medical follow-up as appropriate
-"""
-            
-        except Exception as e:
-            logger.error(f"Error generating risk dashboard: {e}")
-            return f"Error generating risk dashboard: {str(e)}"
-    
-    def generate_medication_distribution(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medication distribution pie chart"""
-        try:
-            pharmacy_extraction = chat_context.get('pharmacy_extraction', {})
-            ndc_records = pharmacy_extraction.get('ndc_records', [])
-            
-            if not ndc_records:
-                return "No pharmacy data available for medication distribution."
-            
-            # Count medications
-            med_counts = {}
-            for record in ndc_records:
-                med_name = record.get('lbl_nm', 'Unknown Medication')
-                med_counts[med_name] = med_counts.get(med_name, 0) + 1
-            
-            # Create pie chart
-            fig = px.pie(
-                values=list(med_counts.values()),
-                names=list(med_counts.keys()),
-                title='💊 Medication Distribution'
-            )
-            
-            fig.update_layout(height=600)
-            
-            # Convert to HTML
-            html_str = fig.to_html(include_plotlyjs='cdn')
-            
-            return f"""
-## 💊 Medication Distribution
-
-{html_str}
-
-**Summary:** Total of {len(med_counts)} unique medications with {sum(med_counts.values())} total prescriptions.
-
-**Top Medications:**
-{chr(10).join([f"• {med}: {count} prescriptions" for med, count in sorted(med_counts.items(), key=lambda x: x[1], reverse=True)[:10]])}
-"""
-            
-        except Exception as e:
-            logger.error(f"Error generating medication distribution: {e}")
-            return f"Error generating medication distribution: {str(e)}"
-
-
-# MODIFY YOUR HealthAnalysisAgent.__init__ method to include:
-# Add this line after initializing data_processor:
-# self.graph_generator = HealthGraphGenerator()
-
-# MODIFY YOUR chat_with_data method to replace the existing one:
-
-def chat_with_data(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-    """Enhanced chatbot with graph generation capabilities"""
-    try:
-        # Check if this is a graph request FIRST
-        graph_request = self.graph_generator.detect_graph_request(user_query)
-        
-        if graph_request.get("is_graph_request", False):
-            return self._handle_graph_request(user_query, chat_context, chat_history, graph_request)
-        
-        # Check if this is a heart attack related question
-        heart_attack_keywords = ['heart attack', 'heart disease', 'cardiac', 'cardiovascular', 'heart risk', 'coronary', 'myocardial', 'cardiac risk']
-        is_heart_attack_question = any(keyword in user_query.lower() for keyword in heart_attack_keywords)
-        
-        if is_heart_attack_question:
-            return self._handle_heart_attack_question(user_query, chat_context, chat_history)
-        else:
-            return self._handle_general_question(user_query, chat_context, chat_history)
-        
-    except Exception as e:
-        logger.error(f"Error in enhanced chatbot with graph capabilities: {str(e)}")
-        return "I encountered an error processing your question. Please try again. I have access to comprehensive claims data and can generate visualizations for your analysis."
+# FIXED HELPER METHODS - Replace the ones I provided earlier
 
 def _handle_graph_request(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]], graph_request: Dict[str, Any]) -> str:
     """Handle graph generation requests"""
@@ -440,8 +39,6 @@ I encountered an error while generating your requested visualization: {str(e)}
 Please try rephrasing your request with one of these specific graph types.
 """
 
-# ADD THESE METHODS TO YOUR HealthAnalysisAgent CLASS:
-
 def _handle_heart_attack_question(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
     """Handle heart attack related questions with potential graph generation"""
     try:
@@ -451,31 +48,92 @@ def _handle_heart_attack_question(self, user_query: str, chat_context: Dict[str,
         if graph_request.get("is_graph_request", False):
             return self.graph_generator.generate_risk_dashboard(chat_context)
         
-        # Continue with existing heart attack logic but add visualization suggestion
-        # [Keep your existing _handle_heart_attack_question code but add this at the end:]
-        
+        # Use your existing heart attack handling logic
         # Get FastAPI prediction from context
         heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
         entity_extraction = chat_context.get("entity_extraction", {})
         
-        # [Your existing heart attack analysis code here]
+        # Prepare comprehensive context for LLM analysis
+        complete_context = self._prepare_heart_attack_context(chat_context)
         
-        # Add visualization suggestion to response
+        # Build conversation history
+        history_text = ""
+        if chat_history:
+            recent_history = chat_history[-5:]
+            history_text = "\n".join([
+                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+                for msg in recent_history
+            ])
+        
+        # Create enhanced prompt for heart attack analysis
+        heart_attack_prompt = f"""You are an expert cardiologist and data analyst with access to COMPLETE deidentified patient claims data. Analyze the heart attack/cardiovascular risk based on the comprehensive medical and pharmacy claims data provided.
+
+COMPLETE DEIDENTIFIED CLAIMS DATA FOR HEART ATTACK ANALYSIS:
+{complete_context}
+
+CURRENT FASTAPI ML MODEL PREDICTION:
+{json.dumps(heart_attack_prediction, indent=2)}
+
+EXTRACTED HEALTH ENTITIES:
+{json.dumps(entity_extraction, indent=2)}
+
+RECENT CONVERSATION HISTORY:
+{history_text}
+
+USER QUESTION: {user_query}
+
+CRITICAL ANALYSIS INSTRUCTIONS:
+- Provide a comprehensive heart attack/cardiovascular risk assessment in PERCENTAGE format
+- Analyze ALL available medical codes (ICD-10), medications (NDC), and claims data
+- Consider age, gender, diabetes status, blood pressure, smoking, and medication patterns
+- Compare your analysis with the FastAPI ML model prediction provided above
+- Provide specific percentages for cardiovascular risk based on the complete claims data
+- Reference specific medical codes, medications, dates, and clinical indicators from the JSON data
+- Explain discrepancies between your analysis and the FastAPI model if any
+- Include risk factors found in the claims data that support your percentage assessment
+
+PROVIDE YOUR RESPONSE IN THIS FORMAT:
+
+**🤖 LLM CARDIOVASCULAR RISK ANALYSIS:**
+- **Risk Percentage:** [Your calculated percentage]% 
+- **Risk Category:** [Low/Medium/High Risk]
+- **Key Risk Factors:** [List specific factors from claims data]
+- **Supporting Evidence:** [Specific codes, medications, dates from JSON]
+
+**⚖️ COMPARISON WITH FASTAPI MODEL:**
+- **FastAPI Prediction:** [FastAPI percentage and category]
+- **LLM Analysis:** [Your percentage and category]  
+- **Agreement/Discrepancy:** [Comparison and explanation]
+- **Confidence:** [Your confidence in the assessment]
+
+**📊 DETAILED CARDIOVASCULAR ASSESSMENT:**
+[Provide detailed analysis based on complete claims data]
+
+Use the complete deidentified claims data to provide the most accurate cardiovascular risk assessment possible."""
+
+        logger.info(f"💬 Processing heart attack question with comprehensive analysis: {user_query[:50]}...")
+        
+        # Use enhanced API integrator for LLM call
+        enhanced_system_msg = """You are an expert cardiologist with access to COMPLETE deidentified claims data. Provide detailed cardiovascular risk analysis with specific percentages based on comprehensive medical and pharmacy claims data. Compare your analysis with ML model predictions and explain your reasoning using specific data from the claims records."""
+        
         response = self.api_integrator.call_llm(heart_attack_prompt, enhanced_system_msg)
         
-        if not response.startswith("Error"):
-            response += "\n\n💡 **Tip:** You can also ask me to 'generate a risk assessment dashboard' or 'show me a heart attack risk chart' for visual analysis!"
+        if response.startswith("Error"):
+            return "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question. I can provide detailed heart attack risk analysis using both ML predictions and comprehensive claims data analysis."
+        
+        # Add visualization suggestion
+        response += "\n\n💡 **Tip:** You can also ask me to 'generate a risk assessment dashboard' for visual analysis!"
         
         return response
         
     except Exception as e:
-        logger.error(f"Error in heart attack question with graph capabilities: {str(e)}")
-        return "I encountered an error analyzing cardiovascular risk. Please try again. I can provide comprehensive analysis and generate visualizations including risk dashboards and timelines."
+        logger.error(f"Error in heart attack question handling: {str(e)}")
+        return "I encountered an error analyzing cardiovascular risk. Please try again. I can compare ML model predictions with comprehensive claims data analysis for heart attack risk assessment."
 
 def _handle_general_question(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-    """Handle general questions with graph generation suggestions"""
+    """Handle general questions with complete claims data access"""
     try:
-        # Check if they want a graph for general analysis  
+        # Check if they want a graph for general analysis
         graph_request = self.graph_generator.detect_graph_request(user_query)
         
         if graph_request.get("is_graph_request", False):
@@ -488,20 +146,112 @@ def _handle_general_question(self, user_query: str, chat_context: Dict[str, Any]
             else:
                 return self.graph_generator.generate_risk_dashboard(chat_context)
         
-        # [Keep your existing _handle_general_question code but add visualization suggestions]
-        
-        # Continue with existing general question logic
+        # Use enhanced data processor to prepare COMPLETE context with both medical and pharmacy data
         complete_context = self.data_processor.prepare_chunked_context(chat_context)
         
-        # [Your existing general question code here]
+        # Build conversation history for continuity
+        history_text = ""
+        if chat_history:
+            recent_history = chat_history[-10:]
+            history_text = "\n".join([
+                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+                for msg in recent_history
+            ])
+        
+        # Create COMPLETE prompt with ENTIRE deidentified claims data
+        complete_prompt = f"""You are an expert medical claims data assistant with access to the COMPLETE, ENTIRE deidentified patient claims records (medical, pharmacy, and MCID). You have the FULL JSON data structures available. Answer the user's question with specific, detailed information from ANY part of the complete claims data provided.
+
+COMPLETE DEIDENTIFIED CLAIMS DATA (ENTIRE JSON STRUCTURES - MEDICAL & PHARMACY):
+{complete_context}
+
+RECENT CONVERSATION HISTORY:
+{history_text}
+
+USER QUESTION: {user_query}
+
+CRITICAL INSTRUCTIONS:
+- You have access to the COMPLETE deidentified medical, pharmacy, and MCID claims JSON data
+- Search through the ENTIRE JSON structure to find relevant information
+- Include specific dates (clm_rcvd_dt, rx_filled_dt), codes, medications, diagnoses, and values from ANY part of the JSON
+- Reference exact field names, values, and nested structures from the data
+- If user asks about ANY specific field, code, medication, or data point, find it in the complete JSON
+- Include ICD-10 codes, NDC codes, service codes, dates, quantities, and any other specific data
+- Access all nested levels of the JSON structure to answer questions
+- Be thorough and cite specific data points from the complete deidentified records
+- If data exists in the JSON, you can find and reference it
+- Use the conversation history to understand follow-up questions and context
+- Explain medical codes and terminology when relevant
+- For numerical values, dates, codes - provide exact values from the JSON data
+- Include both medical claims data AND pharmacy claims data in your analysis
+
+DETAILED ANSWER USING COMPLETE DEIDENTIFIED CLAIMS DATA:"""
+
+        logger.info(f"💬 Processing general query with COMPLETE deidentified claims data access: {user_query[:50]}...")
+        logger.info(f"📊 Complete context length: {len(complete_context)} characters")
+        
+        # Use enhanced API integrator for LLM call with extended system message
+        enhanced_system_msg = """You are a powerful healthcare AI assistant with access to COMPLETE deidentified claims records including both medical and pharmacy data. You can search through and reference ANY part of the provided JSON data structures. Provide accurate, detailed analysis based on the ENTIRE medical, pharmacy, and MCID claims data provided. Always maintain patient privacy and provide professional medical insights using the complete available data."""
         
         response = self.api_integrator.call_llm(complete_prompt, enhanced_system_msg)
         
-        if not response.startswith("Error"):
-            response += "\n\n📊 **Available Visualizations:** Ask me to 'show medication timeline', 'create diagnosis chart', or 'generate risk dashboard' for visual insights!"
+        if response.startswith("Error"):
+            return "I encountered an error processing your question. Please try rephrasing your question. I have access to the complete deidentified claims data including both medical and pharmacy records and can answer questions about any specific codes, medications, dates, or other data points."
+        
+        # Add visualization suggestion
+        response += "\n\n📊 **Available Visualizations:** Ask me to 'show medication timeline', 'create diagnosis chart', or 'generate risk dashboard' for visual insights!"
         
         return response
         
     except Exception as e:
         logger.error(f"Error in general question handling: {str(e)}")
-        return "I encountered an error processing your question. Please try again. I have access to the complete deidentified claims JSON data and can generate various visualizations."
+        return "I encountered an error processing your question. Please try again. I have access to the complete deidentified claims JSON data and can answer detailed questions about any aspect of the patient's records."
+
+def _prepare_heart_attack_context(self, chat_context: Dict[str, Any]) -> str:
+    """Prepare comprehensive context specifically for heart attack analysis"""
+    try:
+        context_sections = []
+        
+        # 1. Patient Overview
+        patient_overview = chat_context.get("patient_overview", {})
+        if patient_overview:
+            context_sections.append(f"PATIENT OVERVIEW:\n{json.dumps(patient_overview, indent=2)}")
+        
+        # 2. Complete Medical Claims Data
+        deidentified_medical = chat_context.get("deidentified_medical", {})
+        if deidentified_medical:
+            medical_claims_data = deidentified_medical.get('medical_claims_data', {})
+            if medical_claims_data:
+                context_sections.append(f"COMPLETE MEDICAL CLAIMS DATA:\n{json.dumps(medical_claims_data, indent=2)}")
+        
+        # 3. Complete Pharmacy Claims Data  
+        deidentified_pharmacy = chat_context.get("deidentified_pharmacy", {})
+        if deidentified_pharmacy:
+            pharmacy_claims_data = deidentified_pharmacy.get('pharmacy_claims_data', {})
+            if pharmacy_claims_data:
+                context_sections.append(f"COMPLETE PHARMACY CLAIMS DATA:\n{json.dumps(pharmacy_claims_data, indent=2)}")
+        
+        # 4. Medical Extractions with dates
+        medical_extraction = chat_context.get("medical_extraction", {})
+        if medical_extraction and not medical_extraction.get('error'):
+            context_sections.append(f"MEDICAL EXTRACTIONS (including clm_rcvd_dt):\n{json.dumps(medical_extraction, indent=2)}")
+        
+        # 5. Pharmacy Extractions with dates
+        pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
+        if pharmacy_extraction and not pharmacy_extraction.get('error'):
+            context_sections.append(f"PHARMACY EXTRACTIONS (including rx_filled_dt):\n{json.dumps(pharmacy_extraction, indent=2)}")
+        
+        # 6. Entity Extraction
+        entity_extraction = chat_context.get("entity_extraction", {})
+        if entity_extraction:
+            context_sections.append(f"HEALTH ENTITIES:\n{json.dumps(entity_extraction, indent=2)}")
+        
+        # 7. Heart Attack Features
+        heart_attack_features = chat_context.get("heart_attack_features", {})
+        if heart_attack_features:
+            context_sections.append(f"HEART ATTACK FEATURES:\n{json.dumps(heart_attack_features, indent=2)}")
+        
+        return "\n\n".join(context_sections)
+        
+    except Exception as e:
+        logger.error(f"Error preparing heart attack context: {e}")
+        return "Patient claims data available for cardiovascular analysis."
