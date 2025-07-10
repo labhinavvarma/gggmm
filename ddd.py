@@ -1,318 +1,203 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
-from typing import Dict, Any, List, Optional
-import uuid
-import json
-from datetime import datetime, date
-import logging
-from contextlib import asynccontextmanager
+diabetes_keywords = [
+        # === INSULIN TYPES ===
+        # Rapid-acting insulins
+        'insulin', 'humalog', 'novolog', 'apidra', 'fiasp', 'lyumjev',
+        'insulin lispro', 'insulin aspart', 'insulin glulisine',
+        
+        # Long-acting insulins  
+        'lantus', 'levemir', 'tresiba', 'toujeo', 'basaglar',
+        'insulin glargine', 'insulin detemir', 'insulin degludec',
+        
+        # Intermediate-acting insulins
+        'nph insulin', 'humulin n', 'novolin n',
+        
+        # Mixed insulins
+        'humulin 70/30', 'novolin 70/30', 'humalog mix', 'novolog mix',
+        
+        # === ORAL DIABETES MEDICATIONS ===
+        # Metformin (Biguanides)
+        'metformin', 'glucophage', 'glucophage xr', 'fortamet', 'glumetza', 'riomet',
+        
+        # Sulfonylureas
+        'glipizide', 'glyburide', 'glimepiride', 'glucotrol', 'diabeta', 'micronase',
+        'glynase', 'amaryl', 'glipizide xl', 'glipizide er',
+        
+        # DPP-4 Inhibitors
+        'sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin',
+        'januvia', 'onglyza', 'tradjenta', 'nesina',
+        
+        # SGLT2 Inhibitors
+        'canagliflozin', 'dapagliflozin', 'empagliflozin', 'ertugliflozin',
+        'invokana', 'farxiga', 'jardiance', 'steglatro',
+        
+        # GLP-1 Receptor Agonists
+        'semaglutide', 'liraglutide', 'dulaglutide', 'exenatide', 'lixisenatide',
+        'ozempic', 'wegovy', 'victoza', 'saxenda', 'trulicity', 'byetta', 'bydureon', 'adlyxin',
+        
+        # Thiazolidinediones (TZDs)
+        'pioglitazone', 'rosiglitazone', 'actos', 'avandia',
+        
+        # Alpha-glucosidase inhibitors
+        'acarbose', 'miglitol', 'precose', 'glyset',
+        
+        # Meglitinides
+        'repaglinide', 'nateglinide', 'prandin', 'starlix',
+        
+        # === COMBINATION MEDICATIONS ===
+        'janumet', 'kombiglyze', 'jentadueto', 'kazano', 'oseni', 'invokamet',
+        'xigduo', 'synjardy', 'steglujan', 'qtern', 'trijardy',
+        
+        # === DIABETES-RELATED TERMS ===
+        'diabetes', 'diabetic', 'diabetes mellitus', 'dm', 'type 1 diabetes', 'type 2 diabetes',
+        'diabetes type 1', 'diabetes type 2', 't1dm', 't2dm', 'iddm', 'niddm',
+        'gestational diabetes', 'diabetic ketoacidosis', 'dka', 'hyperglycemia', 'hypoglycemia',
+        
+        # === BLOOD GLUCOSE MONITORING ===
+        'glucose', 'blood glucose', 'blood sugar', 'glucometer', 'glucose meter',
+        'glucose strips', 'test strips', 'lancets', 'glucose monitor',
+        'continuous glucose monitor', 'cgm', 'dexcom', 'freestyle', 'omnipod',
+        
+        # === DIABETIC COMPLICATIONS & MANAGEMENT ===
+        'diabetic nephropathy', 'diabetic retinopathy', 'diabetic neuropathy',
+        'diabetic foot', 'hba1c', 'hemoglobin a1c', 'a1c', 'fructosamine',
+        
+        # === ADDITIONAL BRAND NAMES ===
+        'humulin', 'novolin', 'admelog', 'insulin pump', 'omnipod', 'medtronic',
+        'freestyle libre', 'glucose gel', 'glucose tablets',
+        
+        # === INSULIN DELIVERY DEVICES ===
+        'insulin pen', 'insulin pump', 'insulin syringe', 'pen needles',
+        'pump supplies', 'infusion sets', 'reservoirs',
+        
+        # === NEWER MEDICATIONS ===
+        'tirzepatide', 'mounjaro', 'rybelsus', 'oral semaglutide',
+        'sotagliflozin', 'zynquista', 'bexagliflozin', 'brenzavvy'
+    ]
 
-# Import your health agent
-try:
-    from health_agent_core import HealthAnalysisAgent, Config
-    AGENT_AVAILABLE = True
-except ImportError as e:
-    AGENT_AVAILABLE = False
-    import_error = str(e)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# Global variables
-health_agent = None
-sessions: Dict[str, Dict[str, Any]] = {}
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize the health agent on startup"""
-    global health_agent
+
+# =============================================================================
+# EXACT CHANGES TO MAKE IN health_data_processor.py
+# =============================================================================
+
+# 1. FIND this method around line ~380:
+def _analyze_pharmacy_for_entities(self, data_str: str, entities: Dict[str, Any]):
+    """Original pharmacy data analysis for entities"""
     
-    if AGENT_AVAILABLE:
-        try:
-            config = Config()
-            health_agent = HealthAnalysisAgent(config)
-            logger.info("✅ Health Analysis Agent initialized")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Health Agent: {str(e)}")
-            health_agent = None
-    else:
-        logger.error(f"❌ Health Agent not available: {import_error}")
+    # REPLACE these lines:
+    diabetes_keywords = [
+        'insulin', 'metformin', 'glipizide', 'diabetes', 'diabetic', 
+        'glucophage', 'lantus', 'humalog', 'novolog', 'levemir'
+    ]
     
-    yield
-    logger.info("🔄 Shutting down Health Agent FastAPI server")
+    # WITH this comprehensive list:
+    diabetes_keywords = [
+        # === INSULIN TYPES ===
+        'insulin', 'humalog', 'novolog', 'apidra', 'fiasp', 'lyumjev',
+        'insulin lispro', 'insulin aspart', 'insulin glulisine',
+        'lantus', 'levemir', 'tresiba', 'toujeo', 'basaglar',
+        'insulin glargine', 'insulin detemir', 'insulin degludec',
+        'nph insulin', 'humulin n', 'novolin n', 'humulin', 'novolin',
+        'humulin 70/30', 'novolin 70/30', 'humalog mix', 'novolog mix',
+        
+        # === ORAL DIABETES MEDICATIONS ===
+        'metformin', 'glucophage', 'glucophage xr', 'fortamet', 'glumetza', 'riomet',
+        'glipizide', 'glyburide', 'glimepiride', 'glucotrol', 'diabeta', 'micronase',
+        'glynase', 'amaryl', 'glipizide xl', 'glipizide er',
+        'sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin',
+        'januvia', 'onglyza', 'tradjenta', 'nesina',
+        'canagliflozin', 'dapagliflozin', 'empagliflozin', 'ertugliflozin',
+        'invokana', 'farxiga', 'jardiance', 'steglatro',
+        'pioglitazone', 'rosiglitazone', 'actos', 'avandia',
+        'acarbose', 'miglitol', 'precose', 'glyset',
+        'repaglinide', 'nateglinide', 'prandin', 'starlix',
+        
+        # === INJECTABLE NON-INSULIN ===
+        'semaglutide', 'liraglutide', 'dulaglutide', 'exenatide', 'lixisenatide',
+        'ozempic', 'wegovy', 'victoza', 'saxenda', 'trulicity', 'byetta', 'bydureon', 'adlyxin',
+        'tirzepatide', 'mounjaro', 'rybelsus',
+        
+        # === COMBINATION MEDICATIONS ===
+        'janumet', 'kombiglyze', 'jentadueto', 'kazano', 'oseni', 'invokamet',
+        'xigduo', 'synjardy', 'steglujan', 'qtern', 'trijardy',
+        
+        # === DIABETES TERMS ===
+        'diabetes', 'diabetic', 'diabetes mellitus', 'type 1 diabetes', 'type 2 diabetes',
+        'diabetes type 1', 'diabetes type 2', 't1dm', 't2dm', 'iddm', 'niddm',
+        'gestational diabetes', 'hyperglycemia', 'hypoglycemia',
+        
+        # === MONITORING SUPPLIES ===
+        'glucose', 'blood glucose', 'glucometer', 'glucose meter',
+        'glucose strips', 'test strips', 'lancets', 'glucose monitor',
+        'continuous glucose monitor', 'cgm', 'dexcom', 'freestyle', 'omnipod',
+        'hba1c', 'hemoglobin a1c', 'a1c', 'glucose tablets', 'glucose gel'
+    ]
 
-# Create FastAPI app
-app = FastAPI(
-    title="Health Analysis Agent API",
-    description="FastAPI wrapper for comprehensive health analysis",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Pydantic models
-class PatientData(BaseModel):
-    first_name: str = Field(..., min_length=1, max_length=50)
-    last_name: str = Field(..., min_length=1, max_length=50)
-    ssn: str = Field(..., min_length=9, max_length=11)
-    date_of_birth: str = Field(..., description="Date in YYYY-MM-DD format")
-    gender: str = Field(..., pattern=r'^[MF]$')
-    zip_code: str = Field(..., min_length=5, max_length=10)
+# 2. FIND this method around line ~420:
+def _analyze_medical_extraction_for_entities(self, medical_extraction: Dict[str, Any], entities: Dict[str, Any]):
+    """Analyze medical codes for health conditions"""
     
-    @field_validator('date_of_birth')
-    @classmethod
-    def validate_date_of_birth(cls, v):
-        try:
-            birth_date = datetime.strptime(v, '%Y-%m-%d').date()
-            today = date.today()
-            age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    # REPLACE these lines:
+    condition_mappings = {
+        "diabetes": ["E10", "E11", "E12", "E13", "E14"],
+        "hypertension": ["I10", "I11", "I12", "I13", "I15"],
+        "smoking": ["Z72.0", "F17"],
+        "alcohol": ["F10", "Z72.1"],
+    }
+    
+    # WITH this comprehensive mapping:
+    condition_mappings = {
+        "diabetes": [
+            # Type 1 Diabetes
+            "E10", "E10.1", "E10.2", "E10.3", "E10.4", "E10.5", "E10.6", "E10.7", "E10.8", "E10.9",
+            "E10.10", "E10.11", "E10.21", "E10.22", "E10.29", "E10.31", "E10.32", "E10.33", "E10.34", "E10.35", "E10.36", "E10.37", "E10.39",
+            "E10.40", "E10.41", "E10.42", "E10.43", "E10.44", "E10.49", "E10.51", "E10.52", "E10.59",
+            "E10.61", "E10.62", "E10.63", "E10.64", "E10.65", "E10.69",
             
-            if age > 150 or age < 0:
-                raise ValueError('Invalid age')
-            return v
-        except ValueError:
-            raise ValueError('Invalid date format. Use YYYY-MM-DD')
-    
-    @field_validator('ssn')
-    @classmethod
-    def validate_ssn(cls, v):
-        ssn_digits = ''.join(filter(str.isdigit, v))
-        if len(ssn_digits) != 9:
-            raise ValueError('SSN must contain exactly 9 digits')
-        return ssn_digits
-    
-    @field_validator('zip_code')
-    @classmethod
-    def validate_zip_code(cls, v):
-        zip_digits = ''.join(filter(str.isdigit, v))
-        if len(zip_digits) < 5:
-            raise ValueError('Zip code must contain at least 5 digits')
-        return zip_digits
-
-class ChatRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    question: str = Field(..., min_length=1, max_length=1000)
-    chat_history: Optional[List[Dict[str, str]]] = []
-
-# Helper functions
-def check_agent_available():
-    """Check if health agent is available"""
-    if not AGENT_AVAILABLE:
-        raise HTTPException(status_code=503, detail=f"Health Agent not available: {import_error}")
-    if not health_agent:
-        raise HTTPException(status_code=503, detail="Health Agent not initialized")
-
-def create_session(patient_data: dict, status: str = "running") -> str:
-    """Create a new session"""
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "status": status,
-        "created_at": datetime.now().isoformat(),
-        "patient_data": patient_data,
-        "progress": 0,
-        "current_step": "Initializing...",
-        "results": None,
-        "error": None
-    }
-    return session_id
-
-def update_session(session_id: str, **kwargs):
-    """Update session data"""
-    if session_id in sessions:
-        sessions[session_id].update(kwargs)
-
-# Main endpoints
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "agent_available": AGENT_AVAILABLE and health_agent is not None
+            # Type 2 Diabetes (most common)
+            "E11", "E11.0", "E11.1", "E11.2", "E11.3", "E11.4", "E11.5", "E11.6", "E11.7", "E11.8", "E11.9",
+            "E11.00", "E11.01", "E11.10", "E11.11", "E11.21", "E11.22", "E11.29", 
+            "E11.31", "E11.32", "E11.33", "E11.34", "E11.35", "E11.36", "E11.37", "E11.39",
+            "E11.40", "E11.41", "E11.42", "E11.43", "E11.44", "E11.49",
+            "E11.51", "E11.52", "E11.59", "E11.61", "E11.62", "E11.63", "E11.64", "E11.65", "E11.69",
+            
+            # Other diabetes types
+            "E13", "E09", "E08", "O24", "R73"
+        ],
+        "hypertension": ["I10", "I11", "I12", "I13", "I15", "I16"],
+        "smoking": ["Z72.0", "F17", "Z87.891"],
+        "alcohol": ["F10", "Z72.1", "Z87.891"],
     }
 
-@app.post("/analyze")
-async def analyze_patient_data(patient_data: PatientData, background_tasks: BackgroundTasks):
-    """Start asynchronous health analysis"""
-    check_agent_available()
+# 3. FIND this method around line ~350:
+def _analyze_pharmacy_extraction_for_entities(self, pharmacy_extraction: Dict[str, Any], entities: Dict[str, Any]):
+    """Analyze structured pharmacy extraction for health entities"""
     
-    session_id = create_session(patient_data.dict())
-    background_tasks.add_task(run_analysis_task, session_id, patient_data.dict())
+    # ADD this enhanced detection after the existing medication identification:
     
-    return {
-        "success": True,
-        "session_id": session_id,
-        "message": "Analysis started. Use session ID to check status."
-    }
+    # Enhanced diabetes medication detection
+    diabetes_indicators = [
+        'insulin', 'metformin', 'glucophage', 'diabetes', 'diabetic',
+        'lantus', 'levemir', 'humalog', 'novolog', 'glipizide', 'glyburide',
+        'sitagliptin', 'januvia', 'ozempic', 'semaglutide', 'trulicity',
+        'jardiance', 'farxiga', 'invokana', 'actos', 'amaryl', 'glimepiride',
+        'byetta', 'victoza', 'saxenda', 'mounjaro', 'tirzepatide', 'dulaglutide',
+        'empagliflozin', 'dapagliflozin', 'canagliflozin', 'pioglitazone',
+        'liraglutide', 'exenatide', 'repaglinide', 'nateglinide', 'acarbose'
+    ]
+    
+    # Replace the existing simple detection with this enhanced version:
+    if any(indicator in lbl_lower for indicator in diabetes_indicators):
+        entities["diabetics"] = "yes"
+        entities["analysis_details"].append(f"Enhanced diabetes medication found: {lbl_nm}")
 
-@app.post("/analyze-sync")
-async def analyze_patient_data_sync(patient_data: PatientData):
-    """Run synchronous health analysis"""
-    check_agent_available()
-    
-    session_id = create_session(patient_data.dict(), "running")
-    
-    try:
-        logger.info(f"🔬 Starting analysis for session {session_id}")
-        results = health_agent.run_analysis(patient_data.dict())
-        
-        update_session(session_id, 
-            status="completed", 
-            results=results, 
-            progress=100,
-            current_step="Completed",
-            completed_at=datetime.now().isoformat()
-        )
-        
-        return {
-            "success": results.get("success", False),
-            "session_id": session_id,
-            "message": "Analysis completed",
-            "analysis_results": results
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Analysis failed: {str(e)}")
-        update_session(session_id, status="error", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-@app.post("/chat")
-async def chat_with_analysis(chat_request: ChatRequest):
-    """Chat with medical analysis data"""
-    check_agent_available()
-    
-    session_id = chat_request.session_id
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session_data = sessions[session_id]
-    if session_data["status"] != "completed" or not session_data.get("results"):
-        raise HTTPException(status_code=400, detail="Analysis not completed")
-    
-    results = session_data["results"]
-    if not results.get("chatbot_ready", False):
-        raise HTTPException(status_code=400, detail="Chatbot not ready")
-    
-    try:
-        chatbot_context = results.get("chatbot_context", {})
-        response = health_agent.chat_with_data(
-            chat_request.question,
-            chatbot_context,
-            chat_request.chat_history
-        )
-        
-        updated_history = chat_request.chat_history + [
-            {"role": "user", "content": chat_request.question},
-            {"role": "assistant", "content": response}
-        ]
-        
-        return {
-            "success": True,
-            "session_id": session_id,
-            "response": response,
-            "updated_chat_history": updated_history
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Chat failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
-
-@app.get("/status/{session_id}")
-async def get_analysis_status(session_id: str):
-    """Get analysis status"""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session_data = sessions[session_id]
-    return {
-        "session_id": session_id,
-        "status": session_data["status"],
-        "progress": session_data.get("progress", 0),
-        "current_step": session_data.get("current_step", "Unknown"),
-        "results_available": session_data.get("results") is not None
-    }
-
-@app.get("/results/{session_id}")
-async def get_analysis_results(session_id: str):
-    """Get analysis results"""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session_data = sessions[session_id]
-    if not session_data.get("results"):
-        raise HTTPException(status_code=404, detail="Results not available")
-    
-    return {
-        "session_id": session_id,
-        "results": session_data["results"],
-        "completed_at": session_data.get("completed_at")
-    }
-
-@app.get("/sessions")
-async def list_sessions():
-    """List all sessions"""
-    return {
-        "total_sessions": len(sessions),
-        "sessions": [
-            {
-                "session_id": sid,
-                "status": data["status"],
-                "created_at": data["created_at"],
-                "progress": data.get("progress", 0)
-            }
-            for sid, data in sessions.items()
-        ]
-    }
-
-# Background task
-async def run_analysis_task(session_id: str, patient_data: Dict[str, Any]):
-    """Background task for analysis"""
-    try:
-        logger.info(f"🔬 Starting background analysis for {session_id}")
-        
-        update_session(session_id, progress=10, current_step="Processing...")
-        results = health_agent.run_analysis(patient_data)
-        
-        update_session(session_id,
-            status="completed",
-            results=results,
-            progress=100,
-            current_step="Completed",
-            completed_at=datetime.now().isoformat()
-        )
-        
-        logger.info(f"✅ Analysis completed for {session_id}")
-        
-    except Exception as e:
-        logger.error(f"❌ Background analysis failed: {str(e)}")
-        update_session(session_id, 
-            status="error", 
-            error=str(e),
-            current_step=f"Error: {str(e)}"
-        )
-
-# Test endpoints
-@app.get("/test/sample-data")
-async def get_sample_data():
-    """Get sample patient data"""
-    return {
-        "first_name": "John",
-        "last_name": "Doe", 
-        "ssn": "123456789",
-        "date_of_birth": "1980-01-01",
-        "gender": "M",
-        "zip_code": "12345"
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("health_agent_fastapi:app", host="0.0.0.0", port=8000, reload=True)
+# =============================================================================
+# SUMMARY OF CHANGES:
+# =============================================================================
+# 1. Expanded diabetes keywords from 10 to 80+ terms
+# 2. Enhanced ICD-10 codes from 5 to 50+ diabetes codes  
+# 3. Improved pharmacy medication detection with 30+ drug names
+# 4. Added brand names, generic names, and medical device terms
+# =============================================================================
