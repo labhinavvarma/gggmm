@@ -1,203 +1,345 @@
-diabetes_keywords = [
-        # === INSULIN TYPES ===
-        # Rapid-acting insulins
-        'insulin', 'humalog', 'novolog', 'apidra', 'fiasp', 'lyumjev',
-        'insulin lispro', 'insulin aspart', 'insulin glulisine',
-        
-        # Long-acting insulins  
-        'lantus', 'levemir', 'tresiba', 'toujeo', 'basaglar',
-        'insulin glargine', 'insulin detemir', 'insulin degludec',
-        
-        # Intermediate-acting insulins
-        'nph insulin', 'humulin n', 'novolin n',
-        
-        # Mixed insulins
-        'humulin 70/30', 'novolin 70/30', 'humalog mix', 'novolog mix',
-        
-        # === ORAL DIABETES MEDICATIONS ===
-        # Metformin (Biguanides)
-        'metformin', 'glucophage', 'glucophage xr', 'fortamet', 'glumetza', 'riomet',
-        
-        # Sulfonylureas
-        'glipizide', 'glyburide', 'glimepiride', 'glucotrol', 'diabeta', 'micronase',
-        'glynase', 'amaryl', 'glipizide xl', 'glipizide er',
-        
-        # DPP-4 Inhibitors
-        'sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin',
-        'januvia', 'onglyza', 'tradjenta', 'nesina',
-        
-        # SGLT2 Inhibitors
-        'canagliflozin', 'dapagliflozin', 'empagliflozin', 'ertugliflozin',
-        'invokana', 'farxiga', 'jardiance', 'steglatro',
-        
-        # GLP-1 Receptor Agonists
-        'semaglutide', 'liraglutide', 'dulaglutide', 'exenatide', 'lixisenatide',
-        'ozempic', 'wegovy', 'victoza', 'saxenda', 'trulicity', 'byetta', 'bydureon', 'adlyxin',
-        
-        # Thiazolidinediones (TZDs)
-        'pioglitazone', 'rosiglitazone', 'actos', 'avandia',
-        
-        # Alpha-glucosidase inhibitors
-        'acarbose', 'miglitol', 'precose', 'glyset',
-        
-        # Meglitinides
-        'repaglinide', 'nateglinide', 'prandin', 'starlix',
-        
-        # === COMBINATION MEDICATIONS ===
-        'janumet', 'kombiglyze', 'jentadueto', 'kazano', 'oseni', 'invokamet',
-        'xigduo', 'synjardy', 'steglujan', 'qtern', 'trijardy',
-        
-        # === DIABETES-RELATED TERMS ===
-        'diabetes', 'diabetic', 'diabetes mellitus', 'dm', 'type 1 diabetes', 'type 2 diabetes',
-        'diabetes type 1', 'diabetes type 2', 't1dm', 't2dm', 'iddm', 'niddm',
-        'gestational diabetes', 'diabetic ketoacidosis', 'dka', 'hyperglycemia', 'hypoglycemia',
-        
-        # === BLOOD GLUCOSE MONITORING ===
-        'glucose', 'blood glucose', 'blood sugar', 'glucometer', 'glucose meter',
-        'glucose strips', 'test strips', 'lancets', 'glucose monitor',
-        'continuous glucose monitor', 'cgm', 'dexcom', 'freestyle', 'omnipod',
-        
-        # === DIABETIC COMPLICATIONS & MANAGEMENT ===
-        'diabetic nephropathy', 'diabetic retinopathy', 'diabetic neuropathy',
-        'diabetic foot', 'hba1c', 'hemoglobin a1c', 'a1c', 'fructosamine',
-        
-        # === ADDITIONAL BRAND NAMES ===
-        'humulin', 'novolin', 'admelog', 'insulin pump', 'omnipod', 'medtronic',
-        'freestyle libre', 'glucose gel', 'glucose tablets',
-        
-        # === INSULIN DELIVERY DEVICES ===
-        'insulin pen', 'insulin pump', 'insulin syringe', 'pen needles',
-        'pump supplies', 'infusion sets', 'reservoirs',
-        
-        # === NEWER MEDICATIONS ===
-        'tirzepatide', 'mounjaro', 'rybelsus', 'oral semaglutide',
-        'sotagliflozin', 'zynquista', 'bexagliflozin', 'brenzavvy'
-    ]
+#!/usr/bin/env python3
+"""
+Neo4j MCP Server using FastMCP
+A Model Context Protocol server for interacting with Neo4j databases.
+"""
+
+import os
+import json
+from typing import Dict, Any, List, Optional
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+
+from fastmcp import FastMCP
+from neo4j import GraphDatabase, Driver
+import neo4j.exceptions
 
 
+@dataclass
+class Neo4jContext:
+    """Context for Neo4j database connection"""
+    driver: Driver
+    database: str
 
 
-
-# =============================================================================
-# EXACT CHANGES TO MAKE IN health_data_processor.py
-# =============================================================================
-
-# 1. FIND this method around line ~380:
-def _analyze_pharmacy_for_entities(self, data_str: str, entities: Dict[str, Any]):
-    """Original pharmacy data analysis for entities"""
+class Neo4jDatabase:
+    """Neo4j database connection handler"""
     
-    # REPLACE these lines:
-    diabetes_keywords = [
-        'insulin', 'metformin', 'glipizide', 'diabetes', 'diabetic', 
-        'glucophage', 'lantus', 'humalog', 'novolog', 'levemir'
-    ]
+    def __init__(self, uri: str, username: str, password: str, database: str = "neo4j"):
+        self.uri = uri
+        self.username = username
+        self.password = password
+        self.database = database
+        self.driver: Optional[Driver] = None
     
-    # WITH this comprehensive list:
-    diabetes_keywords = [
-        # === INSULIN TYPES ===
-        'insulin', 'humalog', 'novolog', 'apidra', 'fiasp', 'lyumjev',
-        'insulin lispro', 'insulin aspart', 'insulin glulisine',
-        'lantus', 'levemir', 'tresiba', 'toujeo', 'basaglar',
-        'insulin glargine', 'insulin detemir', 'insulin degludec',
-        'nph insulin', 'humulin n', 'novolin n', 'humulin', 'novolin',
-        'humulin 70/30', 'novolin 70/30', 'humalog mix', 'novolog mix',
+    async def connect(self):
+        """Connect to Neo4j database"""
+        try:
+            self.driver = GraphDatabase.driver(
+                self.uri, 
+                auth=(self.username, self.password)
+            )
+            # Test connection
+            await self.driver.verify_connectivity()
+            print(f"✅ Connected to Neo4j at {self.uri}")
+        except Exception as e:
+            print(f"❌ Failed to connect to Neo4j: {e}")
+            raise
+    
+    async def disconnect(self):
+        """Disconnect from Neo4j database"""
+        if self.driver:
+            await self.driver.close()
+            print("📴 Disconnected from Neo4j")
+    
+    def execute_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Execute a Cypher query and return results"""
+        if not self.driver:
+            raise Exception("Not connected to Neo4j database")
         
-        # === ORAL DIABETES MEDICATIONS ===
-        'metformin', 'glucophage', 'glucophage xr', 'fortamet', 'glumetza', 'riomet',
-        'glipizide', 'glyburide', 'glimepiride', 'glucotrol', 'diabeta', 'micronase',
-        'glynase', 'amaryl', 'glipizide xl', 'glipizide er',
-        'sitagliptin', 'saxagliptin', 'linagliptin', 'alogliptin',
-        'januvia', 'onglyza', 'tradjenta', 'nesina',
-        'canagliflozin', 'dapagliflozin', 'empagliflozin', 'ertugliflozin',
-        'invokana', 'farxiga', 'jardiance', 'steglatro',
-        'pioglitazone', 'rosiglitazone', 'actos', 'avandia',
-        'acarbose', 'miglitol', 'precose', 'glyset',
-        'repaglinide', 'nateglinide', 'prandin', 'starlix',
-        
-        # === INJECTABLE NON-INSULIN ===
-        'semaglutide', 'liraglutide', 'dulaglutide', 'exenatide', 'lixisenatide',
-        'ozempic', 'wegovy', 'victoza', 'saxenda', 'trulicity', 'byetta', 'bydureon', 'adlyxin',
-        'tirzepatide', 'mounjaro', 'rybelsus',
-        
-        # === COMBINATION MEDICATIONS ===
-        'janumet', 'kombiglyze', 'jentadueto', 'kazano', 'oseni', 'invokamet',
-        'xigduo', 'synjardy', 'steglujan', 'qtern', 'trijardy',
-        
-        # === DIABETES TERMS ===
-        'diabetes', 'diabetic', 'diabetes mellitus', 'type 1 diabetes', 'type 2 diabetes',
-        'diabetes type 1', 'diabetes type 2', 't1dm', 't2dm', 'iddm', 'niddm',
-        'gestational diabetes', 'hyperglycemia', 'hypoglycemia',
-        
-        # === MONITORING SUPPLIES ===
-        'glucose', 'blood glucose', 'glucometer', 'glucose meter',
-        'glucose strips', 'test strips', 'lancets', 'glucose monitor',
-        'continuous glucose monitor', 'cgm', 'dexcom', 'freestyle', 'omnipod',
-        'hba1c', 'hemoglobin a1c', 'a1c', 'glucose tablets', 'glucose gel'
-    ]
+        try:
+            with self.driver.session(database=self.database) as session:
+                result = session.run(query, parameters or {})
+                records = []
+                
+                for record in result:
+                    # Convert Neo4j record to dictionary
+                    record_dict = {}
+                    for key in record.keys():
+                        value = record[key]
+                        # Handle Neo4j types
+                        if hasattr(value, '_properties'):  # Node or Relationship
+                            record_dict[key] = dict(value._properties)
+                            if hasattr(value, 'labels'):  # Node
+                                record_dict[key]['_labels'] = list(value.labels)
+                            if hasattr(value, 'type'):  # Relationship
+                                record_dict[key]['_type'] = value.type
+                        else:
+                            record_dict[key] = value
+                    records.append(record_dict)
+                
+                return {
+                    "records": records,
+                    "summary": {
+                        "query": query,
+                        "parameters": parameters,
+                        "records_available": len(records)
+                    }
+                }
+        except neo4j.exceptions.CypherSyntaxError as e:
+            return {
+                "error": f"Cypher Syntax Error: {str(e)}",
+                "query": query,
+                "parameters": parameters
+            }
+        except Exception as e:
+            return {
+                "error": f"Query execution error: {str(e)}",
+                "query": query,
+                "parameters": parameters
+            }
 
-# 2. FIND this method around line ~420:
-def _analyze_medical_extraction_for_entities(self, medical_extraction: Dict[str, Any], entities: Dict[str, Any]):
-    """Analyze medical codes for health conditions"""
+
+# Initialize FastMCP server
+mcp = FastMCP("Neo4j-Server")
+
+# Database instance
+neo4j_db = Neo4jDatabase(
+    uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+    username=os.getenv("NEO4J_USERNAME", "neo4j"),
+    password=os.getenv("NEO4J_PASSWORD", "password"),
+    database=os.getenv("NEO4J_DATABASE", "neo4j")
+)
+
+
+@asynccontextmanager
+async def app_lifespan(server: FastMCP) -> AsyncIterator[Neo4jContext]:
+    """Manage Neo4j connection lifecycle"""
+    try:
+        await neo4j_db.connect()
+        yield Neo4jContext(driver=neo4j_db.driver, database=neo4j_db.database)
+    finally:
+        await neo4j_db.disconnect()
+
+
+# Set up lifespan management
+mcp = FastMCP("Neo4j-Server", lifespan=app_lifespan)
+
+
+@mcp.tool()
+def execute_cypher(query: str, parameters: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Execute a Cypher query against the Neo4j database.
     
-    # REPLACE these lines:
-    condition_mappings = {
-        "diabetes": ["E10", "E11", "E12", "E13", "E14"],
-        "hypertension": ["I10", "I11", "I12", "I13", "I15"],
-        "smoking": ["Z72.0", "F17"],
-        "alcohol": ["F10", "Z72.1"],
+    Args:
+        query: The Cypher query to execute
+        parameters: Optional dictionary of parameters for the query
+    
+    Returns:
+        JSON string containing query results or error information
+    """
+    try:
+        result = neo4j_db.execute_query(query, parameters)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Failed to execute query: {str(e)}",
+            "query": query,
+            "parameters": parameters
+        }, indent=2)
+
+
+@mcp.tool()
+def get_database_schema() -> str:
+    """
+    Get the database schema including node labels, relationship types, and property keys.
+    
+    Returns:
+        JSON string containing the database schema information
+    """
+    schema_queries = {
+        "node_labels": "CALL db.labels() YIELD label RETURN collect(label) AS labels",
+        "relationship_types": "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) AS types",
+        "property_keys": "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) AS keys"
     }
     
-    # WITH this comprehensive mapping:
-    condition_mappings = {
-        "diabetes": [
-            # Type 1 Diabetes
-            "E10", "E10.1", "E10.2", "E10.3", "E10.4", "E10.5", "E10.6", "E10.7", "E10.8", "E10.9",
-            "E10.10", "E10.11", "E10.21", "E10.22", "E10.29", "E10.31", "E10.32", "E10.33", "E10.34", "E10.35", "E10.36", "E10.37", "E10.39",
-            "E10.40", "E10.41", "E10.42", "E10.43", "E10.44", "E10.49", "E10.51", "E10.52", "E10.59",
-            "E10.61", "E10.62", "E10.63", "E10.64", "E10.65", "E10.69",
-            
-            # Type 2 Diabetes (most common)
-            "E11", "E11.0", "E11.1", "E11.2", "E11.3", "E11.4", "E11.5", "E11.6", "E11.7", "E11.8", "E11.9",
-            "E11.00", "E11.01", "E11.10", "E11.11", "E11.21", "E11.22", "E11.29", 
-            "E11.31", "E11.32", "E11.33", "E11.34", "E11.35", "E11.36", "E11.37", "E11.39",
-            "E11.40", "E11.41", "E11.42", "E11.43", "E11.44", "E11.49",
-            "E11.51", "E11.52", "E11.59", "E11.61", "E11.62", "E11.63", "E11.64", "E11.65", "E11.69",
-            
-            # Other diabetes types
-            "E13", "E09", "E08", "O24", "R73"
-        ],
-        "hypertension": ["I10", "I11", "I12", "I13", "I15", "I16"],
-        "smoking": ["Z72.0", "F17", "Z87.891"],
-        "alcohol": ["F10", "Z72.1", "Z87.891"],
+    schema_info = {}
+    
+    for schema_type, query in schema_queries.items():
+        try:
+            result = neo4j_db.execute_query(query)
+            if result.get("records"):
+                schema_info[schema_type] = result["records"][0]
+            else:
+                schema_info[schema_type] = []
+        except Exception as e:
+            schema_info[schema_type] = f"Error: {str(e)}"
+    
+    # Get sample of database structure
+    try:
+        sample_query = """
+        MATCH (n)
+        WITH labels(n) AS nodeLabels, keys(n) AS nodeKeys
+        RETURN nodeLabels, collect(DISTINCT nodeKeys) AS properties
+        LIMIT 10
+        """
+        sample_result = neo4j_db.execute_query(sample_query)
+        schema_info["sample_structure"] = sample_result.get("records", [])
+    except Exception as e:
+        schema_info["sample_structure"] = f"Error getting sample: {str(e)}"
+    
+    return json.dumps(schema_info, indent=2)
+
+
+@mcp.tool()
+def get_database_info() -> str:
+    """
+    Get general information about the Neo4j database.
+    
+    Returns:
+        JSON string containing database information
+    """
+    info_queries = {
+        "node_count": "MATCH (n) RETURN count(n) AS nodeCount",
+        "relationship_count": "MATCH ()-[r]->() RETURN count(r) AS relationshipCount",
+        "database_info": "CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition"
     }
+    
+    db_info = {}
+    
+    for info_type, query in info_queries.items():
+        try:
+            result = neo4j_db.execute_query(query)
+            if result.get("records"):
+                db_info[info_type] = result["records"]
+            else:
+                db_info[info_type] = "No data"
+        except Exception as e:
+            db_info[info_type] = f"Error: {str(e)}"
+    
+    return json.dumps(db_info, indent=2)
 
-# 3. FIND this method around line ~350:
-def _analyze_pharmacy_extraction_for_entities(self, pharmacy_extraction: Dict[str, Any], entities: Dict[str, Any]):
-    """Analyze structured pharmacy extraction for health entities"""
-    
-    # ADD this enhanced detection after the existing medication identification:
-    
-    # Enhanced diabetes medication detection
-    diabetes_indicators = [
-        'insulin', 'metformin', 'glucophage', 'diabetes', 'diabetic',
-        'lantus', 'levemir', 'humalog', 'novolog', 'glipizide', 'glyburide',
-        'sitagliptin', 'januvia', 'ozempic', 'semaglutide', 'trulicity',
-        'jardiance', 'farxiga', 'invokana', 'actos', 'amaryl', 'glimepiride',
-        'byetta', 'victoza', 'saxenda', 'mounjaro', 'tirzepatide', 'dulaglutide',
-        'empagliflozin', 'dapagliflozin', 'canagliflozin', 'pioglitazone',
-        'liraglutide', 'exenatide', 'repaglinide', 'nateglinide', 'acarbose'
-    ]
-    
-    # Replace the existing simple detection with this enhanced version:
-    if any(indicator in lbl_lower for indicator in diabetes_indicators):
-        entities["diabetics"] = "yes"
-        entities["analysis_details"].append(f"Enhanced diabetes medication found: {lbl_nm}")
 
-# =============================================================================
-# SUMMARY OF CHANGES:
-# =============================================================================
-# 1. Expanded diabetes keywords from 10 to 80+ terms
-# 2. Enhanced ICD-10 codes from 5 to 50+ diabetes codes  
-# 3. Improved pharmacy medication detection with 30+ drug names
-# 4. Added brand names, generic names, and medical device terms
-# =============================================================================
+@mcp.tool()
+def create_node(labels: List[str], properties: Dict[str, Any]) -> str:
+    """
+    Create a new node in the Neo4j database.
+    
+    Args:
+        labels: List of labels for the node
+        properties: Dictionary of properties for the node
+    
+    Returns:
+        JSON string containing the result of the node creation
+    """
+    if not labels:
+        return json.dumps({"error": "At least one label is required"})
+    
+    # Build the Cypher query
+    labels_str = ":".join(labels)
+    query = f"CREATE (n:{labels_str} $properties) RETURN n"
+    
+    try:
+        result = neo4j_db.execute_query(query, {"properties": properties})
+        return json.dumps({
+            "success": True,
+            "message": f"Created node with labels {labels}",
+            "result": result
+        }, indent=2, default=str)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Failed to create node: {str(e)}",
+            "labels": labels,
+            "properties": properties
+        }, indent=2)
+
+
+@mcp.tool()
+def find_nodes(label: str, properties: Optional[Dict[str, Any]] = None, limit: int = 10) -> str:
+    """
+    Find nodes in the Neo4j database by label and optional properties.
+    
+    Args:
+        label: The node label to search for
+        properties: Optional dictionary of properties to filter by
+        limit: Maximum number of nodes to return (default: 10)
+    
+    Returns:
+        JSON string containing the found nodes
+    """
+    # Build the Cypher query
+    query = f"MATCH (n:{label}"
+    
+    if properties:
+        # Add property filters
+        prop_conditions = []
+        for key, value in properties.items():
+            if isinstance(value, str):
+                prop_conditions.append(f"n.{key} = '{value}'")
+            else:
+                prop_conditions.append(f"n.{key} = {value}")
+        
+        if prop_conditions:
+            query += " WHERE " + " AND ".join(prop_conditions)
+    
+    query += f") RETURN n LIMIT {limit}"
+    
+    try:
+        result = neo4j_db.execute_query(query)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Failed to find nodes: {str(e)}",
+            "label": label,
+            "properties": properties
+        }, indent=2)
+
+
+@mcp.resource("neo4j://schema")
+def get_schema_resource() -> str:
+    """Provide the database schema as a resource"""
+    return get_database_schema()
+
+
+@mcp.resource("neo4j://info")
+def get_info_resource() -> str:
+    """Provide database information as a resource"""
+    return get_database_info()
+
+
+@mcp.prompt()
+def cypher_query_prompt(description: str) -> str:
+    """
+    Generate a Cypher query based on a natural language description.
+    
+    Args:
+        description: Natural language description of what you want to query
+    """
+    schema = get_database_schema()
+    
+    return f"""You are a Neo4j Cypher query expert. Based on the following database schema and user request, generate an appropriate Cypher query.
+
+Database Schema:
+{schema}
+
+User Request: {description}
+
+Please provide:
+1. A Cypher query that addresses the user's request
+2. A brief explanation of what the query does
+3. Any assumptions made about the data structure
+
+Cypher Query:"""
+
+
+if __name__ == "__main__":
+    # Print startup information
+    print("🚀 Starting Neo4j FastMCP Server")
+    print(f"📍 Neo4j URI: {neo4j_db.uri}")
+    print(f"👤 Username: {neo4j_db.username}")
+    print(f"🗄️  Database: {neo4j_db.database}")
+    print()
+    
+    # Run the server
+    mcp.run()
