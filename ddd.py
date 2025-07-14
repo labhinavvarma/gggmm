@@ -68,6 +68,7 @@ class MCPClient:
         self.session = None
         self.messages_url = f"{base_url}/messages/"
         self.sse_url = f"{base_url}/sse"
+        self.session_id = str(uuid.uuid4())  # Generate session ID for this client
         
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -105,8 +106,11 @@ class MCPClient:
             print_info(f"Sending MCP message: {method}")
             print_json(message, "Request")
             
+            # Add session_id as query parameter
+            url_with_session = f"{self.messages_url}?session_id={self.session_id}"
+            
             async with self.session.post(
-                self.messages_url,
+                url_with_session,
                 json=message,
                 headers={"Content-Type": "application/json"}
             ) as response:
@@ -365,6 +369,8 @@ async def main():
     results = {}
     
     async with MCPClient(base_url) as client:
+        
+        print_info(f"Using session ID: {client.session_id}")
         
         # Test 1: Server Health
         print_header("TEST 1: FASTAPI SERVER HEALTH")
