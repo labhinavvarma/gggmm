@@ -1,59 +1,76 @@
-
 import asyncio
+from mcp.client.sse import sse_client
+from mcp import ClientSession
 import json
-import uuid
-import httpx
 
-# MCP Server configuration
-SERVER_URL = "http://localhost:8001"
-MESSAGES_ENDPOINT = f"{SERVER_URL}/messages/"
-SESSION_ID = str(uuid.uuid4())  # Unique session ID per run
 
-# === Helper to post message ===
-async def send_mcp_tool_request(tool_name: str, parameters: dict = None):
-    message = {
-        "session_id": SESSION_ID,
-        "input": {
-            "tool": tool_name,
-            "parameters": parameters or {}
-        }
-    }
+async def run():
+    SERVER_URL = "http://localhost:8001/sse"
+    print("=" * 60)
+    print("🚀 MCP SSE CLIENT CONNECTION TEST")
+    print("=" * 60)
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        print(f"\n🔄 Invoking MCP Tool: `{tool_name}`...")
-        response = await client.post(MESSAGES_ENDPOINT, json=message)
-        if response.status_code == 200:
+    async with sse_client(url=SERVER_URL) as sse_connection:
+        print("✓ Connected to SSE")
+
+        async with ClientSession(*sse_connection) as session:
+            await session.initialize()
+            print("✓ Session Initialized\n")
+
+            # === List Tools ===
+            print("🔧 TOOLS")
+            print("-" * 60)
+            tools = await session.list_tools()
+            for tool in tools.tools:
+                print(f"• {tool.name} - {tool.description or 'No description'}")
+
+            # === List Resources ===
+            print("\n📦 RESOURCES")
+            print("-" * 60)
+            resources = await session.list_resources()
+            for resource in resources.resources:
+                print(f"• {resource.name} - {resource.description or 'No description'}")
+
+            # === List Prompts ===
+            print("\n💬 PROMPTS")
+            print("-" * 60)
             try:
-                data = response.json()
-                print(f"✅ Tool `{tool_name}` Result:\n", json.dumps(data, indent=2))
+                prompts = await session.list_prompts()
+                for prompt in prompts.prompts:
+                    print(f"• {prompt.name} - {prompt.description or 'No description'}")
             except Exception as e:
-                print(f"❌ Failed to decode JSON: {e}")
-                print(response.text)
-        else:
-            print(f"❌ Tool `{tool_name}` failed with status {response.status_code}")
-            print(response.text)
+                print(f"❌ Could not list prompts: {e}")
 
-# === Main Test Sequence ===
-async def run_tests():
-    print(f"🚀 Testing MCP Server at {SERVER_URL} with session {SESSION_ID}")
+            # === Run Health Check ===
+            print("\n🧠 TEST: Neo4j Health Check")
+            print("-" * 60)
+            result = await session.invoke_tool("check_connection_health", {})
+            print(json.dumps(result.dict(), indent=2))
 
-    # 1. Check Neo4j Health
-    await send_mcp_tool_request("check_connection_health")
+            # === Run Schema Fetch ===
+            print("\n🧠 TEST: Get Database Schema")
+            print("-" * 60)
+            result = await session.invoke_tool("get_database_schema", {})
+            print(json.dumps(result.dict(), indent=2))
 
-    # 2. Run Sample Cypher Query
-    await send_mcp_tool_request("execute_cypher", {
-        "query": "MATCH (n) RETURN n LIMIT 2"
-    })
+            # === Run Sample Query ===
+            print("\n🧠 TEST: Run Cypher Query")
+            print("-" * 60)
+            result = await session.invoke_tool("execute_cypher", {
+                "query": "MATCH (n) RETURN n LIMIT 2"
+            })
+            print(json.dumps(result.dict(), indent=2))
 
-    # 3. Get Schema
-    await send_mcp_tool_request("get_database_schema")
+            # === Run Connectiq Tests ===
+            print("\n🧪 TEST: Connectiq Validation")
+            print("-" * 60)
+            result = await session.invoke_tool("test_connectiq_queries", {})
+            print(json.dumps(result.dict(), indent=2))
 
-    # 4. Get Connection Info
-    await send_mcp_tool_request("get_connection_info")
-
-    # 5. Run Connectiq-Specific Tests
-    await send_mcp_tool_request("test_connectiq_queries")
+    print("=" * 60)
+    print("✅ COMPLETED MCP CLIENT TEST")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
-    asyncio.run(run_tests())
+    asyncio.run(run())
