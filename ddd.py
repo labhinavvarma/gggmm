@@ -1,11 +1,12 @@
 import asyncio
+import json
 from mcp.client.sse import sse_client
 from mcp import ClientSession
-import json
 
 
 async def run():
-    SERVER_URL = "http://localhost:8001/sse"
+    SERVER_URL = "http://localhost:8081/sse"
+
     print("=" * 60)
     print("🚀 MCP SSE CLIENT CONNECTION TEST")
     print("=" * 60)
@@ -24,48 +25,30 @@ async def run():
             for tool in tools.tools:
                 print(f"• {tool.name} - {tool.description or 'No description'}")
 
-            # === List Resources ===
-            print("\n📦 RESOURCES")
-            print("-" * 60)
-            resources = await session.list_resources()
-            for resource in resources.resources:
-                print(f"• {resource.name} - {resource.description or 'No description'}")
+            # === Run Tool Helper ===
+            async def run_tool(tool_name, parameters=None):
+                parameters = parameters or {}
+                print(f"\n🛠️ Running tool: {tool_name}")
+                print("-" * 60)
+                await session.send_input({
+                    "tool": tool_name,
+                    "parameters": parameters
+                })
+                result = await session.receive_output()
+                print(json.dumps(result.dict(), indent=2))
 
-            # === List Prompts ===
-            print("\n💬 PROMPTS")
-            print("-" * 60)
-            try:
-                prompts = await session.list_prompts()
-                for prompt in prompts.prompts:
-                    print(f"• {prompt.name} - {prompt.description or 'No description'}")
-            except Exception as e:
-                print(f"❌ Could not list prompts: {e}")
+            # === Run Neo4j Tests ===
+            await run_tool("check_connection_health")
 
-            # === Run Health Check ===
-            print("\n🧠 TEST: Neo4j Health Check")
-            print("-" * 60)
-            result = await session.invoke_tool("check_connection_health", {})
-            print(json.dumps(result.dict(), indent=2))
+            await run_tool("get_connection_info")
 
-            # === Run Schema Fetch ===
-            print("\n🧠 TEST: Get Database Schema")
-            print("-" * 60)
-            result = await session.invoke_tool("get_database_schema", {})
-            print(json.dumps(result.dict(), indent=2))
+            await run_tool("get_database_schema")
 
-            # === Run Sample Query ===
-            print("\n🧠 TEST: Run Cypher Query")
-            print("-" * 60)
-            result = await session.invoke_tool("execute_cypher", {
+            await run_tool("execute_cypher", {
                 "query": "MATCH (n) RETURN n LIMIT 2"
             })
-            print(json.dumps(result.dict(), indent=2))
 
-            # === Run Connectiq Tests ===
-            print("\n🧪 TEST: Connectiq Validation")
-            print("-" * 60)
-            result = await session.invoke_tool("test_connectiq_queries", {})
-            print(json.dumps(result.dict(), indent=2))
+            await run_tool("test_connectiq_queries")
 
     print("=" * 60)
     print("✅ COMPLETED MCP CLIENT TEST")
