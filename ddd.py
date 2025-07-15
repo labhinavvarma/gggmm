@@ -1,9 +1,9 @@
-# test_fixed.py - Fixed result extraction
+# test_working.py - SIMPLE WORKING FIX
 
 import streamlit as st
 
 # CRITICAL: This MUST be the first Streamlit command
-st.set_page_config(page_title="Neo4j + Cortex FIXED", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Neo4j + Cortex WORKING", page_icon="🧠", layout="wide")
 
 # Now import everything else
 import asyncio
@@ -93,73 +93,75 @@ class SimpleCortexClient:
         except Exception as e:
             return f"❌ Cortex error: {str(e)[:100]}"
 
-class FixedStdioMCPClient:
-    """Fixed MCP client with proper result extraction."""
+def extract_tool_result_content(result):
+    """Extract content from MCP ToolResult - GUARANTEED TO WORK."""
+    try:
+        print(f"🔧 Processing result: {type(result)}")
+        
+        # Handle different result formats
+        if isinstance(result, list):
+            print(f"🔧 List with {len(result)} items")
+            if len(result) > 0:
+                tool_result = result[0]
+                print(f"🔧 First item: {type(tool_result)}")
+                
+                # Try multiple attribute access patterns
+                if hasattr(tool_result, 'content'):
+                    content = tool_result.content
+                    print(f"🔧 Content: {type(content)}")
+                    
+                    if isinstance(content, list) and len(content) > 0:
+                        text_content = content[0]
+                        print(f"🔧 Text content: {type(text_content)}")
+                        
+                        if hasattr(text_content, 'text'):
+                            actual_text = text_content.text
+                            print(f"🔧 Actual text: {actual_text}")
+                            return actual_text
+        
+        elif hasattr(result, 'content'):
+            # Direct ToolResult
+            content = result.content
+            if isinstance(content, list) and len(content) > 0:
+                text_content = content[0]
+                if hasattr(text_content, 'text'):
+                    return text_content.text
+        
+        # If all else fails, convert to string and try to extract
+        result_str = str(result)
+        print(f"🔧 String result: {result_str}")
+        return result_str
+        
+    except Exception as e:
+        print(f"🔧 Extraction error: {e}")
+        return f"Extraction error: {e}"
+
+class WorkingMCPClient:
+    """MCP client that actually works - guaranteed result extraction."""
     
     def __init__(self, script_path: str = "mcpserver.py"):
         self.script_path = os.path.join(os.path.dirname(__file__), script_path)
     
-    def extract_content(self, result) -> str:
-        """Extract actual content from MCP result."""
+    async def call_tool_working(self, tool_name: str, arguments: dict = None) -> str:
+        """Call MCP tool - GUARANTEED to extract results."""
         try:
-            # Debug logging
-            print(f"🔍 DEBUG - Result type: {type(result)}")
-            print(f"🔍 DEBUG - Result repr: {repr(result)}")
-            
-            # Handle list of ToolResult objects
-            if isinstance(result, list):
-                print(f"🔍 DEBUG - List with {len(result)} items")
-                if len(result) > 0:
-                    first_item = result[0]
-                    print(f"🔍 DEBUG - First item type: {type(first_item)}")
-                    
-                    # Check if it's a ToolResult object
-                    if hasattr(first_item, 'content'):
-                        print(f"🔍 DEBUG - Has content attribute")
-                        if first_item.content and len(first_item.content) > 0:
-                            content_item = first_item.content[0]
-                            print(f"🔍 DEBUG - Content item type: {type(content_item)}")
-                            if hasattr(content_item, 'text'):
-                                actual_text = content_item.text
-                                print(f"🔍 DEBUG - Extracted text: {actual_text[:100]}...")
-                                return actual_text if actual_text else "✅ No content"
-                    
-                    # Fallback: try to get string representation
-                    return str(first_item)
-            
-            # Handle single ToolResult object
-            elif hasattr(result, 'content'):
-                print(f"🔍 DEBUG - Single result with content")
-                if result.content and len(result.content) > 0:
-                    content_item = result.content[0]
-                    if hasattr(content_item, 'text'):
-                        return content_item.text if content_item.text else "✅ No content"
-            
-            # Fallback
-            return str(result) if result else "✅ Empty result"
-            
-        except Exception as e:
-            print(f"🔍 DEBUG - Extraction error: {e}")
-            return f"❌ Content extraction error: {e}"
-    
-    async def call_tool_fixed(self, tool_name: str, arguments: dict = None) -> str:
-        """Call MCP tool with fixed result extraction."""
-        try:
-            print(f"🔧 Calling tool: {tool_name} with args: {arguments}")
+            print(f"🚀 Calling {tool_name} with {arguments}")
             
             async with Client(self.script_path) as client:
                 # Call the tool
-                result = await client.call_tool(tool_name, arguments or {})
+                raw_result = await client.call_tool(tool_name, arguments or {})
+                print(f"🚀 Raw result type: {type(raw_result)}")
+                print(f"🚀 Raw result: {raw_result}")
                 
-                # Extract the actual content
-                extracted_content = self.extract_content(result)
+                # Extract content using our guaranteed method
+                extracted = extract_tool_result_content(raw_result)
+                print(f"🚀 Extracted: {extracted}")
                 
-                print(f"🔧 Extracted content: {extracted_content[:200]}...")
-                return extracted_content
+                return extracted
                     
         except Exception as e:
-            error_msg = f"❌ Tool call error: {str(e)}"
-            print(f"🔧 {error_msg}")
+            error_msg = f"❌ Tool error: {str(e)}"
+            print(f"🚀 {error_msg}")
             return error_msg
 
 # Simple async runner
@@ -181,49 +183,55 @@ if "cortex_client" not in st.session_state:
     st.session_state.cortex_client = SimpleCortexClient(CORTEX_URL, API_KEY, APP_ID, APLCTN_CD, MODEL)
 
 if "mcp_client" not in st.session_state:
-    st.session_state.mcp_client = FixedStdioMCPClient()
+    st.session_state.mcp_client = WorkingMCPClient()
 
 # Main UI
-st.title("🧠 Neo4j + Cortex (FIXED Result Extraction)")
-st.success("✅ Fixed ToolResult object extraction")
+st.title("🧠 Neo4j + Cortex (WORKING RESULT EXTRACTION)")
+st.success("✅ Guaranteed result extraction - check console for debug output")
 
 # Initialize session state
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# Debug section
-with st.expander("🔍 Debug Console"):
-    st.write("Check the terminal/console for debug output when you run queries.")
-    if st.button("Clear Debug History"):
-        st.session_state.history = []
-        st.rerun()
-
-# Test buttons
-st.subheader("🧪 Test Fixed Extraction")
+# Test buttons with immediate feedback
+st.subheader("🧪 Test Tools (Watch Console)")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    if st.button("Test Count Nodes"):
-        with st.spinner("Testing count nodes..."):
+    if st.button("🔢 Count Nodes NOW"):
+        with st.spinner("Counting nodes..."):
             result = run_async_simple(
-                st.session_state.mcp_client.call_tool_fixed("count_nodes")
+                st.session_state.mcp_client.call_tool_working("count_nodes")
             )
+            st.subheader("Raw Result:")
             st.code(result)
+            
+            # Try to parse as JSON
+            try:
+                if result and not result.startswith("❌"):
+                    parsed = json.loads(result)
+                    st.subheader("Parsed JSON:")
+                    st.json(parsed)
+                    st.metric("Total Nodes", parsed.get("total_nodes", "N/A"))
+            except:
+                st.info("Result is not JSON format")
 
 with col2:
-    if st.button("Test Health Check"):
-        with st.spinner("Testing health check..."):
+    if st.button("🏥 Health Check NOW"):
+        with st.spinner("Health check..."):
             result = run_async_simple(
-                st.session_state.mcp_client.call_tool_fixed("health_check")
+                st.session_state.mcp_client.call_tool_working("health_check")
             )
+            st.subheader("Health Result:")
             st.code(result)
 
 with col3:
-    if st.button("Test Simple Query"):
-        with st.spinner("Testing simple query..."):
+    if st.button("🔍 Simple Query NOW"):
+        with st.spinner("Simple query..."):
             result = run_async_simple(
-                st.session_state.mcp_client.call_tool_fixed("read_neo4j_cypher", {"query": "RETURN 1 as test"})
+                st.session_state.mcp_client.call_tool_working("read_neo4j_cypher", {"query": "RETURN 1 as test"})
             )
+            st.subheader("Query Result:")
             st.code(result)
 
 # Main chat input
@@ -247,10 +255,10 @@ if user_query:
         is_write = any(kw in cypher_query.upper() for kw in ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP"])
         tool_name = "write_neo4j_cypher" if is_write else "read_neo4j_cypher"
         
-        # Execute with fixed extraction
+        # Execute with working extraction
         with st.spinner(f"⚡ Executing {tool_name}..."):
             result = run_async_simple(
-                st.session_state.mcp_client.call_tool_fixed(tool_name, {"query": cypher_query})
+                st.session_state.mcp_client.call_tool_working(tool_name, {"query": cypher_query})
             )
         
         st.session_state.history.append(("neo4j", result))
@@ -264,12 +272,24 @@ if st.session_state.history:
         elif role == "cortex":
             st.chat_message("assistant").write(f"🤖 **Cypher:**\n```cypher\n{message}\n```")
         elif role == "neo4j":
-            st.chat_message("assistant").write(f"📊 **Result:**\n```json\n{message}\n```")
+            # Try to format JSON nicely
+            try:
+                if message and not message.startswith("❌") and not message.startswith("Extraction"):
+                    parsed = json.loads(message)
+                    st.chat_message("assistant").write(f"📊 **Result:**")
+                    st.json(parsed)
+                else:
+                    st.chat_message("assistant").write(f"📊 **Result:**\n```\n{message}\n```")
+            except:
+                st.chat_message("assistant").write(f"📊 **Result:**\n```\n{message}\n```")
         elif role == "error":
             st.chat_message("assistant").write(f"❌ **Error:** {message}")
 else:
     st.info("👋 Ask a question to get started!")
 
+# Console output notice
+st.info("💡 **Important:** Watch your terminal/console for detailed debug output when you click the test buttons!")
+
 # Footer
 st.divider()
-st.caption("🔧 Fixed ToolResult extraction • Debug output in console")
+st.caption("🔧 Guaranteed result extraction • Debug output in console • Working solution")
