@@ -1,284 +1,395 @@
-# mcpserver.py - COMPLETELY FIXED VERSION - Handles Neo4j async results properly
+# streamlit_detailed_neo4j.py - Complete Streamlit app with detailed LangGraph agent
 
-import json
-import re
-import logging
+import streamlit as st
 import asyncio
-import sys
-from typing import Any, Optional
-from fastmcp.exceptions import ToolError
-from fastmcp.server import FastMCP
-from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncTransaction
-from pydantic import Field
+import nest_asyncio
+import json
+import time
+from detailed_langgraph_neo4j import DetailedNeo4jAgent
 
-logger = logging.getLogger("neo4j_mcp")
-logging.basicConfig(level=logging.INFO)
+nest_asyncio.apply()
 
-def _is_write_query(query: str) -> bool:
-    """Check if query is a write operation."""
-    return bool(re.search(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP)\b", query, re.IGNORECASE))
-
-async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
-    """Execute read query with proper async handling."""
+def run_async_safe(coro):
+    """Run async function safely in Streamlit."""
     try:
-        result = await tx.run(query, params or {})
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(coro)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+# Page configuration
+st.set_page_config(
+    page_title="Neo4j LangGraph Agent", 
+    page_icon="🧠", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for better UI
+st.markdown("""
+<style>
+    .big-font {
+        font-size:20px !important;
+        font-weight: bold;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 5px solid #1f77b4;
+    }
+    .success-card {
+        background-color: #d4edda;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 5px solid #28a745;
+    }
+    .error-card {
+        background-color: #f8d7da;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 5px solid #dc3545;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+if "detailed_agent" not in st.session_state:
+    with st.spinner("🧠 Initializing Intelligent Neo4j Agent..."):
+        st.session_state.detailed_agent = DetailedNeo4jAgent()
+
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
+if "agent_stats" not in st.session_state:
+    st.session_state.agent_stats = {
+        "total_questions": 0,
+        "successful_answers": 0,
+        "failed_answers": 0,
+        "query_fixes_applied": 0
+    }
+
+# Sidebar for agent controls and stats
+with st.sidebar:
+    st.markdown("## 🧠 Agent Controls")
+    
+    # Agent status
+    st.markdown("### 📊 Agent Status")
+    if st.button("🔍 Test Agent Health"):
+        with st.spinner("Testing..."):
+            result = run_async_safe(
+                st.session_state.detailed_agent.call_mcp_tool("health_check")
+            )
         
-        # Collect all records using async iteration
-        records = []
-        async for record in result:
-            records.append(record.data())
-        
-        return json.dumps(records, default=str)
-    except Exception as e:
-        logger.error(f"Read query failed: {e}")
-        raise
-
-async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
-    """Execute write query with error handling."""
-    try:
-        result = await tx.run(query, params or {})
-        summary = await result.consume()
-        return json.dumps(summary.counters._raw_data, default=str)
-    except Exception as e:
-        logger.error(f"Write query failed: {e}")
-        raise
-
-def create_mcp_server(driver: AsyncDriver, database: str) -> FastMCP:
-    """Create MCP server with COMPLETELY FIXED tool return values."""
-    mcp = FastMCP("neo4j-cypher")
-
-    @mcp.tool(name="simple_test")
-    async def simple_test() -> str:
-        """Simple test tool."""
-        test_data = {
-            "status": "success",
-            "message": "MCP server is working correctly!",
-            "tool": "simple_test"
+        if result.startswith("❌"):
+            st.error(f"❌ Health check failed: {result}")
+        else:
+            try:
+                health_data = json.loads(result)
+                st.success(f"✅ Agent healthy! Database: {health_data.get('database', 'N/A')}")
+            except:
+                st.success("✅ Agent is responding")
+    
+    # Statistics
+    st.markdown("### 📈 Performance Stats")
+    stats = st.session_state.agent_stats
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Questions", stats["total_questions"])
+        st.metric("Successful", stats["successful_answers"])
+    with col2:
+        st.metric("Failed", stats["failed_answers"])
+        st.metric("Fixes Applied", stats["query_fixes_applied"])
+    
+    # Success rate
+    if stats["total_questions"] > 0:
+        success_rate = (stats["successful_answers"] / stats["total_questions"]) * 100
+        st.metric("Success Rate", f"{success_rate:.1f}%")
+    
+    # Clear history
+    if st.button("🗑️ Clear History"):
+        st.session_state.conversation_history = []
+        st.session_state.agent_stats = {
+            "total_questions": 0,
+            "successful_answers": 0,
+            "failed_answers": 0,
+            "query_fixes_applied": 0
         }
-        return json.dumps(test_data)
+        st.rerun()
 
-    @mcp.tool(name="read_neo4j_cypher")
-    async def read_neo4j_cypher(
-        query: str = Field(..., description="Cypher query to execute"),
-        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
-    ) -> str:
-        """Execute read-only Cypher queries."""
-        if _is_write_query(query):
-            error_msg = "Write-type queries not allowed in read tool."
-            logger.warning(f"Rejected write query: {query}")
-            raise ToolError(error_msg)
+# Main interface
+st.title("🧠 Intelligent Neo4j Assistant")
+st.markdown("**Powered by LangGraph + Your MCP Server**")
+
+# Feature highlights
+st.markdown("""
+<div class="success-card">
+    <h4>🚀 Advanced Features</h4>
+    <ul>
+        <li><strong>Smart Error Recovery:</strong> Automatically fixes Neo4j syntax issues</li>
+        <li><strong>Context Awareness:</strong> Uses your database schema for better queries</li>
+        <li><strong>Multi-step Reasoning:</strong> Breaks down complex questions</li>
+        <li><strong>Adaptive Responses:</strong> Formats answers based on question type</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
+
+# Example questions section
+st.markdown("## 💡 Try These Intelligent Questions")
+
+example_categories = {
+    "🔗 Connectivity Analysis": [
+        "Show me the most connected nodes in the database",
+        "Find nodes with the highest degree centrality", 
+        "Which entities have the most relationships?"
+    ],
+    "📊 Database Analytics": [
+        "What's the overall structure of this database?",
+        "Give me statistics about node and relationship counts",
+        "Analyze the distribution of different node types"
+    ],
+    "🔍 Smart Exploration": [
+        "Find interesting patterns in the data",
+        "Show me a sample of different node types",
+        "What are the main categories of information stored here?"
+    ],
+    "🏗️ Schema Investigation": [
+        "What properties do the different node types have?",
+        "List all the relationship types and their usage",
+        "Explain the database schema structure"
+    ]
+}
+
+# Create tabs for different question categories
+tabs = st.tabs(list(example_categories.keys()))
+
+for tab, (category, questions) in zip(tabs, example_categories.items()):
+    with tab:
+        for i, question in enumerate(questions):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"**{i+1}.** {question}")
+            with col2:
+                if st.button("Ask", key=f"{category}_{i}"):
+                    st.session_state.conversation_history.append(("user", question))
+                    
+                    # Process with agent
+                    with st.spinner("🧠 Agent thinking..."):
+                        progress_container = st.container()
+                        with progress_container:
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            # Show progress
+                            status_text.text("🔍 Analyzing question...")
+                            progress_bar.progress(20)
+                            time.sleep(0.5)
+                            
+                            status_text.text("📊 Gathering schema info...")
+                            progress_bar.progress(40)
+                            time.sleep(0.5)
+                            
+                            status_text.text("🤖 Generating optimized query...")
+                            progress_bar.progress(60)
+                            time.sleep(0.5)
+                            
+                            status_text.text("⚡ Executing and formatting...")
+                            progress_bar.progress(80)
+                            
+                            # Run the agent
+                            answer = run_async_safe(st.session_state.detailed_agent.run(question))
+                            
+                            progress_bar.progress(100)
+                            status_text.text("✅ Complete!")
+                            time.sleep(0.5)
+                            
+                            # Clear progress
+                            progress_container.empty()
+                    
+                    # Update stats
+                    st.session_state.agent_stats["total_questions"] += 1
+                    if not answer.startswith("❌"):
+                        st.session_state.agent_stats["successful_answers"] += 1
+                    else:
+                        st.session_state.agent_stats["failed_answers"] += 1
+                    
+                    st.session_state.conversation_history.append(("agent", answer))
+                    st.rerun()
+
+# Main chat interface
+st.markdown("## 💬 Intelligent Chat")
+
+# Chat input
+user_question = st.chat_input("Ask any complex Neo4j question...")
+
+if user_question:
+    # Add to history
+    st.session_state.conversation_history.append(("user", user_question))
+    
+    # Process with detailed progress tracking
+    with st.spinner("🧠 Intelligent Agent Processing..."):
         
-        try:
-            async with driver.session(database=database) as session:
-                result_text = await session.execute_read(_read, query, params)
-                logger.info(f"Read query executed successfully")
-                return result_text
-        except Exception as e:
-            error_msg = f"Read query error: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+        # Create progress tracking
+        progress_container = st.container()
+        with progress_container:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Step 1: Initialize
+            status_text.text("🚀 Initializing agent...")
+            progress_bar.progress(10)
+            time.sleep(0.3)
+            
+            # Step 2: Question analysis
+            status_text.text("🧠 Analyzing question complexity...")
+            progress_bar.progress(25)
+            time.sleep(0.4)
+            
+            # Step 3: Schema gathering
+            status_text.text("📊 Gathering database schema...")
+            progress_bar.progress(45)
+            time.sleep(0.5)
+            
+            # Step 4: Query generation
+            status_text.text("🤖 Generating optimized Cypher...")
+            progress_bar.progress(65)
+            time.sleep(0.4)
+            
+            # Step 5: Execution
+            status_text.text("⚡ Executing query...")
+            progress_bar.progress(80)
+            time.sleep(0.3)
+            
+            # Step 6: Formatting
+            status_text.text("📝 Formatting intelligent response...")
+            progress_bar.progress(95)
+            
+            # Actually run the agent
+            answer = run_async_safe(st.session_state.detailed_agent.run(user_question))
+            
+            # Complete
+            progress_bar.progress(100)
+            status_text.text("✅ Response ready!")
+            time.sleep(0.5)
+            
+            # Clear progress indicators
+            progress_container.empty()
+    
+    # Update statistics
+    st.session_state.agent_stats["total_questions"] += 1
+    if not answer.startswith("❌"):
+        st.session_state.agent_stats["successful_answers"] += 1
+        if "🔧" in answer or "syntax fix" in answer.lower():
+            st.session_state.agent_stats["query_fixes_applied"] += 1
+    else:
+        st.session_state.agent_stats["failed_answers"] += 1
+    
+    # Add to conversation
+    st.session_state.conversation_history.append(("agent", answer))
+    st.rerun()
 
-    @mcp.tool(name="write_neo4j_cypher")
-    async def write_neo4j_cypher(
-        query: str = Field(..., description="Cypher write query to execute"),
-        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
-    ) -> str:
-        """Execute write Cypher queries."""
-        if not _is_write_query(query):
-            error_msg = "Only write-type queries allowed in write tool."
-            logger.warning(f"Rejected read query in write tool: {query}")
-            raise ToolError(error_msg)
-        
-        try:
-            async with driver.session(database=database) as session:
-                result_text = await session.execute_write(_write, query, params)
-                logger.info(f"Write query executed successfully")
-                return result_text
-        except Exception as e:
-            error_msg = f"Write query error: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+# Display conversation history
+if st.session_state.conversation_history:
+    st.markdown("## 📜 Conversation History")
+    
+    # Show last 10 exchanges
+    recent_history = st.session_state.conversation_history[-20:]  # Last 10 exchanges (20 messages)
+    
+    for i, (role, message) in enumerate(reversed(recent_history)):
+        if role == "user":
+            st.chat_message("user").write(f"**You:** {message}")
+        elif role == "agent":
+            # Determine message type for styling
+            if message.startswith("❌"):
+                st.chat_message("assistant").error(message)
+            elif message.startswith("🔄"):
+                st.chat_message("assistant").warning(message)
+            else:
+                st.chat_message("assistant").success(message)
 
-    @mcp.tool(name="health_check")
-    async def health_check() -> str:
-        """Check Neo4j connection health."""
-        try:
-            async with driver.session(database=database) as session:
-                result = await session.run("RETURN 1 as health")
-                await result.consume()
-                
-                health_info = {
-                    "status": "healthy",
-                    "database": database,
-                    "message": "Connection successful"
-                }
-                
-                return json.dumps(health_info)
-        except Exception as e:
-            error_msg = f"Health check failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+# Advanced features section
+st.markdown("---")
+st.markdown("## 🔧 Advanced Features")
 
-    @mcp.tool(name="count_nodes")
-    async def count_nodes() -> str:
-        """Count total nodes in the database."""
-        try:
-            async with driver.session(database=database) as session:
-                result = await session.run("MATCH (n) RETURN count(n) as total_nodes")
-                record = await result.single()
-                count = record["total_nodes"] if record else 0
-                
-                result_data = {
-                    "total_nodes": count,
-                    "database": database,
-                    "query": "MATCH (n) RETURN count(n)",
-                    "status": "success"
-                }
-                
-                return json.dumps(result_data)
-        except Exception as e:
-            error_msg = f"Count nodes failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+col1, col2, col3 = st.columns(3)
 
-    @mcp.tool(name="list_labels")
-    async def list_labels() -> str:
-        """List all node labels in the database - COMPLETELY FIXED."""
-        try:
-            async with driver.session(database=database) as session:
-                # Use the _read function which properly handles async iteration
-                result_text = await session.execute_read(_read, "CALL db.labels()", {})
-                
-                # Parse the JSON result to extract labels
-                raw_data = json.loads(result_text)
-                labels = [record.get("label", "") for record in raw_data if record.get("label")]
-                
-                result_data = {
-                    "labels": labels,
-                    "count": len(labels),
-                    "database": database,
-                    "status": "success"
-                }
-                
-                return json.dumps(result_data)
-        except Exception as e:
-            error_msg = f"List labels failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+with col1:
+    st.markdown("""
+    <div class="metric-card">
+        <h4>🛠️ Error Recovery</h4>
+        <p>Automatically detects and fixes:</p>
+        <ul>
+            <li>Deprecated size() syntax</li>
+            <li>Missing LIMIT clauses</li>
+            <li>Old Neo4j patterns</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
 
-    @mcp.tool(name="list_relationships")
-    async def list_relationships() -> str:
-        """List all relationship types in the database."""
-        try:
-            async with driver.session(database=database) as session:
-                # Use the _read function which properly handles async iteration
-                result_text = await session.execute_read(_read, "CALL db.relationshipTypes()", {})
-                
-                # Parse the JSON result to extract relationship types
-                raw_data = json.loads(result_text)
-                rel_types = [record.get("relationshipType", "") for record in raw_data if record.get("relationshipType")]
-                
-                result_data = {
-                    "relationship_types": rel_types,
-                    "count": len(rel_types),
-                    "database": database,
-                    "status": "success"
-                }
-                
-                return json.dumps(result_data)
-        except Exception as e:
-            error_msg = f"List relationships failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+with col2:
+    st.markdown("""
+    <div class="metric-card">
+        <h4>🧠 Smart Context</h4>
+        <p>Uses your database info:</p>
+        <ul>
+            <li>Available node labels</li>
+            <li>Relationship types</li>
+            <li>Database statistics</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
 
-    @mcp.tool(name="database_summary")
-    async def database_summary() -> str:
-        """Get a comprehensive database summary."""
-        try:
-            async with driver.session(database=database) as session:
-                # Get node count
-                result = await session.run("MATCH (n) RETURN count(n) as node_count")
-                record = await result.single()
-                node_count = record["node_count"] if record else 0
-                
-                # Get relationship count
-                result = await session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
-                record = await result.single()
-                rel_count = record["rel_count"] if record else 0
-                
-                # Get labels using the fixed method
-                labels_result = await session.execute_read(_read, "CALL db.labels()", {})
-                labels_data = json.loads(labels_result)
-                labels = [record.get("label", "") for record in labels_data if record.get("label")]
-                
-                # Get relationship types using the fixed method
-                rel_types_result = await session.execute_read(_read, "CALL db.relationshipTypes()", {})
-                rel_types_data = json.loads(rel_types_result)
-                rel_types = [record.get("relationshipType", "") for record in rel_types_data if record.get("relationshipType")]
-                
-                summary_data = {
-                    "database": database,
-                    "node_count": node_count,
-                    "relationship_count": rel_count,
-                    "label_count": len(labels),
-                    "labels": labels,
-                    "relationship_type_count": len(rel_types),
-                    "relationship_types": rel_types,
-                    "status": "summary_complete"
-                }
-                
-                return json.dumps(summary_data)
-        except Exception as e:
-            error_msg = f"Database summary failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+with col3:
+    st.markdown("""
+    <div class="metric-card">
+        <h4>🎯 Adaptive Responses</h4>
+        <p>Intelligent formatting for:</p>
+        <ul>
+            <li>Connectivity analysis</li>
+            <li>Schema exploration</li>
+            <li>Statistical queries</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
 
-    return mcp
+# Debug information
+if st.checkbox("🔧 Show Debug Information"):
+    st.markdown("### 🐛 Debug Info")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Agent Configuration:**")
+        st.json({
+            "MCP Script": "mcpserver.py",
+            "Max Attempts": 3,
+            "Cortex Model": "llama3.1-70b",
+            "Available Tools": [
+                "read_neo4j_cypher",
+                "write_neo4j_cypher", 
+                "list_labels",
+                "list_relationships",
+                "database_summary",
+                "health_check"
+            ]
+        })
+    
+    with col2:
+        st.markdown("**Session Statistics:**")
+        st.json(st.session_state.agent_stats)
 
-async def run_mcp_server():
-    """Main server function."""
-    driver = None
-    try:
-        logger.info("🚀 Starting MCP server initialization...")
-        
-        # Create Neo4j driver
-        driver = AsyncGraphDatabase.driver(
-            "neo4j://10.189.116.237:7687",
-            auth=("neo4j", "Vkg5d$F!pLq2@9vRwE="),
-        )
-        
-        # Test connection
-        async with driver.session(database="connectiq") as session:
-            result = await session.run("RETURN 1 as test")
-            await result.consume()
-        
-        logger.info("✅ Neo4j connection established successfully")
-        
-        # Create MCP server
-        mcp = create_mcp_server(driver, "connectiq")
-        logger.info("✅ MCP server created with completely fixed tools")
-        
-        # Use STDIO transport
-        logger.info("🚀 Starting MCP server with STDIO transport")
-        await mcp.run_async(transport="stdio")
-        
-    except KeyboardInterrupt:
-        logger.info("Server shutdown requested")
-    except Exception as e:
-        logger.error(f"Server startup failed: {e}")
-        raise
-    finally:
-        if driver:
-            await driver.close()
-            logger.info("Neo4j driver closed")
-
-def main():
-    """Main entry point."""
-    try:
-        asyncio.run(run_mcp_server())
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+# Footer
+st.markdown("---")
+st.markdown("""
+<div class="success-card">
+    <h4>✨ You're using the most advanced Neo4j assistant!</h4>
+    <p>This system combines your existing MCP server with LangGraph's intelligent workflow 
+    to provide context-aware, error-recovering, and adaptively formatted responses to any Neo4j question.</p>
+</div>
+""", unsafe_allow_html=True)
