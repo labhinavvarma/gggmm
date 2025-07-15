@@ -1,4 +1,4 @@
-# ui.py
+# ui_enhanced.py - Enhanced UI with Snowflake Cortex integration and TaskGroup error fixes
 
 import streamlit as st
 import asyncio
@@ -8,223 +8,331 @@ import requests
 import threading
 import urllib3
 import time
+import sys
 from asyncio import run_coroutine_threadsafe
 from threading import Thread
+from typing import Optional, Dict, Any
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcpserver import run_mcp_server
+from mcpserver import main as start_mcp_server
 
-# Cortex Config
+# Configuration
 CORTEX_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
 API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
 APP_ID = "edadip"
 APLCTN_CD = "edagnai"
 MODEL = "llama3.1-70b"
-SYS_MSG = "You are a powerful AI assistant. Provide accurate, concise answers based on context."
+SYS_MSG = "You are a powerful AI assistant specialized in Neo4j Cypher queries. Provide accurate, concise Cypher queries."
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Create a dedicated event loop for async operations
-@st.cache_resource(show_spinner=False)
-def create_event_loop():
-    """Create a dedicated event loop in a worker thread."""
-    loop = asyncio.new_event_loop()
-    thread = Thread(target=loop.run_forever, daemon=True)
-    thread.start()
-    return loop, thread
-
-EVENT_LOOP, WORKER_THREAD = create_event_loop()
-
-def run_async(coroutine):
-    """Run a coroutine in the worker thread and return the result."""
-    try:
-        return run_coroutine_threadsafe(coroutine, EVENT_LOOP).result(timeout=30)
-    except Exception as e:
-        st.error(f"Async operation failed: {str(e)}")
-        return None
-
-# Start MCP server once
-@st.cache_resource(show_spinner=False)
-def start_mcp_server():
-    """Start the MCP server in a separate thread."""
-    def server_runner():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+class AsyncTaskManager:
+    """Manages async tasks with proper error handling for TaskGroup issues."""
+    
+    def __init__(self):
+        self.loop = None
+        self.thread = None
+        self._setup_event_loop()
+    
+    def _setup_event_loop(self):
+        """Set up event loop with version compatibility."""
         try:
-            loop.run_until_complete(run_mcp_server())
+            self.loop = asyncio.new_event_loop()
+            self.thread = Thread(target=self._run_event_loop, daemon=True)
+            self.thread.start()
+            time.sleep(0.1)  # Give loop time to start
         except Exception as e:
-            st.error(f"MCP server failed to start: {e}")
+            st.error(f"Failed to create event loop: {e}")
+    
+    def _run_event_loop(self):
+        """Run the event loop in a separate thread."""
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop.run_forever()
+        except Exception as e:
+            st.error(f"Event loop error: {e}")
+    
+    def run_async(self, coroutine, timeout=30):
+        """Run async function with timeout and error handling."""
+        try:
+            if self.loop is None or self.loop.is_closed():
+                self._setup_event_loop()
+            
+            future = run_coroutine_threadsafe(coroutine, self.loop)
+            return future.result(timeout=timeout)
+        except asyncio.TimeoutError:
+            st.error(f"Operation timed out after {timeout} seconds")
+            return None
+        except Exception as e:
+            st.error(f"Async task failed: {e}")
+            return None
+    
+    def close(self):
+        """Clean up resources."""
+        if self.loop and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+
+# Global task manager
+@st.cache_resource
+def get_task_manager():
+    return AsyncTaskManager()
+
+class CortexLLMClient:
+    """Enhanced Cortex LLM client with better error handling."""
+    
+    def __init__(self, url: str, api_key: str, app_id: str, aplctn_cd: str, model: str):
+        self.url = url
+        self.api_key = api_key
+        self.app_id = app_id
+        self.aplctn_cd = aplctn_cd
+        self.model = model
+    
+    def generate_cypher(self, user_query: str) -> str:
+        """Generate Cypher query using Cortex LLM."""
+        prompt = f"""
+        You are an expert Neo4j Cypher query generator. 
+        Generate a valid Cypher query for the following request: {user_query}
+        
+        Rules:
+        1. Return ONLY the Cypher query, no explanations
+        2. Use proper Neo4j syntax
+        3. Include appropriate LIMIT clauses for large datasets
+        4. Use MATCH for read operations, CREATE/MERGE for write operations
+        
+        Query request: {user_query}
+        """
+        
+        return self._call_cortex(prompt)
+    
+    def _call_cortex(self, prompt: str) -> str:
+        """Call Cortex API with enhanced error handling."""
+        payload = {
+            "query": {
+                "aplctn_cd": self.aplctn_cd,
+                "app_id": self.app_id,
+                "api_key": self.api_key,
+                "method": "cortex",
+                "model": self.model,
+                "sys_msg": SYS_MSG,
+                "limit_convs": "0",
+                "prompt": {
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                "session_id": str(uuid.uuid4())
+            }
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f'Snowflake Token="{self.api_key}"'
+        }
+
+        try:
+            response = requests.post(
+                self.url, 
+                headers=headers, 
+                json=payload, 
+                verify=False, 
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            raw_text = response.text
+            if "end_of_stream" in raw_text:
+                return raw_text.split("end_of_stream")[0].strip()
+            return raw_text.strip()
+            
+        except requests.exceptions.Timeout:
+            return "❌ Request timed out"
+        except requests.exceptions.RequestException as e:
+            return f"❌ Request failed: {e}"
+        except Exception as e:
+            return f"❌ Unexpected error: {e}"
+
+class MCPClient:
+    """Enhanced MCP client with TaskGroup error handling."""
+    
+    def __init__(self, server_url: str = "http://localhost:8000/messages/"):
+        self.server_url = server_url
+    
+    async def call_tool_async(self, tool_name: str, query: str, max_retries: int = 3) -> str:
+        """Call MCP tool with retry logic and error handling."""
+        for attempt in range(max_retries):
+            try:
+                # Use timeout to prevent hanging
+                async with asyncio.timeout(30):
+                    async with sse_client(self.server_url) as sse:
+                        async with ClientSession(*sse) as session:
+                            await session.initialize()
+                            
+                            # List available tools
+                            tools = await session.list_tools()
+                            available_tools = [t.name for t in tools.tools]
+                            
+                            if tool_name not in available_tools:
+                                return f"❌ Tool '{tool_name}' not found. Available: {available_tools}"
+                            
+                            # Find the tool
+                            tool = next(t for t in tools.tools if t.name == tool_name)
+                            
+                            # Call the tool
+                            result = await session.call_tool(tool, {"query": query})
+                            
+                            # Extract content
+                            if result.content and len(result.content) > 0:
+                                content = result.content[0].text
+                                return content if content else "✅ Query executed successfully"
+                            else:
+                                return "✅ Query executed successfully (no content returned)"
+                                
+            except asyncio.TimeoutError:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return f"❌ Timeout after {max_retries} attempts"
+            except ConnectionError as e:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return f"❌ Connection failed after {max_retries} attempts: {e}"
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+                return f"❌ Error after {max_retries} attempts: {e}"
+        
+        return f"❌ Failed after {max_retries} attempts"
+    
+    async def health_check_async(self) -> bool:
+        """Check if MCP server is healthy."""
+        try:
+            result = await self.call_tool_async("health_check", "")
+            return not result.startswith("❌")
+        except Exception:
+            return False
+
+# Server management
+@st.cache_resource
+def start_server():
+    """Start MCP server with proper error handling."""
+    def server_runner():
+        try:
+            start_mcp_server()
+        except Exception as e:
+            st.error(f"Server failed: {e}")
     
     thread = threading.Thread(target=server_runner, daemon=True)
     thread.start()
-    
-    # Wait a bit for server to start
-    time.sleep(2)
+    time.sleep(3)  # Give server time to start
     return True
 
-# Initialize MCP server
-MCP_SERVER_STARTED = start_mcp_server()
+# Initialize components
+SERVER_STARTED = start_server()
+TASK_MANAGER = get_task_manager()
+CORTEX_CLIENT = CortexLLMClient(CORTEX_URL, API_KEY, APP_ID, APLCTN_CD, MODEL)
+MCP_CLIENT = MCPClient()
 
 # Streamlit UI
-st.set_page_config(page_title="Neo4j + Cortex", page_icon="🧠")
-st.title("🧠 Neo4j Cypher + Cortex LLM Chat")
+st.set_page_config(page_title="Neo4j + Cortex Enhanced", page_icon="🧠", layout="wide")
+st.title("🧠 Enhanced Neo4j Cypher + Cortex LLM Chat")
 
+# Initialize session state
 if "history" not in st.session_state:
     st.session_state.history = []
+if "server_healthy" not in st.session_state:
+    st.session_state.server_healthy = None
 
-def call_cortex_llm(prompt: str) -> str:
-    """Call Cortex LLM with proper error handling."""
-    payload = {
-        "query": {
-            "aplctn_cd": APLCTN_CD,
-            "app_id": APP_ID,
-            "api_key": API_KEY,
-            "method": "cortex",
-            "model": MODEL,
-            "sys_msg": SYS_MSG,
-            "limit_convs": "0",
-            "prompt": {
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            "session_id": str(uuid.uuid4())
-        }
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f'Snowflake Token="{API_KEY}"'
-    }
-
-    try:
-        res = requests.post(CORTEX_URL, headers=headers, json=payload, verify=False, timeout=30)
-        res.raise_for_status()
-        raw = res.text
-        return raw.split("end_of_stream")[0].strip() if "end_of_stream" in raw else raw.strip()
-    except requests.exceptions.RequestException as e:
-        return f"❌ Cortex API error: {e}"
-    except Exception as e:
-        return f"❌ Unexpected error: {e}"
-
-async def call_mcp_async(tool_name: str, query: str) -> str:
-    """Call MCP tool with proper async handling and error recovery."""
-    max_retries = 3
-    retry_delay = 1
+# Sidebar
+with st.sidebar:
+    st.header("🎛️ Controls")
     
-    for attempt in range(max_retries):
-        try:
-            # Use SSE client to connect to MCP server
-            async with sse_client("http://localhost:8000/messages/") as sse:
-                async with ClientSession(*sse) as session:
-                    await session.initialize()
-                    
-                    # Get available tools
-                    tools = await session.list_tools()
-                    tool = None
-                    for t in tools.tools:
-                        if t.name == tool_name:
-                            tool = t
-                            break
-                    
-                    if not tool:
-                        return f"❌ Tool '{tool_name}' not found. Available tools: {[t.name for t in tools.tools]}"
-                    
-                    # Call the tool
-                    result = await session.call_tool(tool, {"query": query})
-                    
-                    # Extract result text
-                    if result.content and len(result.content) > 0:
-                        return result.content[0].text
-                    else:
-                        return "✅ Tool executed successfully but returned no content."
-                        
-        except ConnectionError as e:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
-                continue
-            return f"❌ Connection error after {max_retries} attempts: {e}"
-        except Exception as e:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-                continue
-            return f"❌ MCP error after {max_retries} attempts: {e}"
+    # Server status
+    st.subheader("Server Status")
+    if SERVER_STARTED:
+        st.success("✅ MCP Server Started")
+    else:
+        st.error("❌ MCP Server Failed")
     
-    return f"❌ Failed to execute tool after {max_retries} attempts"
+    # Health check
+    if st.button("🏥 Check Health"):
+        with st.spinner("Checking server health..."):
+            health_result = TASK_MANAGER.run_async(MCP_CLIENT.health_check_async())
+            st.session_state.server_healthy = health_result
+            if health_result:
+                st.success("✅ Server Healthy")
+            else:
+                st.error("❌ Server Unhealthy")
+    
+    # Display last health check
+    if st.session_state.server_healthy is not None:
+        status = "✅ Healthy" if st.session_state.server_healthy else "❌ Unhealthy"
+        st.info(f"Last check: {status}")
+    
+    st.divider()
+    
+    # Clear history
+    if st.button("🗑️ Clear History"):
+        st.session_state.history = []
+        st.rerun()
+    
+    # Settings
+    st.subheader("⚙️ Settings")
+    show_debug = st.checkbox("Show Debug Info", value=False)
+    
+    if show_debug:
+        st.subheader("🐛 Debug Info")
+        st.write(f"Python Version: {sys.version}")
+        st.write(f"History Length: {len(st.session_state.history)}")
+        st.write(f"Task Manager: {type(TASK_MANAGER).__name__}")
 
-def call_mcp(tool_name: str, query: str) -> str:
-    """Wrapper function to call MCP from Streamlit."""
-    return run_async(call_mcp_async(tool_name, query))
+# Main chat interface
+st.subheader("💬 Chat Interface")
 
-# Main UI
-user_query = st.chat_input("Ask a Neo4j question...")
+# Chat input
+user_query = st.chat_input("Ask a Neo4j question or request a Cypher query...")
 
 if user_query:
+    # Add user message
     st.session_state.history.append(("user", user_query))
-
-    # Step 1: Generate Cypher query using Cortex
-    with st.spinner("💡 Cortex generating Cypher..."):
-        cypher_prompt = f"""
-        Generate a Neo4j Cypher query for: {user_query}
-        
-        Please provide only the Cypher query without any explanation or formatting.
-        Make sure the query is valid and follows Neo4j syntax.
-        """
-        cypher = call_cortex_llm(cypher_prompt)
     
-    if cypher.startswith("❌"):
-        st.error("Failed to generate Cypher query")
-        st.session_state.history.append(("error", cypher))
+    # Generate Cypher query
+    with st.spinner("🤖 Generating Cypher query..."):
+        cypher_query = CORTEX_CLIENT.generate_cypher(user_query)
+    
+    if cypher_query.startswith("❌"):
+        st.session_state.history.append(("error", f"Cortex Error: {cypher_query}"))
     else:
-        st.session_state.history.append(("llm", cypher))
-
-        # Step 2: Determine tool type
-        tool = "read_neo4j_cypher" if "MATCH" in cypher.upper() else "write_neo4j_cypher"
-
-        # Step 3: Execute MCP tool
-        with st.spinner(f"⚙️ Running {tool}..."):
-            result = call_mcp(tool, cypher)
+        st.session_state.history.append(("cortex", cypher_query))
+        
+        # Determine tool type
+        is_write_query = any(keyword in cypher_query.upper() 
+                           for keyword in ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP"])
+        tool_name = "write_neo4j_cypher" if is_write_query else "read_neo4j_cypher"
+        
+        # Execute query
+        with st.spinner(f"⚡ Executing {tool_name}..."):
+            result = TASK_MANAGER.run_async(
+                MCP_CLIENT.call_tool_async(tool_name, cypher_query)
+            )
         
         if result:
             st.session_state.history.append(("neo4j", result))
         else:
-            st.session_state.history.append(("error", "Failed to execute MCP tool"))
+            st.session_state.history.append(("error", "Failed to execute query"))
 
 # Display chat history
-st.subheader("Chat History")
-for role, msg in reversed(st.session_state.history):
+st.subheader("📜 Chat History")
+for role, message in reversed(st.session_state.history):
     if role == "user":
-        st.chat_message("user").markdown(f"**You:** {msg}")
-    elif role == "llm":
-        st.chat_message("assistant").markdown(f"💡 **Cortex Cypher:**\n```cypher\n{msg}\n```")
+        st.chat_message("user").write(f"**You:** {message}")
+    elif role == "cortex":
+        st.chat_message("assistant").write(f"🤖 **Generated Cypher:**\n```cypher\n{message}\n```")
     elif role == "neo4j":
-        st.chat_message("assistant").markdown(f"📦 **Neo4j Result:**\n```json\n{msg}\n```")
+        st.chat_message("assistant").write(f"📊 **Neo4j Result:**\n```json\n{message}\n```")
     elif role == "error":
-        st.chat_message("assistant").markdown(f"❌ **Error:** {msg}")
+        st.chat_message("assistant").write(f"❌ **Error:** {message}")
 
-# Sidebar with controls
-st.sidebar.header("Controls")
-if st.sidebar.button("Clear History"):
-    st.session_state.history = []
-    st.rerun()
-
-# Server status
-st.sidebar.header("Server Status")
-if MCP_SERVER_STARTED:
-    st.sidebar.success("✅ MCP Server Running")
-else:
-    st.sidebar.error("❌ MCP Server Failed to Start")
-
-# Debug info
-with st.sidebar.expander("Debug Info"):
-    st.write(f"Event Loop: {EVENT_LOOP}")
-    st.write(f"Worker Thread: {WORKER_THREAD}")
-    st.write(f"History Length: {len(st.session_state.history)}")
-
-# Health check
-if st.sidebar.button("Test MCP Connection"):
-    with st.spinner("Testing MCP connection..."):
-        test_result = call_mcp("read_neo4j_cypher", "MATCH (n) RETURN count(n) as total_nodes LIMIT 1")
-        if test_result and not test_result.startswith("❌"):
-            st.sidebar.success("✅ MCP Connection OK")
-        else:
-            st.sidebar.error(f"❌ MCP Connection Failed: {test_result}")
+# Footer
+st.divider()
+st.caption("Enhanced Neo4j + Cortex Chat with TaskGroup error handling")
