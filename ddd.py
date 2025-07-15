@@ -1,180 +1,376 @@
-# mcpserver_http.py - Modern MCP server using HTTP transport (not deprecated SSE)
+# ui_modern.py - Modern UI using HTTP transport instead of deprecated SSE
 
-import json
-import re
-import logging
+import streamlit as st
+
+# CRITICAL: This MUST be the first Streamlit command
+st.set_page_config(page_title="Neo4j + Cortex Modern", page_icon="🧠", layout="wide")
+
+# Now import everything else
 import asyncio
+import json
+import uuid
+import requests
+import threading
+import urllib3
+import time
 import sys
-from typing import Any, Optional
-from fastmcp.exceptions import ToolError
-from fastmcp.tools.tool import ToolResult, TextContent
-from fastmcp.server import FastMCP
-from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncTransaction
-from pydantic import Field
+from asyncio import run_coroutine_threadsafe
+from threading import Thread
+from typing import Optional, Dict, Any
+from fastmcp import Client
+from mcpserver_http import main as start_mcp_server
 
-logger = logging.getLogger("neo4j_mcp")
-logging.basicConfig(level=logging.INFO)
+# Configuration
+CORTEX_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+APP_ID = "edadip"
+APLCTN_CD = "edagnai"
+MODEL = "llama3.1-70b"
+SYS_MSG = "You are a powerful AI assistant specialized in Neo4j Cypher queries. Provide accurate, concise Cypher queries."
 
-def _is_write_query(query: str) -> bool:
-    """Check if query is a write operation."""
-    return bool(re.search(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP)\b", query, re.IGNORECASE))
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
-    """Execute read query with error handling."""
-    try:
-        result = await tx.run(query, params or {})
-        eager = await result.to_eager_result()
-        return json.dumps([r.data() for r in eager.records], default=str)
-    except Exception as e:
-        logger.error(f"Read query failed: {e}")
-        raise
+class AsyncTaskManager:
+    """Manages async tasks with proper error handling."""
+    
+    def __init__(self):
+        self.loop = None
+        self.thread = None
+        self._setup_event_loop()
+    
+    def _setup_event_loop(self):
+        """Set up event loop with version compatibility."""
+        try:
+            self.loop = asyncio.new_event_loop()
+            self.thread = Thread(target=self._run_event_loop, daemon=True)
+            self.thread.start()
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Failed to create event loop: {e}")
+    
+    def _run_event_loop(self):
+        """Run the event loop in a separate thread."""
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop.run_forever()
+        except Exception as e:
+            print(f"Event loop error: {e}")
+    
+    def run_async(self, coroutine, timeout=30):
+        """Run async function with timeout and error handling."""
+        try:
+            if self.loop is None or self.loop.is_closed():
+                self._setup_event_loop()
+            
+            future = run_coroutine_threadsafe(coroutine, self.loop)
+            return future.result(timeout=timeout)
+        except asyncio.TimeoutError:
+            return f"❌ Operation timed out after {timeout} seconds"
+        except Exception as e:
+            return f"❌ Async task failed: {e}"
 
-async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
-    """Execute write query with error handling."""
-    try:
-        result = await tx.run(query, params or {})
-        summary = await result.consume()
-        return json.dumps(summary.counters._raw_data, default=str)
-    except Exception as e:
-        logger.error(f"Write query failed: {e}")
-        raise
-
-def create_mcp_server(driver: AsyncDriver, database: str) -> FastMCP:
-    """Create MCP server with modern HTTP transport."""
-    # Create server without stateless_http parameter (deprecated)
-    mcp = FastMCP("neo4j-cypher")
-
-    @mcp.tool(name="read_neo4j_cypher")
-    async def read_neo4j_cypher(
-        query: str = Field(..., description="Cypher query to execute"),
-        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
-    ) -> list[ToolResult]:
-        """Execute read-only Cypher queries."""
-        if _is_write_query(query):
-            error_msg = "Write-type queries not allowed in read tool."
-            logger.warning(f"Rejected write query: {query}")
-            raise ToolError(error_msg)
+class CortexLLMClient:
+    """Enhanced Cortex LLM client with better error handling."""
+    
+    def __init__(self, url: str, api_key: str, app_id: str, aplctn_cd: str, model: str):
+        self.url = url
+        self.api_key = api_key
+        self.app_id = app_id
+        self.aplctn_cd = aplctn_cd
+        self.model = model
+    
+    def generate_cypher(self, user_query: str) -> str:
+        """Generate Cypher query using Cortex LLM."""
+        prompt = f"""
+        You are an expert Neo4j Cypher query generator. 
+        Generate a valid Cypher query for the following request: {user_query}
         
-        try:
-            async with driver.session(database=database) as session:
-                result = await session.execute_read(_read, query, params)
-                logger.info(f"Read query executed successfully: {query[:100]}...")
-                return [ToolResult(content=[TextContent(type="text", text=result)])]
-        except Exception as e:
-            error_msg = f"Read query error: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
-
-    @mcp.tool(name="write_neo4j_cypher")
-    async def write_neo4j_cypher(
-        query: str = Field(..., description="Cypher write query to execute"),
-        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
-    ) -> list[ToolResult]:
-        """Execute write Cypher queries."""
-        if not _is_write_query(query):
-            error_msg = "Only write-type queries allowed in write tool."
-            logger.warning(f"Rejected read query in write tool: {query}")
-            raise ToolError(error_msg)
+        Rules:
+        1. Return ONLY the Cypher query, no explanations
+        2. Use proper Neo4j syntax
+        3. Include appropriate LIMIT clauses for large datasets
+        4. Use MATCH for read operations, CREATE/MERGE for write operations
         
-        try:
-            async with driver.session(database=database) as session:
-                result = await session.execute_write(_write, query, params)
-                logger.info(f"Write query executed successfully: {query[:100]}...")
-                return [ToolResult(content=[TextContent(type="text", text=result)])]
-        except Exception as e:
-            error_msg = f"Write query error: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+        Query request: {user_query}
+        """
+        
+        return self._call_cortex(prompt)
+    
+    def _call_cortex(self, prompt: str) -> str:
+        """Call Cortex API with enhanced error handling."""
+        payload = {
+            "query": {
+                "aplctn_cd": self.aplctn_cd,
+                "app_id": self.app_id,
+                "api_key": self.api_key,
+                "method": "cortex",
+                "model": self.model,
+                "sys_msg": SYS_MSG,
+                "limit_convs": "0",
+                "prompt": {
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                "session_id": str(uuid.uuid4())
+            }
+        }
 
-    @mcp.tool(name="health_check")
-    async def health_check() -> list[ToolResult]:
-        """Check Neo4j connection health."""
-        try:
-            async with driver.session(database=database) as session:
-                result = await session.run("RETURN 1 as health")
-                await result.consume()
-                return [ToolResult(content=[TextContent(type="text", text='{"status": "healthy", "database": "' + database + '"}')])]
-        except Exception as e:
-            error_msg = f"Health check failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f'Snowflake Token="{self.api_key}"'
+        }
 
-    @mcp.tool(name="get_database_info")
-    async def get_database_info() -> list[ToolResult]:
+        try:
+            response = requests.post(
+                self.url, 
+                headers=headers, 
+                json=payload, 
+                verify=False, 
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            raw_text = response.text
+            if "end_of_stream" in raw_text:
+                return raw_text.split("end_of_stream")[0].strip()
+            return raw_text.strip()
+            
+        except requests.exceptions.Timeout:
+            return "❌ Request timed out"
+        except requests.exceptions.RequestException as e:
+            return f"❌ Request failed: {e}"
+        except Exception as e:
+            return f"❌ Unexpected error: {e}"
+
+class ModernMCPClient:
+    """Modern MCP client using HTTP transport (not deprecated SSE)."""
+    
+    def __init__(self, server_url: str = "http://localhost:8000"):
+        self.server_url = server_url
+    
+    async def call_tool_async(self, tool_name: str, query: str, max_retries: int = 3) -> str:
+        """Call MCP tool using modern HTTP transport."""
+        for attempt in range(max_retries):
+            try:
+                # Use modern HTTP client instead of deprecated SSE
+                async with Client(self.server_url) as client:
+                    # List available tools
+                    tools = await client.list_tools()
+                    available_tools = [t.name for t in tools.tools]
+                    
+                    if tool_name not in available_tools:
+                        return f"❌ Tool '{tool_name}' not found. Available: {available_tools}"
+                    
+                    # Call the tool
+                    result = await client.call_tool(tool_name, {"query": query})
+                    
+                    # Extract content
+                    if hasattr(result, 'content') and result.content:
+                        content = result.content[0].text if result.content else "✅ Query executed successfully"
+                        return content
+                    else:
+                        return "✅ Query executed successfully (no content returned)"
+                        
+            except ConnectionError as e:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return f"❌ Connection failed after {max_retries} attempts: {e}"
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+                return f"❌ Error after {max_retries} attempts: {e}"
+        
+        return f"❌ Failed after {max_retries} attempts"
+    
+    async def health_check_async(self) -> bool:
+        """Check if MCP server is healthy using HTTP."""
+        try:
+            async with Client(self.server_url) as client:
+                result = await client.call_tool("health_check", {})
+                return not str(result).startswith("❌")
+        except Exception:
+            return False
+    
+    async def get_database_info_async(self) -> str:
         """Get database information."""
         try:
-            async with driver.session(database=database) as session:
-                # Get node count
-                result = await session.run("MATCH (n) RETURN count(n) as node_count")
-                record = await result.single()
-                node_count = record["node_count"] if record else 0
-                
-                # Get relationship count
-                result = await session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
-                record = await result.single()
-                rel_count = record["rel_count"] if record else 0
-                
-                info = {
-                    "database": database,
-                    "node_count": node_count,
-                    "relationship_count": rel_count,
-                    "status": "connected"
-                }
-                
-                return [ToolResult(content=[TextContent(type="text", text=json.dumps(info))])]
+            async with Client(self.server_url) as client:
+                result = await client.call_tool("get_database_info", {})
+                return result.content[0].text if hasattr(result, 'content') and result.content else str(result)
         except Exception as e:
-            error_msg = f"Database info query failed: {str(e)}"
-            logger.error(error_msg)
-            raise ToolError(error_msg)
+            return f"❌ Failed to get database info: {e}"
 
-    return mcp
+# Server management
+def start_server():
+    """Start MCP server with HTTP transport."""
+    def server_runner():
+        try:
+            start_mcp_server()
+        except Exception as e:
+            print(f"Server failed: {e}")
+    
+    thread = threading.Thread(target=server_runner, daemon=True)
+    thread.start()
+    time.sleep(3)  # Give server time to start
+    return True
 
-async def run_mcp_server():
-    """Main server function using modern HTTP transport."""
-    driver = None
-    try:
-        # Create Neo4j driver
-        driver = AsyncGraphDatabase.driver(
-            "neo4j://10.189.116.237:7687",
-            auth=("neo4j", "Vkg5d$F!pLq2@9vRwE="),
-        )
-        
-        # Test connection
-        async with driver.session(database="connectiq") as session:
-            result = await session.run("RETURN 1 as test")
-            await result.consume()
-        
-        logger.info("Neo4j connection established successfully")
-        
-        # Create MCP server
-        mcp = create_mcp_server(driver, "connectiq")
-        
-        # Use modern HTTP transport instead of deprecated SSE
-        logger.info("Starting MCP server with HTTP transport on http://0.0.0.0:8000/")
-        await mcp.run_async(
-            transport="http",
-            host="0.0.0.0",
-            port=8000,
-            log_level="info"
-        )
-        
-    except KeyboardInterrupt:
-        logger.info("Server shutdown requested")
-    except Exception as e:
-        logger.error(f"Server startup failed: {e}")
-        raise
-    finally:
-        if driver:
-            await driver.close()
-            logger.info("Neo4j driver closed")
+# Initialize components after page config
+if "task_manager" not in st.session_state:
+    st.session_state.task_manager = AsyncTaskManager()
 
-def main():
-    """Main entry point with proper async handling."""
-    try:
-        asyncio.run(run_mcp_server())
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        sys.exit(1)
+if "server_started" not in st.session_state:
+    st.session_state.server_started = start_server()
 
-if __name__ == "__main__":
-    main()
+if "cortex_client" not in st.session_state:
+    st.session_state.cortex_client = CortexLLMClient(CORTEX_URL, API_KEY, APP_ID, APLCTN_CD, MODEL)
+
+if "mcp_client" not in st.session_state:
+    st.session_state.mcp_client = ModernMCPClient()
+
+# Main UI
+st.title("🧠 Modern Neo4j Cypher + Cortex LLM Chat")
+st.caption("Using modern HTTP transport (SSE deprecated)")
+
+# Initialize session state
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "server_healthy" not in st.session_state:
+    st.session_state.server_healthy = None
+if "db_info" not in st.session_state:
+    st.session_state.db_info = None
+
+# Sidebar
+with st.sidebar:
+    st.header("🎛️ Controls")
+    
+    # Server status
+    st.subheader("Server Status")
+    if st.session_state.server_started:
+        st.success("✅ MCP Server Started (HTTP)")
+    else:
+        st.error("❌ MCP Server Failed")
+    
+    # Health check
+    if st.button("🏥 Health Check"):
+        with st.spinner("Checking server health..."):
+            health_result = st.session_state.task_manager.run_async(
+                st.session_state.mcp_client.health_check_async()
+            )
+            st.session_state.server_healthy = health_result
+            if health_result:
+                st.success("✅ Server Healthy")
+            else:
+                st.error("❌ Server Unhealthy")
+    
+    # Database info
+    if st.button("📊 Database Info"):
+        with st.spinner("Getting database info..."):
+            db_info = st.session_state.task_manager.run_async(
+                st.session_state.mcp_client.get_database_info_async()
+            )
+            st.session_state.db_info = db_info
+            if db_info and not db_info.startswith("❌"):
+                st.success("✅ Database Info Retrieved")
+                try:
+                    info = json.loads(db_info)
+                    st.json(info)
+                except:
+                    st.code(db_info)
+            else:
+                st.error("❌ Failed to get database info")
+    
+    # Display last health check
+    if st.session_state.server_healthy is not None:
+        status = "✅ Healthy" if st.session_state.server_healthy else "❌ Unhealthy"
+        st.info(f"Last check: {status}")
+    
+    st.divider()
+    
+    # Clear history
+    if st.button("🗑️ Clear History"):
+        st.session_state.history = []
+        st.rerun()
+    
+    # Settings
+    st.subheader("⚙️ Settings")
+    show_debug = st.checkbox("Show Debug Info", value=False)
+    
+    if show_debug:
+        st.subheader("🐛 Debug Info")
+        st.write(f"Python Version: {sys.version}")
+        st.write(f"History Length: {len(st.session_state.history)}")
+        st.write(f"Server Started: {st.session_state.server_started}")
+        st.write(f"Transport: HTTP (Modern)")
+
+# Main chat interface
+st.subheader("💬 Chat Interface")
+
+# Quick examples
+with st.expander("📝 Quick Examples"):
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Show all nodes"):
+            st.session_state.example_query = "Show me all nodes in the database"
+        if st.button("Count nodes"):
+            st.session_state.example_query = "How many nodes are in the database?"
+    with col2:
+        if st.button("Show relationships"):
+            st.session_state.example_query = "Show me all relationships"
+        if st.button("Database schema"):
+            st.session_state.example_query = "What is the schema of this database?"
+
+# Chat input
+user_query = st.chat_input("Ask a Neo4j question or request a Cypher query...")
+
+# Handle example queries
+if "example_query" in st.session_state:
+    user_query = st.session_state.example_query
+    del st.session_state.example_query
+
+if user_query:
+    # Add user message
+    st.session_state.history.append(("user", user_query))
+    
+    # Generate Cypher query
+    with st.spinner("🤖 Generating Cypher query..."):
+        cypher_query = st.session_state.cortex_client.generate_cypher(user_query)
+    
+    if cypher_query.startswith("❌"):
+        st.session_state.history.append(("error", f"Cortex Error: {cypher_query}"))
+    else:
+        st.session_state.history.append(("cortex", cypher_query))
+        
+        # Determine tool type
+        is_write_query = any(keyword in cypher_query.upper() 
+                           for keyword in ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP"])
+        tool_name = "write_neo4j_cypher" if is_write_query else "read_neo4j_cypher"
+        
+        # Execute query
+        with st.spinner(f"⚡ Executing {tool_name}..."):
+            result = st.session_state.task_manager.run_async(
+                st.session_state.mcp_client.call_tool_async(tool_name, cypher_query)
+            )
+        
+        if result:
+            st.session_state.history.append(("neo4j", result))
+        else:
+            st.session_state.history.append(("error", "Failed to execute query"))
+
+# Display chat history
+st.subheader("📜 Chat History")
+for role, message in reversed(st.session_state.history):
+    if role == "user":
+        st.chat_message("user").write(f"**You:** {message}")
+    elif role == "cortex":
+        st.chat_message("assistant").write(f"🤖 **Generated Cypher:**\n```cypher\n{message}\n```")
+    elif role == "neo4j":
+        st.chat_message("assistant").write(f"📊 **Neo4j Result:**\n```json\n{message}\n```")
+    elif role == "error":
+        st.chat_message("assistant").write(f"❌ **Error:** {message}")
+
+# Footer
+st.divider()
+st.caption("🚀 Enhanced Neo4j + Cortex Chat with Modern HTTP Transport")
+st.caption("✨ TaskGroup errors resolved • SSE deprecated warnings fixed")
