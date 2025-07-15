@@ -1,83 +1,209 @@
-# verify_fix.py - Simple verification that the fix works
+# mcpserver.py - CLEAN VERSION - NO Streamlit commands
 
-print("🔍 Verifying TaskGroup fix...")
+import json
+import re
+import logging
+import asyncio
+import sys
+from typing import Any, Optional
+from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult, TextContent
+from fastmcp.server import FastMCP
+from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncTransaction
+from pydantic import Field
 
-# Test 1: Check nest_asyncio installation
-try:
-    import nest_asyncio
-    print("✅ nest_asyncio imported successfully")
-except ImportError:
-    print("❌ nest_asyncio not installed. Run: pip install nest-asyncio")
-    exit(1)
+logger = logging.getLogger("neo4j_mcp")
+logging.basicConfig(level=logging.INFO)
 
-# Test 2: Check MCP imports
-try:
-    from mcp import ClientSession
-    from mcp.client.sse import sse_client
-    print("✅ MCP imports successful")
-except ImportError as e:
-    print(f"❌ MCP import failed: {e}")
-    exit(1)
+def _is_write_query(query: str) -> bool:
+    """Check if query is a write operation."""
+    return bool(re.search(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP)\b", query, re.IGNORECASE))
 
-# Test 3: Check mcpserver import (should not have Streamlit commands)
-try:
-    from mcpserver import main as start_mcp_server
-    print("✅ mcpserver imported successfully (no Streamlit conflicts)")
-except Exception as e:
-    print(f"❌ mcpserver import failed: {e}")
-    exit(1)
-
-# Test 4: Check asyncio functionality
-try:
-    import asyncio
-    nest_asyncio.apply()
-    
-    async def test_async():
-        await asyncio.sleep(0.1)
-        return "async works"
-    
-    def run_test():
-        try:
-            loop = asyncio.get_event_loop()
-            result = loop.run_until_complete(test_async())
-            return result
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(test_async())
-            return result
-    
-    result = run_test()
-    if result == "async works":
-        print("✅ Async functionality working")
-    else:
-        print("❌ Async functionality failed")
-        exit(1)
-        
-except Exception as e:
-    print(f"❌ Async test failed: {e}")
-    exit(1)
-
-# Test 5: Check requirements
-required_packages = [
-    'streamlit', 'fastmcp', 'neo4j', 'nest_asyncio', 
-    'mcp', 'requests', 'urllib3', 'pydantic'
-]
-
-missing_packages = []
-for package in required_packages:
+async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
+    """Execute read query with error handling."""
     try:
-        __import__(package.replace('-', '_'))
-        print(f"✅ {package} available")
-    except ImportError:
-        missing_packages.append(package)
-        print(f"❌ {package} missing")
+        result = await tx.run(query, params or {})
+        eager = await result.to_eager_result()
+        return json.dumps([r.data() for r in eager.records], default=str)
+    except Exception as e:
+        logger.error(f"Read query failed: {e}")
+        raise
 
-if missing_packages:
-    print(f"\n❌ Missing packages: {missing_packages}")
-    print("Run: pip install " + " ".join(missing_packages))
-    exit(1)
+async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
+    """Execute write query with error handling."""
+    try:
+        result = await tx.run(query, params or {})
+        summary = await result.consume()
+        return json.dumps(summary.counters._raw_data, default=str)
+    except Exception as e:
+        logger.error(f"Write query failed: {e}")
+        raise
 
-print("\n🎉 ALL VERIFICATION TESTS PASSED!")
-print("🚀 You can now run: streamlit run neo4j\\test.py")
-print("📋 The TaskGroup error should be eliminated!")
+def create_mcp_server(driver: AsyncDriver, database: str) -> FastMCP:
+    """Create MCP server with SSE transport."""
+    mcp = FastMCP("neo4j-cypher")
+
+    @mcp.tool(name="read_neo4j_cypher")
+    async def read_neo4j_cypher(
+        query: str = Field(..., description="Cypher query to execute"),
+        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
+    ) -> list[ToolResult]:
+        """Execute read-only Cypher queries."""
+        if _is_write_query(query):
+            error_msg = "Write-type queries not allowed in read tool."
+            logger.warning(f"Rejected write query: {query}")
+            raise ToolError(error_msg)
+        
+        try:
+            async with driver.session(database=database) as session:
+                result = await session.execute_read(_read, query, params)
+                logger.info(f"Read query executed successfully: {query[:50]}...")
+                return [ToolResult(content=[TextContent(type="text", text=result)])]
+        except Exception as e:
+            error_msg = f"Read query error: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
+
+    @mcp.tool(name="write_neo4j_cypher")
+    async def write_neo4j_cypher(
+        query: str = Field(..., description="Cypher write query to execute"),
+        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
+    ) -> list[ToolResult]:
+        """Execute write Cypher queries."""
+        if not _is_write_query(query):
+            error_msg = "Only write-type queries allowed in write tool."
+            logger.warning(f"Rejected read query in write tool: {query}")
+            raise ToolError(error_msg)
+        
+        try:
+            async with driver.session(database=database) as session:
+                result = await session.execute_write(_write, query, params)
+                logger.info(f"Write query executed successfully: {query[:50]}...")
+                return [ToolResult(content=[TextContent(type="text", text=result)])]
+        except Exception as e:
+            error_msg = f"Write query error: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
+
+    @mcp.tool(name="health_check")
+    async def health_check() -> list[ToolResult]:
+        """Check Neo4j connection health."""
+        try:
+            async with driver.session(database=database) as session:
+                result = await session.run("RETURN 1 as health")
+                await result.consume()
+                health_info = {
+                    "status": "healthy",
+                    "database": database,
+                    "timestamp": str(asyncio.get_event_loop().time())
+                }
+                return [ToolResult(content=[TextContent(type="text", text=json.dumps(health_info))])]
+        except Exception as e:
+            error_msg = f"Health check failed: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
+
+    @mcp.tool(name="get_database_info")
+    async def get_database_info() -> list[ToolResult]:
+        """Get database information."""
+        try:
+            async with driver.session(database=database) as session:
+                # Get node count
+                result = await session.run("MATCH (n) RETURN count(n) as node_count")
+                record = await result.single()
+                node_count = record["node_count"] if record else 0
+                
+                # Get relationship count
+                result = await session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
+                record = await result.single()
+                rel_count = record["rel_count"] if record else 0
+                
+                # Get labels
+                result = await session.run("CALL db.labels()")
+                labels = [record["label"] for record in result]
+                
+                # Get relationship types
+                result = await session.run("CALL db.relationshipTypes()")
+                rel_types = [record["relationshipType"] for record in result]
+                
+                info = {
+                    "database": database,
+                    "node_count": node_count,
+                    "relationship_count": rel_count,
+                    "labels": labels,
+                    "relationship_types": rel_types,
+                    "status": "connected"
+                }
+                
+                return [ToolResult(content=[TextContent(type="text", text=json.dumps(info, indent=2))])]
+        except Exception as e:
+            error_msg = f"Database info query failed: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
+
+    @mcp.tool(name="list_nodes")
+    async def list_nodes(
+        limit: int = Field(default=10, description="Maximum number of nodes to return")
+    ) -> list[ToolResult]:
+        """List nodes in the database."""
+        try:
+            async with driver.session(database=database) as session:
+                query = f"MATCH (n) RETURN n LIMIT {limit}"
+                result = await session.execute_read(_read, query, {})
+                return [ToolResult(content=[TextContent(type="text", text=result)])]
+        except Exception as e:
+            error_msg = f"List nodes failed: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
+
+    return mcp
+
+async def run_mcp_server():
+    """Main server function with SSE transport."""
+    driver = None
+    try:
+        # Create Neo4j driver
+        driver = AsyncGraphDatabase.driver(
+            "neo4j://10.189.116.237:7687",
+            auth=("neo4j", "Vkg5d$F!pLq2@9vRwE="),
+        )
+        
+        # Test connection
+        async with driver.session(database="connectiq") as session:
+            result = await session.run("RETURN 1 as test")
+            await result.consume()
+        
+        logger.info("Neo4j connection established successfully")
+        
+        # Create MCP server
+        mcp = create_mcp_server(driver, "connectiq")
+        
+        # Use SSE transport
+        logger.info("Starting MCP server with SSE transport on http://0.0.0.0:8001/sse")
+        await mcp.run_async(
+            transport="sse",
+            host="0.0.0.0",
+            port=8001,
+            log_level="info"
+        )
+        
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested")
+    except Exception as e:
+        logger.error(f"Server startup failed: {e}")
+        raise
+    finally:
+        if driver:
+            await driver.close()
+            logger.info("Neo4j driver closed")
+
+def main():
+    """Main entry point with proper async handling."""
+    try:
+        asyncio.run(run_mcp_server())
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
