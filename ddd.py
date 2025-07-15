@@ -1,347 +1,249 @@
-# uix.py - Debug version using the debug MCP server
+# mcpserver_debug.py - Debug version with detailed logging
 
-import streamlit as st
-
-# MUST be first Streamlit command
-st.set_page_config(page_title="Neo4j Debug", page_icon="🔧", layout="wide")
-
-import asyncio
 import json
-import uuid
-import requests
-import urllib3
-import time
+import re
+import logging
+import asyncio
 import sys
-import os
-import nest_asyncio
-from fastmcp import Client
+from typing import Any, Optional
+from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult, TextContent
+from fastmcp.server import FastMCP
+from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncTransaction
+from pydantic import Field
 
-# Apply nest_asyncio
-nest_asyncio.apply()
+# Enhanced logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("neo4j_mcp")
 
-# Configuration
-CORTEX_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-APP_ID = "edadip"
-APLCTN_CD = "edagnai"
-MODEL = "llama3.1-70b"
-SYS_MSG = "You are a powerful AI assistant specialized in Neo4j Cypher queries."
+def _is_write_query(query: str) -> bool:
+    """Check if query is a write operation."""
+    return bool(re.search(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP)\b", query, re.IGNORECASE))
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-def extract_mcp_result(result):
-    """Extract content from MCP result with detailed logging."""
-    print(f"\n🔍 EXTRACTING MCP RESULT:")
-    print(f"  Type: {type(result)}")
-    print(f"  Repr: {repr(result)[:200]}...")
-    
+async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
+    """Execute read query with error handling."""
     try:
-        # Handle list results
-        if isinstance(result, list):
-            print(f"  📋 List with {len(result)} items")
-            if len(result) > 0:
-                first_item = result[0]
-                print(f"  📋 First item type: {type(first_item)}")
-                
-                # Check if it has content attribute
-                if hasattr(first_item, 'content'):
-                    content = first_item.content
-                    print(f"  📋 Content type: {type(content)}")
-                    print(f"  📋 Content: {content}")
-                    
-                    if isinstance(content, list) and len(content) > 0:
-                        content_item = content[0]
-                        print(f"  📋 Content item type: {type(content_item)}")
-                        
-                        if hasattr(content_item, 'text'):
-                            text = content_item.text
-                            print(f"  ✅ FOUND TEXT: {text}")
-                            return text
-                        
-                        # Check other possible attributes
-                        for attr in ['data', 'value', 'result']:
-                            if hasattr(content_item, attr):
-                                value = getattr(content_item, attr)
-                                print(f"  📋 Found .{attr}: {value}")
-                                return str(value)
-                
-                # Check if the item itself has text
-                if hasattr(first_item, 'text'):
-                    text = first_item.text
-                    print(f"  ✅ DIRECT TEXT: {text}")
-                    return text
-        
-        # Handle direct object
-        elif hasattr(result, 'content'):
-            content = result.content
-            if isinstance(content, list) and len(content) > 0:
-                content_item = content[0]
-                if hasattr(content_item, 'text'):
-                    text = content_item.text
-                    print(f"  ✅ DIRECT OBJECT TEXT: {text}")
-                    return text
-        
-        # Fallback to string conversion
-        result_str = str(result)
-        print(f"  ⚠️  FALLBACK STRING: {result_str}")
-        return result_str
-        
+        logger.info(f"Executing read query: {query}")
+        result = await tx.run(query, params or {})
+        eager = await result.to_eager_result()
+        data = [r.data() for r in eager.records]
+        json_result = json.dumps(data, default=str)
+        logger.info(f"Read query result: {json_result[:200]}...")
+        return json_result
     except Exception as e:
-        error_msg = f"❌ Extraction error: {e}"
-        print(f"  {error_msg}")
-        return error_msg
+        logger.error(f"Read query failed: {e}")
+        raise
 
-class SimpleCortexClient:
-    def __init__(self, url, api_key, app_id, aplctn_cd, model):
-        self.url = url
-        self.api_key = api_key
-        self.app_id = app_id
-        self.aplctn_cd = aplctn_cd
-        self.model = model
-    
-    def generate_cypher(self, user_query: str) -> str:
-        prompt = f"Generate a Neo4j Cypher query for: {user_query}\nReturn ONLY the Cypher query."
-        
-        payload = {
-            "query": {
-                "aplctn_cd": self.aplctn_cd,
-                "app_id": self.app_id,
-                "api_key": self.api_key,
-                "method": "cortex",
-                "model": self.model,
-                "sys_msg": SYS_MSG,
-                "limit_convs": "0",
-                "prompt": {"messages": [{"role": "user", "content": prompt}]},
-                "session_id": str(uuid.uuid4())
-            }
-        }
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f'Snowflake Token="{self.api_key}"'
-        }
-
-        try:
-            response = requests.post(self.url, headers=headers, json=payload, verify=False, timeout=30)
-            if response.status_code == 200:
-                raw_text = response.text
-                if "end_of_stream" in raw_text:
-                    result = raw_text.split("end_of_stream")[0].strip()
-                    return result if result else "MATCH (n) RETURN count(n)"
-                return raw_text.strip() if raw_text.strip() else "MATCH (n) RETURN count(n)"
-            else:
-                return f"❌ Cortex error: HTTP {response.status_code}"
-        except Exception as e:
-            return f"❌ Cortex error: {str(e)[:100]}"
-
-class DebugMCPClient:
-    def __init__(self, script_path="mcpserver_debug.py"):
-        self.script_path = os.path.join(os.path.dirname(__file__), script_path)
-    
-    async def call_tool_debug(self, tool_name: str, arguments: dict = None) -> str:
-        print(f"\n🚀 CALLING TOOL: {tool_name}")
-        print(f"🚀 ARGUMENTS: {arguments}")
-        print(f"🚀 SCRIPT PATH: {self.script_path}")
-        
-        try:
-            async with Client(self.script_path) as client:
-                print(f"🚀 Client connected")
-                
-                # Call the tool
-                raw_result = await client.call_tool(tool_name, arguments or {})
-                print(f"🚀 Raw result received: {type(raw_result)}")
-                
-                # Extract content
-                extracted = extract_mcp_result(raw_result)
-                print(f"🚀 Final extracted result: {extracted}")
-                
-                return extracted
-                
-        except Exception as e:
-            error_msg = f"❌ Tool call error: {str(e)}"
-            print(f"🚀 {error_msg}")
-            return error_msg
-
-def run_async_safe(coro):
+async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
+    """Execute write query with error handling."""
     try:
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(coro)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+        logger.info(f"Executing write query: {query}")
+        result = await tx.run(query, params or {})
+        summary = await result.consume()
+        json_result = json.dumps(summary.counters._raw_data, default=str)
+        logger.info(f"Write query result: {json_result}")
+        return json_result
+    except Exception as e:
+        logger.error(f"Write query failed: {e}")
+        raise
 
-# Initialize
-if "cortex_client" not in st.session_state:
-    st.session_state.cortex_client = SimpleCortexClient(CORTEX_URL, API_KEY, APP_ID, APLCTN_CD, MODEL)
+def create_mcp_server(driver: AsyncDriver, database: str) -> FastMCP:
+    """Create MCP server with enhanced debugging."""
+    mcp = FastMCP("neo4j-cypher")
 
-if "mcp_client" not in st.session_state:
-    st.session_state.mcp_client = DebugMCPClient()
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-# UI
-st.title("🔧 Neo4j Debug Version")
-st.error("🔍 Using DEBUG MCP server with detailed logging - Watch console!")
-
-# File check
-debug_server_path = os.path.join(os.path.dirname(__file__), "mcpserver_debug.py")
-if not os.path.exists(debug_server_path):
-    st.error(f"❌ Debug server not found: {debug_server_path}")
-    st.info("Make sure mcpserver_debug.py is in the same directory")
-else:
-    st.success(f"✅ Debug server found: {debug_server_path}")
-
-# Test section
-st.subheader("🧪 Debug Tests")
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    if st.button("🧪 Simple Test"):
-        st.write("**Testing simple_test tool...**")
-        with st.spinner("Running simple test..."):
-            result = run_async_safe(
-                st.session_state.mcp_client.call_tool_debug("simple_test")
-            )
+    @mcp.tool(name="read_neo4j_cypher")
+    async def read_neo4j_cypher(
+        query: str = Field(..., description="Cypher query to execute"),
+        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
+    ) -> list[ToolResult]:
+        """Execute read-only Cypher queries."""
+        logger.info(f"🔧 read_neo4j_cypher called with query: {query}")
         
-        st.write("**Result:**")
-        st.code(result)
-        
-        # Try to parse as JSON
-        try:
-            if result and not result.startswith("❌"):
-                parsed = json.loads(result)
-                st.json(parsed)
-        except:
-            st.write("Not JSON format")
-
-with col2:
-    if st.button("🏥 Health Check"):
-        st.write("**Testing health_check tool...**")
-        with st.spinner("Health check..."):
-            result = run_async_safe(
-                st.session_state.mcp_client.call_tool_debug("health_check")
-            )
-        
-        st.write("**Result:**")
-        st.code(result)
+        if _is_write_query(query):
+            error_msg = "Write-type queries not allowed in read tool."
+            logger.warning(f"Rejected write query: {query}")
+            raise ToolError(error_msg)
         
         try:
-            if result and not result.startswith("❌"):
-                parsed = json.loads(result)
-                st.json(parsed)
-        except:
-            st.write("Not JSON format")
-
-with col3:
-    if st.button("🔢 Count Nodes"):
-        st.write("**Testing count_nodes tool...**")
-        with st.spinner("Counting nodes..."):
-            result = run_async_safe(
-                st.session_state.mcp_client.call_tool_debug("count_nodes")
-            )
-        
-        st.write("**Result:**")
-        st.code(result)
-        
-        try:
-            if result and not result.startswith("❌"):
-                parsed = json.loads(result)
-                st.json(parsed)
-                if "total_nodes" in parsed:
-                    st.metric("Total Nodes", parsed["total_nodes"])
-        except:
-            st.write("Not JSON format")
-
-with col4:
-    if st.button("🔍 Test Query"):
-        st.write("**Testing read_neo4j_cypher tool...**")
-        with st.spinner("Test query..."):
-            result = run_async_safe(
-                st.session_state.mcp_client.call_tool_debug("read_neo4j_cypher", {"query": "RETURN 1 as test"})
-            )
-        
-        st.write("**Result:**")
-        st.code(result)
-        
-        try:
-            if result and not result.startswith("❌"):
-                parsed = json.loads(result)
-                st.json(parsed)
-        except:
-            st.write("Not JSON format")
-
-# Direct test option
-st.subheader("🔧 Direct Server Test")
-if st.button("🔬 Run Direct MCP Test"):
-    st.info("Running direct MCP test script - check your console for detailed output!")
-    with st.spinner("Running direct test..."):
-        import subprocess
-        import sys
-        try:
-            # Run the direct test script
-            result = subprocess.run([sys.executable, "test_mcp_direct.py"], 
-                                  capture_output=True, text=True, timeout=30)
-            st.code(result.stdout)
-            if result.stderr:
-                st.error(result.stderr)
+            async with driver.session(database=database) as session:
+                result_text = await session.execute_read(_read, query, params)
+                logger.info(f"🔧 Query executed, result length: {len(result_text)}")
+                logger.info(f"🔧 Result content: {result_text[:500]}...")
+                
+                # Create TextContent
+                text_content = TextContent(type="text", text=result_text)
+                logger.info(f"🔧 TextContent created: {type(text_content)}")
+                
+                # Create ToolResult
+                tool_result = ToolResult(content=[text_content])
+                logger.info(f"🔧 ToolResult created: {type(tool_result)}")
+                logger.info(f"🔧 ToolResult.content: {tool_result.content}")
+                logger.info(f"🔧 ToolResult.content[0]: {tool_result.content[0]}")
+                logger.info(f"🔧 ToolResult.content[0].text: {tool_result.content[0].text[:200]}...")
+                
+                result_list = [tool_result]
+                logger.info(f"🔧 Returning list with {len(result_list)} items")
+                return result_list
+                
         except Exception as e:
-            st.error(f"Direct test failed: {e}")
+            error_msg = f"Read query error: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
 
-# Chat interface
-st.subheader("💬 Chat Interface")
-user_query = st.chat_input("Ask a Neo4j question...")
-
-if user_query:
-    st.session_state.history.append(("user", user_query))
-    
-    # Generate Cypher
-    with st.spinner("🤖 Generating Cypher..."):
-        cypher_query = st.session_state.cortex_client.generate_cypher(user_query)
-    
-    if cypher_query.startswith("❌"):
-        st.session_state.history.append(("error", cypher_query))
-    else:
-        st.session_state.history.append(("cortex", cypher_query))
+    @mcp.tool(name="write_neo4j_cypher")
+    async def write_neo4j_cypher(
+        query: str = Field(..., description="Cypher write query to execute"),
+        params: Optional[dict[str, Any]] = Field(None, description="Query parameters")
+    ) -> list[ToolResult]:
+        """Execute write Cypher queries."""
+        logger.info(f"🔧 write_neo4j_cypher called with query: {query}")
         
-        # Execute query
-        is_write = any(kw in cypher_query.upper() for kw in ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP"])
-        tool_name = "write_neo4j_cypher" if is_write else "read_neo4j_cypher"
+        if not _is_write_query(query):
+            error_msg = "Only write-type queries allowed in write tool."
+            logger.warning(f"Rejected read query in write tool: {query}")
+            raise ToolError(error_msg)
         
-        with st.spinner(f"⚡ Executing {tool_name}..."):
-            result = run_async_safe(
-                st.session_state.mcp_client.call_tool_debug(tool_name, {"query": cypher_query})
-            )
-        
-        st.session_state.history.append(("neo4j", result))
-
-# Display history
-st.subheader("📜 History")
-for role, message in reversed(st.session_state.history):
-    if role == "user":
-        st.chat_message("user").write(f"**You:** {message}")
-    elif role == "cortex":
-        st.chat_message("assistant").write(f"🤖 **Cypher:**\n```cypher\n{message}\n```")
-    elif role == "neo4j":
-        st.chat_message("assistant").write(f"📊 **Result:**")
         try:
-            if message and not message.startswith("❌"):
-                parsed = json.loads(message)
-                st.json(parsed)
-            else:
-                st.code(message)
-        except:
-            st.code(message)
-    elif role == "error":
-        st.chat_message("assistant").write(f"❌ **Error:** {message}")
+            async with driver.session(database=database) as session:
+                result_text = await session.execute_write(_write, query, params)
+                logger.info(f"🔧 Write query executed, result: {result_text}")
+                
+                text_content = TextContent(type="text", text=result_text)
+                tool_result = ToolResult(content=[text_content])
+                return [tool_result]
+                
+        except Exception as e:
+            error_msg = f"Write query error: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
 
-# Instructions
-st.info("💡 **How to debug:**\n1. First save mcpserver_debug.py and test_mcp_direct.py\n2. Run direct test: `python test_mcp_direct.py`\n3. Then use this UI and watch console output")
+    @mcp.tool(name="health_check")
+    async def health_check() -> list[ToolResult]:
+        """Check Neo4j connection health."""
+        logger.info(f"🔧 health_check called")
+        try:
+            async with driver.session(database=database) as session:
+                result = await session.run("RETURN 1 as health")
+                await result.consume()
+                
+                health_info = {
+                    "status": "healthy",
+                    "database": database,
+                    "message": "Connection successful"
+                }
+                
+                health_json = json.dumps(health_info)
+                logger.info(f"🔧 Health check result: {health_json}")
+                
+                text_content = TextContent(type="text", text=health_json)
+                tool_result = ToolResult(content=[text_content])
+                logger.info(f"🔧 Health check returning: {type(tool_result)}")
+                return [tool_result]
+                
+        except Exception as e:
+            error_msg = f"Health check failed: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
 
-st.divider()
-st.caption("🔧 Debug version • Detailed logging • Watch console for analysis")
+    @mcp.tool(name="count_nodes")
+    async def count_nodes() -> list[ToolResult]:
+        """Count total nodes in the database."""
+        logger.info(f"🔧 count_nodes called")
+        try:
+            async with driver.session(database=database) as session:
+                result = await session.run("MATCH (n) RETURN count(n) as total_nodes")
+                record = await result.single()
+                count = record["total_nodes"] if record else 0
+                
+                result_data = {
+                    "total_nodes": count,
+                    "database": database,
+                    "query": "MATCH (n) RETURN count(n)",
+                    "status": "success"
+                }
+                
+                result_json = json.dumps(result_data)
+                logger.info(f"🔧 Count nodes result: {result_json}")
+                
+                text_content = TextContent(type="text", text=result_json)
+                tool_result = ToolResult(content=[text_content])
+                logger.info(f"🔧 Count nodes returning ToolResult with content: {tool_result.content[0].text}")
+                return [tool_result]
+                
+        except Exception as e:
+            error_msg = f"Count nodes failed: {str(e)}"
+            logger.error(error_msg)
+            raise ToolError(error_msg)
+
+    @mcp.tool(name="simple_test")
+    async def simple_test() -> list[ToolResult]:
+        """Simple test that returns basic data."""
+        logger.info(f"🔧 simple_test called")
+        
+        test_data = {
+            "message": "Hello from MCP server!",
+            "timestamp": str(asyncio.get_event_loop().time()),
+            "test": True
+        }
+        
+        result_json = json.dumps(test_data)
+        logger.info(f"🔧 Simple test result: {result_json}")
+        
+        text_content = TextContent(type="text", text=result_json)
+        tool_result = ToolResult(content=[text_content])
+        logger.info(f"🔧 Simple test returning: {type(tool_result)} with {len(tool_result.content)} content items")
+        logger.info(f"🔧 Content item 0 text: {tool_result.content[0].text}")
+        
+        return [tool_result]
+
+    return mcp
+
+async def run_mcp_server():
+    """Main server function with detailed logging."""
+    driver = None
+    try:
+        logger.info("🚀 Starting MCP server initialization...")
+        
+        # Create Neo4j driver
+        driver = AsyncGraphDatabase.driver(
+            "neo4j://10.189.116.237:7687",
+            auth=("neo4j", "Vkg5d$F!pLq2@9vRwE="),
+        )
+        
+        # Test connection
+        async with driver.session(database="connectiq") as session:
+            result = await session.run("RETURN 1 as test")
+            await result.consume()
+        
+        logger.info("✅ Neo4j connection established successfully")
+        
+        # Create MCP server
+        mcp = create_mcp_server(driver, "connectiq")
+        logger.info("✅ MCP server created with tools")
+        
+        # Use STDIO transport
+        logger.info("🚀 Starting MCP server with STDIO transport")
+        await mcp.run_async(transport="stdio")
+        
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested")
+    except Exception as e:
+        logger.error(f"Server startup failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        if driver:
+            await driver.close()
+            logger.info("Neo4j driver closed")
+
+def main():
+    """Main entry point."""
+    try:
+        asyncio.run(run_mcp_server())
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
