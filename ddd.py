@@ -1,4 +1,4 @@
-# detailed_langgraph_neo4j.py - Production-ready LangGraph agent using your MCP server
+# updated_langgraph_agent.py - LangGraph agent optimized for the new MCP server
 
 import asyncio
 import json
@@ -15,8 +15,8 @@ import nest_asyncio
 nest_asyncio.apply()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-class AgentState(TypedDict):
-    """State structure for the LangGraph agent."""
+class EnhancedAgentState(TypedDict):
+    """Enhanced state structure for the LangGraph agent."""
     original_question: str
     current_query: str
     attempts: int
@@ -28,11 +28,14 @@ class AgentState(TypedDict):
     question_type: str
     complexity_level: str
     cortex_attempts: int
+    validation_result: Dict
+    performance_metrics: Dict
+    sample_data: Dict
 
-class DetailedNeo4jAgent:
-    """Production-ready Neo4j agent using LangGraph and your existing MCP server."""
+class OptimizedNeo4jAgent:
+    """Production-ready Neo4j agent using the specialized LangGraph MCP server."""
     
-    def __init__(self, mcp_script_path="mcpserver.py"):
+    def __init__(self, mcp_script_path="langgraph_mcpserver.py"):
         self.mcp_script_path = mcp_script_path
         
         # Your existing Cortex configuration
@@ -42,37 +45,47 @@ class DetailedNeo4jAgent:
             "app_id": "edadip",
             "aplctn_cd": "edagnai",
             "model": "llama3.1-70b",
-            "sys_msg": "You are a powerful AI assistant specialized in Neo4j Cypher queries."
+            "sys_msg": "You are a powerful AI assistant specialized in Neo4j Cypher queries. Generate modern Neo4j 5.x compatible syntax."
         }
         
-        # Modern Neo4j syntax patterns and fixes
-        self.syntax_fixes = {
-            # Size function fixes
-            r"size\(\s*\(([^)]+)\)\s*-\s*\[\s*\]\s*-\s*\(\s*\)\s*\)": r"COUNT { (\1)-[]-() }",
-            r"size\(\s*\(([^)]+)\)\s*-\s*\[([^\]]*)\]\s*-\s*\(([^)]*)\)\s*\)": r"COUNT { (\1)-[\2]-(\3) }",
-            
-            # Length function fixes  
-            r"length\(\s*\(([^)]+)\)\s*-\s*\[\s*\*\s*\]\s*-\s*\(([^)]*)\)\s*\)": r"COUNT { (\1)-[*]-(\2) }",
-            
-            # Common deprecated syntax
-            r"has\(([^)]+)\)": r"\1 IS NOT NULL",
-            r"\.(\w+)\s*=\s*": r".\1 = ",
-        }
-        
-        # Question type classification
+        # Enhanced question type classification
         self.question_patterns = {
-            "connectivity": ["most connected", "highest degree", "centrality", "connections", "connected nodes"],
-            "path_finding": ["shortest path", "path between", "route", "connected through"],
-            "aggregation": ["count", "total", "average", "sum", "statistics", "how many"],
-            "exploration": ["show me", "find", "list", "what", "which"],
-            "schema": ["properties", "structure", "schema", "labels", "relationships"],
-            "comparison": ["compare", "versus", "vs", "difference", "similar"],
-            "temporal": ["recent", "latest", "trend", "over time", "history"],
-            "write_operation": ["create", "add", "update", "delete", "remove", "insert"]
+            "connectivity": [
+                "most connected", "highest degree", "centrality", "connections", 
+                "connected nodes", "node degree", "network analysis", "hub nodes"
+            ],
+            "path_finding": [
+                "shortest path", "path between", "route", "connected through", 
+                "distance", "steps between", "reachable"
+            ],
+            "aggregation": [
+                "count", "total", "average", "sum", "statistics", "how many", 
+                "distribution", "metrics", "analyze"
+            ],
+            "exploration": [
+                "show me", "find", "list", "what", "which", "sample", 
+                "examples", "browse", "explore"
+            ],
+            "schema": [
+                "properties", "structure", "schema", "labels", "relationships", 
+                "types", "model", "design"
+            ],
+            "comparison": [
+                "compare", "versus", "vs", "difference", "similar", 
+                "between", "contrast"
+            ],
+            "temporal": [
+                "recent", "latest", "trend", "over time", "history", 
+                "when", "timeline", "changes"
+            ],
+            "write_operation": [
+                "create", "add", "update", "delete", "remove", "insert", 
+                "modify", "set", "merge"
+            ]
         }
 
     def extract_mcp_result(self, result) -> str:
-        """Extract content from FastMCP CallToolResult using your existing method."""
+        """Extract content from FastMCP CallToolResult."""
         try:
             if hasattr(result, 'content') and result.content:
                 content_item = result.content[0]
@@ -83,7 +96,7 @@ class DetailedNeo4jAgent:
             return f"❌ Extraction error: {e}"
 
     async def call_mcp_tool(self, tool_name: str, arguments: Dict = None) -> str:
-        """Call your MCP server tools with proper error handling."""
+        """Call the specialized MCP server tools."""
         try:
             async with Client(self.mcp_script_path) as client:
                 result = await client.call_tool(tool_name, arguments or {})
@@ -94,7 +107,18 @@ class DetailedNeo4jAgent:
             return error_msg
 
     def generate_cypher_with_cortex(self, prompt: str) -> str:
-        """Generate Cypher using your existing Cortex client."""
+        """Generate Cypher using your existing Cortex client with enhanced prompting."""
+        enhanced_prompt = f"""
+        {prompt}
+        
+        CRITICAL SYNTAX REQUIREMENTS:
+        - Use COUNT {{ (n)-[]-() }} instead of size((n)-[]->())
+        - Use property IS NOT NULL instead of has(property)
+        - Always include LIMIT for ORDER BY queries
+        - Use modern Neo4j 5.x syntax only
+        - Return ONLY the Cypher query, no explanations
+        """
+        
         payload = {
             "query": {
                 "aplctn_cd": self.cortex_config["aplctn_cd"],
@@ -104,7 +128,7 @@ class DetailedNeo4jAgent:
                 "model": self.cortex_config["model"],
                 "sys_msg": self.cortex_config["sys_msg"],
                 "limit_convs": "0",
-                "prompt": {"messages": [{"role": "user", "content": prompt}]},
+                "prompt": {"messages": [{"role": "user", "content": enhanced_prompt}]},
                 "session_id": str(uuid.uuid4())
             }
         }
@@ -134,71 +158,88 @@ class DetailedNeo4jAgent:
         except Exception as e:
             return f"❌ Cortex error: {str(e)[:100]}"
 
-    def fix_cypher_syntax(self, cypher: str) -> str:
-        """Apply modern Neo4j syntax fixes."""
-        fixed_cypher = cypher.strip()
-        
-        for pattern, replacement in self.syntax_fixes.items():
-            old_cypher = fixed_cypher
-            fixed_cypher = re.sub(pattern, replacement, fixed_cypher, flags=re.IGNORECASE)
-            if fixed_cypher != old_cypher:
-                print(f"🔧 Applied syntax fix: {pattern} → {replacement}")
-        
-        return fixed_cypher
-
     def classify_question(self, question: str) -> tuple[str, str]:
-        """Classify question type and complexity."""
+        """Enhanced question classification."""
         question_lower = question.lower()
         
-        # Determine question type
-        question_type = "general"
+        # Determine question type with scoring
+        type_scores = {}
         for qtype, patterns in self.question_patterns.items():
-            if any(pattern in question_lower for pattern in patterns):
-                question_type = qtype
-                break
+            score = sum(1 for pattern in patterns if pattern in question_lower)
+            if score > 0:
+                type_scores[qtype] = score
         
-        # Determine complexity
+        # Get the highest scoring type
+        question_type = max(type_scores, key=type_scores.get) if type_scores else "general"
+        
+        # Enhanced complexity analysis
         complexity_indicators = {
-            "simple": ["count", "total", "list", "show"],
-            "medium": ["find", "where", "with", "having"],
-            "complex": ["path", "connected through", "most", "compare", "analyze", "relationship between"]
+            "simple": ["count", "total", "list", "show", "one", "single"],
+            "medium": ["find", "where", "with", "having", "some", "many"],
+            "complex": [
+                "path", "connected through", "most", "compare", "analyze", 
+                "relationship between", "distribution", "pattern", "network"
+            ]
         }
         
-        complexity = "simple"
+        complexity_scores = {}
         for level, indicators in complexity_indicators.items():
-            if any(indicator in question_lower for indicator in indicators):
-                complexity = level
+            score = sum(1 for indicator in indicators if indicator in question_lower)
+            complexity_scores[level] = score
+        
+        # Determine complexity
+        if complexity_scores["complex"] > 0:
+            complexity = "complex"
+        elif complexity_scores["medium"] > complexity_scores["simple"]:
+            complexity = "medium"
+        else:
+            complexity = "simple"
         
         return question_type, complexity
 
     def create_graph(self) -> Graph:
-        """Create the detailed LangGraph workflow."""
+        """Create the enhanced LangGraph workflow."""
         workflow = Graph()
         
         # Add all nodes
         workflow.add_node("initialize", self.initialize_state)
+        workflow.add_node("health_check", self.check_server_health)
         workflow.add_node("classify_question", self.classify_question_node)
-        workflow.add_node("gather_schema", self.gather_schema_info)
-        workflow.add_node("generate_query", self.generate_cypher_query)
-        workflow.add_node("validate_query", self.validate_query)
-        workflow.add_node("execute_query", self.execute_query)
+        workflow.add_node("gather_enhanced_schema", self.gather_enhanced_schema)
+        workflow.add_node("get_sample_data", self.get_sample_data)
+        workflow.add_node("generate_query", self.generate_enhanced_query)
+        workflow.add_node("validate_query", self.validate_query_with_server)
+        workflow.add_node("execute_query", self.execute_enhanced_query)
         workflow.add_node("handle_error", self.handle_execution_error)
-        workflow.add_node("format_response", self.format_final_response)
+        workflow.add_node("format_response", self.format_enhanced_response)
         workflow.add_node("fallback_simple", self.fallback_to_simple_query)
+        workflow.add_node("get_metrics", self.get_performance_metrics)
         
         # Set entry point
         workflow.set_entry_point("initialize")
         
-        # Define the flow
-        workflow.add_edge("initialize", "classify_question")
-        workflow.add_edge("classify_question", "gather_schema")
-        workflow.add_edge("gather_schema", "generate_query")
+        # Define the enhanced flow
+        workflow.add_edge("initialize", "health_check")
+        workflow.add_edge("health_check", "classify_question")
+        workflow.add_edge("classify_question", "gather_enhanced_schema")
+        
+        # Conditional: get sample data for complex questions
+        workflow.add_conditional_edges(
+            "gather_enhanced_schema",
+            self.should_get_sample_data,
+            {
+                "get_samples": "get_sample_data",
+                "skip_samples": "generate_query"
+            }
+        )
+        
+        workflow.add_edge("get_sample_data", "generate_query")
         workflow.add_edge("generate_query", "validate_query")
         
-        # Conditional routing after validation
+        # Enhanced validation routing
         workflow.add_conditional_edges(
             "validate_query",
-            self.should_execute_or_regenerate,
+            self.should_execute_after_validation,
             {
                 "execute": "execute_query",
                 "regenerate": "generate_query",
@@ -206,9 +247,10 @@ class DetailedNeo4jAgent:
             }
         )
         
-        workflow.add_edge("execute_query", "format_response")
+        workflow.add_edge("execute_query", "get_metrics")
+        workflow.add_edge("get_metrics", "format_response")
         
-        # Error handling flow
+        # Enhanced error handling
         workflow.add_conditional_edges(
             "format_response",
             self.check_execution_success,
@@ -224,8 +266,8 @@ class DetailedNeo4jAgent:
         
         return workflow.compile(checkpointer=MemorySaver())
 
-    async def initialize_state(self, state: AgentState) -> AgentState:
-        """Initialize the agent state."""
+    async def initialize_state(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Initialize the enhanced agent state."""
         state.update({
             "attempts": 0,
             "max_attempts": 3,
@@ -233,58 +275,104 @@ class DetailedNeo4jAgent:
             "error_messages": [],
             "schema_info": {},
             "final_answer": "",
-            "cortex_attempts": 0
+            "cortex_attempts": 0,
+            "validation_result": {},
+            "performance_metrics": {},
+            "sample_data": {}
         })
         
-        print(f"🚀 Initialized agent for question: {state['original_question']}")
+        print(f"🚀 Initialized enhanced agent for: {state['original_question']}")
         return state
 
-    async def classify_question_node(self, state: AgentState) -> AgentState:
-        """Classify the user's question."""
+    async def check_server_health(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Check the specialized MCP server health."""
+        print("🏥 Checking specialized MCP server health...")
+        
+        health_result = await self.call_mcp_tool("health_check")
+        
+        if health_result.startswith("❌"):
+            print(f"⚠️ Server health check failed: {health_result}")
+            state["error_messages"].append(f"Server health issue: {health_result}")
+        else:
+            try:
+                health_data = json.loads(health_result)
+                print(f"✅ Server healthy: {health_data.get('status', 'unknown')}")
+                state["performance_metrics"]["server_health"] = health_data
+            except json.JSONDecodeError:
+                print("✅ Server responding")
+        
+        return state
+
+    async def classify_question_node(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Enhanced question classification with the new system."""
         question_type, complexity = self.classify_question(state["original_question"])
         
         state["question_type"] = question_type
         state["complexity_level"] = complexity
         
-        print(f"🧠 Classified as: {question_type} ({complexity} complexity)")
+        print(f"🧠 Enhanced classification: {question_type} ({complexity} complexity)")
         return state
 
-    async def gather_schema_info(self, state: AgentState) -> AgentState:
-        """Gather database schema information using your MCP tools."""
-        if not state["schema_info"]:
-            print("📊 Gathering database schema information...")
-            
-            # Use your existing MCP tools
-            schema_tasks = [
-                ("labels", "list_labels"),
-                ("relationships", "list_relationships"), 
-                ("summary", "database_summary"),
-                ("health", "health_check")
-            ]
-            
-            schema_info = {}
-            for key, tool_name in schema_tasks:
-                try:
-                    result = await self.call_mcp_tool(tool_name)
-                    if not result.startswith("❌"):
-                        schema_info[key] = json.loads(result)
-                    else:
-                        schema_info[key] = {"error": result}
-                except json.JSONDecodeError:
-                    schema_info[key] = {"raw": result}
-            
-            state["schema_info"] = schema_info
-            print(f"✅ Schema gathered: {len(schema_info)} components")
+    async def gather_enhanced_schema(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Gather comprehensive schema information using the enhanced MCP server."""
+        print("📊 Gathering enhanced schema information...")
+        
+        # Use the enhanced schema analysis tool
+        schema_result = await self.call_mcp_tool("analyze_schema")
+        
+        if not schema_result.startswith("❌"):
+            try:
+                schema_data = json.loads(schema_result)
+                state["schema_info"] = schema_data
+                print(f"✅ Enhanced schema gathered: {schema_data.get('total_labels', 0)} labels, {schema_data.get('total_relationship_types', 0)} relationship types")
+            except json.JSONDecodeError:
+                print("⚠️ Schema analysis returned non-JSON, using fallback")
+                # Fallback to database summary
+                summary_result = await self.call_mcp_tool("database_summary")
+                if not summary_result.startswith("❌"):
+                    try:
+                        state["schema_info"] = json.loads(summary_result)
+                    except json.JSONDecodeError:
+                        state["schema_info"] = {"error": "Schema gathering failed"}
+        else:
+            print(f"⚠️ Schema gathering failed: {schema_result}")
+            state["error_messages"].append(f"Schema gathering failed: {schema_result}")
         
         return state
 
-    async def generate_cypher_query(self, state: AgentState) -> AgentState:
-        """Generate Cypher query with enhanced context."""
+    def should_get_sample_data(self, state: EnhancedAgentState) -> str:
+        """Decide whether to get sample data based on question complexity."""
+        if state["complexity_level"] == "complex" or state["question_type"] in ["exploration", "schema"]:
+            return "get_samples"
+        else:
+            return "skip_samples"
+
+    async def get_sample_data(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Get sample data to better understand the database structure."""
+        print("🔍 Getting sample data for better context...")
+        
+        # Get general samples
+        sample_result = await self.call_mcp_tool("get_sample_data", {"limit": 3})
+        
+        if not sample_result.startswith("❌"):
+            try:
+                sample_data = json.loads(sample_result)
+                state["sample_data"] = sample_data
+                print(f"✅ Sample data gathered: {sample_data.get('count', 0)} samples")
+            except json.JSONDecodeError:
+                print("⚠️ Sample data returned non-JSON")
+        else:
+            print(f"⚠️ Sample data gathering failed: {sample_result}")
+        
+        return state
+
+    async def generate_enhanced_query(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Generate Cypher query with enhanced context from the specialized server."""
         state["cortex_attempts"] += 1
-        print(f"🤖 Generating Cypher query (attempt {state['cortex_attempts']})...")
+        print(f"🤖 Generating enhanced Cypher query (attempt {state['cortex_attempts']})...")
         
         # Build comprehensive context
-        context = self.build_query_context(state)
+        context = self.build_enhanced_query_context(state)
         
         # Generate query with Cortex
         raw_cypher = self.generate_cypher_with_cortex(context)
@@ -293,132 +381,168 @@ class DetailedNeo4jAgent:
             state["error_messages"].append(f"Cortex generation failed: {raw_cypher}")
             state["current_query"] = "MATCH (n) RETURN count(n) LIMIT 1"  # Fallback
         else:
-            # Apply syntax fixes
-            fixed_cypher = self.fix_cypher_syntax(raw_cypher)
-            state["current_query"] = fixed_cypher
-            
-            if fixed_cypher != raw_cypher:
-                print(f"🔧 Applied syntax fixes")
+            state["current_query"] = raw_cypher.strip()
         
         print(f"📝 Generated query: {state['current_query']}")
         return state
 
-    def build_query_context(self, state: AgentState) -> str:
-        """Build comprehensive context for Cypher generation."""
+    def build_enhanced_query_context(self, state: EnhancedAgentState) -> str:
+        """Build comprehensive context using all available information."""
         schema_info = state.get("schema_info", {})
+        sample_data = state.get("sample_data", {})
         
-        # Extract schema details
+        # Extract enhanced schema details
         labels = []
         relationships = []
         
-        if "labels" in schema_info and "labels" in schema_info["labels"]:
-            labels = schema_info["labels"]["labels"]
+        if "labels" in schema_info:
+            labels = [item.get("label", "") for item in schema_info["labels"] if item.get("label")]
         
-        if "relationships" in schema_info and "relationship_types" in schema_info["relationships"]:
-            relationships = schema_info["relationships"]["relationship_types"]
+        if "relationships" in schema_info:
+            relationships = [item.get("type", "") for item in schema_info["relationships"] if item.get("type")]
         
-        # Build context based on question type
+        # Build context with sample data if available
         context_parts = [
-            "Generate a modern Neo4j Cypher query for the following request.",
+            "Generate a modern Neo4j 5.x Cypher query for the following request.",
             "",
-            f"Database Schema:",
-            f"- Available Node Labels: {', '.join(labels) if labels else 'Unknown'}",
-            f"- Available Relationships: {', '.join(relationships) if relationships else 'Unknown'}",
-            "",
-            f"Question Type: {state.get('question_type', 'general')}",
-            f"Complexity: {state.get('complexity_level', 'simple')}",
-            ""
+            f"DATABASE SCHEMA:",
+            f"- Available Node Labels: {', '.join(labels[:10]) if labels else 'Unknown'}",  # Limit to avoid long prompts
+            f"- Available Relationships: {', '.join(relationships[:10]) if relationships else 'Unknown'}",
         ]
+        
+        # Add sample data context if available
+        if sample_data and "samples" in sample_data:
+            context_parts.extend([
+                "",
+                "SAMPLE DATA STRUCTURE:",
+            ])
+            for i, sample in enumerate(sample_data["samples"][:2], 1):  # Show max 2 samples
+                if isinstance(sample, dict) and "n" in sample:
+                    node = sample["n"]
+                    if isinstance(node, dict):
+                        node_labels = node.get("labels", [])
+                        properties = node.get("properties", {})
+                        prop_names = list(properties.keys())[:5]  # Show first 5 properties
+                        context_parts.append(f"- Sample {i}: {node_labels[0] if node_labels else 'Node'} with properties: {', '.join(prop_names)}")
+        
+        context_parts.extend([
+            "",
+            f"QUESTION ANALYSIS:",
+            f"- Type: {state.get('question_type', 'general')}",
+            f"- Complexity: {state.get('complexity_level', 'simple')}",
+            ""
+        ])
         
         # Add previous errors for learning
         if state.get("error_messages"):
             context_parts.extend([
-                "Previous errors to avoid:",
+                "PREVIOUS ERRORS TO AVOID:",
                 *[f"- {error}" for error in state["error_messages"][-2:]],  # Last 2 errors
                 ""
             ])
         
-        # Add syntax guidelines
+        # Add enhanced syntax guidelines
         context_parts.extend([
-            "IMPORTANT Syntax Rules:",
+            "CRITICAL SYNTAX REQUIREMENTS:",
             "- Use COUNT { (n)-[]-() } instead of size((n)-[]->())",
-            "- Use IS NOT NULL instead of has(property)",
-            "- Always include LIMIT for large result sets",
-            "- Use proper Neo4j 5.x syntax",
+            "- Use property IS NOT NULL instead of has(property)",
+            "- Always include LIMIT for ORDER BY queries (suggest LIMIT 10-100)",
+            "- Use proper Neo4j 5.x syntax only",
+            "- For connectivity queries, return both node info and connection counts",
             "",
-            f"User Question: {state['original_question']}",
+            f"USER QUESTION: {state['original_question']}",
             "",
             "Return ONLY the Cypher query, no explanations."
         ])
         
         return "\n".join(context_parts)
 
-    async def validate_query(self, state: AgentState) -> AgentState:
-        """Validate the generated Cypher query."""
-        query = state["current_query"]
+    async def validate_query_with_server(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Validate query using the specialized server's validation tool."""
+        print("🔍 Validating query with enhanced server validation...")
         
-        # Basic validation checks
-        validation_issues = []
+        validation_result = await self.call_mcp_tool("validate_query", {
+            "query": state["current_query"],
+            "apply_fixes": True
+        })
         
-        # Check for deprecated syntax
-        deprecated_patterns = [
-            (r"size\(\s*\([^)]+\)\s*-\s*\[\s*\]\s*-\s*\(\s*\)\s*\)", "size() function usage"),
-            (r"has\(\s*\w+\s*\)", "has() function usage"),
-            (r"length\(\s*path\s*\)", "length() function on paths")
-        ]
-        
-        for pattern, issue in deprecated_patterns:
-            if re.search(pattern, query, re.IGNORECASE):
-                validation_issues.append(issue)
-        
-        # Check for missing LIMIT on potentially large queries
-        if "ORDER BY" in query.upper() and "LIMIT" not in query.upper():
-            if state["complexity_level"] == "complex":
-                validation_issues.append("Missing LIMIT clause for complex query")
-        
-        if validation_issues:
-            state["error_messages"].extend(validation_issues)
-            print(f"⚠️ Validation issues found: {', '.join(validation_issues)}")
+        if not validation_result.startswith("❌"):
+            try:
+                validation_data = json.loads(validation_result)
+                state["validation_result"] = validation_data
+                
+                # Use suggested query if available
+                if "suggested_query" in validation_data and validation_data["suggested_query"]:
+                    old_query = state["current_query"]
+                    state["current_query"] = validation_data["suggested_query"]
+                    print(f"🔧 Applied server-suggested query improvements")
+                
+                issues = validation_data.get("issues", [])
+                if issues:
+                    print(f"⚠️ Validation found {len(issues)} issues: {', '.join(issues[:2])}")
+                else:
+                    print("✅ Query validation passed")
+                    
+            except json.JSONDecodeError:
+                print("⚠️ Validation returned non-JSON")
         else:
-            print(f"✅ Query validation passed")
+            print(f"⚠️ Query validation failed: {validation_result}")
+            state["error_messages"].append(f"Validation failed: {validation_result}")
         
         return state
 
-    def should_execute_or_regenerate(self, state: AgentState) -> str:
-        """Decide whether to execute, regenerate, or fallback."""
-        # If we have validation issues and haven't tried too many times
-        if state.get("error_messages") and state["cortex_attempts"] < 2:
-            return "regenerate"
+    def should_execute_after_validation(self, state: EnhancedAgentState) -> str:
+        """Enhanced decision making after validation."""
+        validation_result = state.get("validation_result", {})
         
-        # If we've tried too many times, fallback to simple query
+        # If validation found critical issues and we haven't tried many times
+        if validation_result.get("issues") and state["cortex_attempts"] < 2:
+            critical_issues = [issue for issue in validation_result.get("issues", []) if "deprecated" in issue.lower() or "syntax" in issue.lower()]
+            if critical_issues:
+                return "regenerate"
+        
+        # If we've tried too many times, fallback
         if state["attempts"] >= state["max_attempts"]:
             return "fallback"
         
-        # Otherwise, execute the query
+        # Otherwise, execute
         return "execute"
 
-    async def execute_query(self, state: AgentState) -> AgentState:
-        """Execute the Cypher query using your MCP server."""
+    async def execute_enhanced_query(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Execute query using the enhanced MCP server."""
         state["attempts"] += 1
-        print(f"⚡ Executing query (attempt {state['attempts']})...")
+        print(f"⚡ Executing enhanced query (attempt {state['attempts']})...")
         
         query = state["current_query"]
         
-        # Determine which MCP tool to use
+        # Determine which enhanced tool to use
         is_write = any(keyword in query.upper() for keyword in ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP"])
-        tool_name = "write_neo4j_cypher" if is_write else "read_neo4j_cypher"
+        tool_name = "execute_write_query" if is_write else "execute_read_query"
         
-        # Execute the query
-        result = await self.call_mcp_tool(tool_name, {"query": query})
+        # Execute with the enhanced server
+        result = await self.call_mcp_tool(tool_name, {
+            "query": query,
+            "apply_fixes": True  # Let the server apply additional fixes
+        })
         
         if result.startswith("❌"):
             state["error_messages"].append(result)
-            print(f"❌ Query execution failed: {result}")
+            print(f"❌ Enhanced query execution failed: {result}")
         else:
             try:
                 parsed_result = json.loads(result)
-                state["results"].append(parsed_result)
-                print(f"✅ Query executed successfully, got {len(parsed_result)} records")
+                
+                # Enhanced result handling
+                if "data" in parsed_result and "metadata" in parsed_result:
+                    # New enhanced format
+                    state["results"].append(parsed_result["data"])
+                    state["performance_metrics"]["last_execution"] = parsed_result["metadata"]
+                    print(f"✅ Enhanced execution successful: {parsed_result['metadata'].get('record_count', 'unknown')} records in {parsed_result['metadata'].get('execution_time_ms', 'unknown')}ms")
+                else:
+                    # Legacy format
+                    state["results"].append(parsed_result)
+                    print(f"✅ Query executed successfully")
+                    
             except json.JSONDecodeError:
                 # Handle non-JSON results
                 state["results"].append({"raw_result": result})
@@ -426,24 +550,40 @@ class DetailedNeo4jAgent:
         
         return state
 
-    async def handle_execution_error(self, state: AgentState) -> AgentState:
-        """Handle execution errors intelligently."""
-        if state["error_messages"]:
-            last_error = state["error_messages"][-1]
-            print(f"🛠️ Handling error: {last_error[:100]}...")
-            
-            # Analyze error and suggest fixes
-            if "SyntaxError" in last_error:
-                print("🔧 Syntax error detected - will regenerate with fixes")
-            elif "timeout" in last_error.lower():
-                print("🔧 Timeout detected - will add LIMIT clause")
-            elif "size()" in last_error:
-                print("🔧 Size function error - will use COUNT syntax")
+    async def get_performance_metrics(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Get performance metrics from the enhanced server."""
+        print("📊 Gathering performance metrics...")
+        
+        metrics_result = await self.call_mcp_tool("get_metrics")
+        
+        if not metrics_result.startswith("❌"):
+            try:
+                metrics_data = json.loads(metrics_result)
+                state["performance_metrics"]["server_metrics"] = metrics_data
+                print(f"✅ Performance metrics gathered: {metrics_data.get('success_rate', 'unknown')}% success rate")
+            except json.JSONDecodeError:
+                print("⚠️ Metrics returned non-JSON")
         
         return state
 
-    def check_execution_success(self, state: AgentState) -> str:
-        """Check if execution was successful."""
+    async def handle_execution_error(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Enhanced error handling with server insights."""
+        if state["error_messages"]:
+            last_error = state["error_messages"][-1]
+            print(f"🛠️ Enhanced error handling: {last_error[:100]}...")
+            
+            # Enhanced error analysis
+            if "syntax" in last_error.lower():
+                print("🔧 Syntax error detected - will use server validation for fixes")
+            elif "timeout" in last_error.lower():
+                print("🔧 Timeout detected - will optimize query complexity")
+            elif "deprecated" in last_error.lower():
+                print("🔧 Deprecated syntax detected - will modernize query")
+        
+        return state
+
+    def check_execution_success(self, state: EnhancedAgentState) -> str:
+        """Enhanced success checking."""
         if state["results"] and not state["error_messages"]:
             return "success"
         elif state["attempts"] < state["max_attempts"] and state["cortex_attempts"] < 3:
@@ -451,82 +591,100 @@ class DetailedNeo4jAgent:
         else:
             return "fallback"
 
-    async def fallback_to_simple_query(self, state: AgentState) -> AgentState:
-        """Fallback to a simple, guaranteed-to-work query."""
-        print("🔄 Falling back to simple query approach...")
+    async def fallback_to_simple_query(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Enhanced fallback using server tools."""
+        print("🔄 Using enhanced fallback approach...")
         
         question_type = state.get("question_type", "general")
         
-        # Map question types to simple, working queries
+        # Enhanced fallback queries
         fallback_queries = {
             "connectivity": "MATCH (n) RETURN n, COUNT { (n)-[]-() } as connections ORDER BY connections DESC LIMIT 10",
-            "aggregation": "MATCH (n) RETURN count(n) as total_nodes",
-            "schema": "CALL db.labels() YIELD label RETURN label LIMIT 20",
-            "exploration": "MATCH (n) RETURN n LIMIT 10",
-            "general": "MATCH (n) RETURN count(n) as node_count"
+            "aggregation": "CALL count_by_label() YIELD label, count RETURN label, count ORDER BY count DESC",
+            "schema": "CALL analyze_schema() YIELD *",
+            "exploration": "CALL get_sample_data({limit: 10}) YIELD *",
+            "general": "CALL database_summary() YIELD *"
         }
         
-        fallback_query = fallback_queries.get(question_type, fallback_queries["general"])
+        fallback_query = fallback_queries.get(question_type, "MATCH (n) RETURN count(n) as node_count")
         
-        # Execute fallback query
-        result = await self.call_mcp_tool("read_neo4j_cypher", {"query": fallback_query})
+        # Try to use enhanced server tools instead of raw queries
+        if question_type == "aggregation":
+            result = await self.call_mcp_tool("count_by_label")
+        elif question_type == "schema":
+            result = await self.call_mcp_tool("analyze_schema")
+        elif question_type == "exploration":
+            result = await self.call_mcp_tool("get_sample_data", {"limit": 10})
+        else:
+            # Execute simple query
+            result = await self.call_mcp_tool("execute_read_query", {"query": fallback_query})
         
         if not result.startswith("❌"):
             try:
                 parsed_result = json.loads(result)
                 state["results"] = [parsed_result]
-                state["final_answer"] = f"🔄 **Fallback Result:** Used simplified query due to complexity.\n\nQuery: `{fallback_query}`"
+                state["final_answer"] = f"🔄 **Enhanced Fallback Result:** Used specialized server tools due to query complexity.\n\nApproach: {question_type} analysis"
             except json.JSONDecodeError:
                 state["results"] = [{"raw_result": result}]
         
         return state
 
-    async def format_final_response(self, state: AgentState) -> AgentState:
-        """Format the final response based on question type and results."""
+    async def format_enhanced_response(self, state: EnhancedAgentState) -> EnhancedAgentState:
+        """Enhanced response formatting with performance metrics."""
         if not state["results"]:
-            state["final_answer"] = f"❌ Unable to answer '{state['original_question']}' after {state['attempts']} attempts."
+            performance_info = ""
+            if state.get("performance_metrics"):
+                server_metrics = state["performance_metrics"].get("server_metrics", {})
+                performance_info = f"\n\n📊 **Server Performance:** {server_metrics.get('success_rate', 'unknown')}% success rate, {server_metrics.get('total_queries', 0)} total queries processed"
+            
+            state["final_answer"] = f"❌ Unable to answer '{state['original_question']}' after {state['attempts']} attempts.{performance_info}"
             return state
         
         question_type = state.get("question_type", "general")
         results = state["results"]
         
-        # Format based on question type
+        # Enhanced formatting based on question type
         if question_type == "connectivity":
-            state["final_answer"] = self.format_connectivity_results(results, state["original_question"])
+            state["final_answer"] = self.format_connectivity_results_enhanced(results, state)
         elif question_type == "aggregation":
-            state["final_answer"] = self.format_aggregation_results(results, state["original_question"])
+            state["final_answer"] = self.format_aggregation_results_enhanced(results, state)
         elif question_type == "schema":
-            state["final_answer"] = self.format_schema_results(results, state["original_question"])
+            state["final_answer"] = self.format_schema_results_enhanced(results, state)
         elif question_type == "exploration":
-            state["final_answer"] = self.format_exploration_results(results, state["original_question"])
+            state["final_answer"] = self.format_exploration_results_enhanced(results, state)
         else:
-            state["final_answer"] = self.format_general_results(results, state["original_question"])
+            state["final_answer"] = self.format_general_results_enhanced(results, state)
         
-        # Add query information if helpful
-        if state.get("current_query") and not state["final_answer"].startswith("🔄"):
-            state["final_answer"] += f"\n\n**Query used:** `{state['current_query']}`"
+        # Add performance metrics if available
+        self.add_performance_info(state)
         
         return state
 
-    def format_connectivity_results(self, results: List[Dict], question: str) -> str:
-        """Format results for connectivity questions."""
+    def format_connectivity_results_enhanced(self, results: List[Dict], state: EnhancedAgentState) -> str:
+        """Enhanced formatting for connectivity questions."""
         if not results or not results[0]:
             return "No connectivity data found."
         
         data = results[0]
-        if not data:
+        response = "🔗 **Network Connectivity Analysis:**\n\n"
+        
+        # Handle enhanced result format
+        if isinstance(data, dict) and "data" in data:
+            actual_data = data["data"]
+            metadata = data.get("metadata", {})
+            response += f"*Query executed in {metadata.get('execution_time_ms', 'unknown')}ms*\n\n"
+        else:
+            actual_data = data
+        
+        if not actual_data:
             return "No nodes found in the database."
         
-        response = "🔗 **Most Connected Nodes:**\n\n"
-        
-        # Handle different result formats
-        for i, record in enumerate(data[:10], 1):
+        # Process connectivity data
+        for i, record in enumerate(actual_data[:10], 1):
             if isinstance(record, dict):
-                # Extract node information
                 node_info = record.get('n', {})
                 connections = record.get('connections', record.get('degree', 0))
                 
-                # Get node labels and properties
                 if isinstance(node_info, dict):
                     labels = node_info.get('labels', ['Unknown'])
                     properties = node_info.get('properties', {})
@@ -536,91 +694,165 @@ class DetailedNeo4jAgent:
                     name = f"Item {i}"
                 
                 response += f"{i}. **{name}** ({labels[0] if labels else 'Node'})\n"
-                response += f"   Connections: {connections}\n\n"
+                response += f"   🔗 Connections: **{connections}**\n\n"
         
         return response
 
-    def format_aggregation_results(self, results: List[Dict], question: str) -> str:
-        """Format results for aggregation questions."""
+    def format_aggregation_results_enhanced(self, results: List[Dict], state: EnhancedAgentState) -> str:
+        """Enhanced formatting for aggregation questions."""
         if not results or not results[0]:
             return "No aggregation data available."
         
         data = results[0]
-        response = "📊 **Database Statistics:**\n\n"
+        response = "📊 **Database Analytics:**\n\n"
         
-        for record in data[:5]:  # Show top 5 results
-            if isinstance(record, dict):
-                for key, value in record.items():
+        # Handle different result formats
+        if "label_counts" in data:
+            # Count by label format
+            response += "**Node Distribution by Label:**\n\n"
+            for item in data["label_counts"][:10]:
+                label = item.get("label", "Unknown")
+                count = item.get("count", 0)
+                response += f"• **{label}:** {count:,} nodes\n"
+        elif isinstance(data, list):
+            # Regular aggregation results
+            for record in data[:5]:
+                if isinstance(record, dict):
+                    for key, value in record.items():
+                        response += f"• **{key.replace('_', ' ').title()}:** {value:,}\n"
+        else:
+            # Single result
+            for key, value in data.items():
+                if isinstance(value, (int, float)):
                     response += f"• **{key.replace('_', ' ').title()}:** {value:,}\n"
         
         return response
 
-    def format_schema_results(self, results: List[Dict], question: str) -> str:
-        """Format results for schema questions."""
+    def format_schema_results_enhanced(self, results: List[Dict], state: EnhancedAgentState) -> str:
+        """Enhanced formatting for schema questions."""
         if not results or not results[0]:
             return "No schema information available."
         
         data = results[0]
-        response = "🏗️ **Database Schema:**\n\n"
+        response = "🏗️ **Database Schema Analysis:**\n\n"
         
-        for record in data:
-            if isinstance(record, dict):
-                if 'label' in record:
-                    response += f"• **Label:** {record['label']}\n"
-                elif 'relationshipType' in record:
-                    response += f"• **Relationship:** {record['relationshipType']}\n"
-                else:
-                    for key, value in record.items():
-                        response += f"• **{key}:** {value}\n"
+        # Handle enhanced schema format
+        if "labels" in data and isinstance(data["labels"], list):
+            response += f"**Node Labels ({len(data['labels'])}):**\n"
+            for item in data["labels"][:10]:
+                if isinstance(item, dict):
+                    label = item.get("label", "Unknown")
+                    count = item.get("count", "unknown")
+                    response += f"• **{label}** ({count} nodes)\n"
+            response += "\n"
+        
+        if "relationships" in data and isinstance(data["relationships"], list):
+            response += f"**Relationship Types ({len(data['relationships'])}):**\n"
+            for item in data["relationships"][:10]:
+                if isinstance(item, dict):
+                    rel_type = item.get("type", "Unknown")
+                    count = item.get("count", "unknown")
+                    response += f"• **{rel_type}** ({count} relationships)\n"
         
         return response
 
-    def format_exploration_results(self, results: List[Dict], question: str) -> str:
-        """Format results for exploration questions."""
+    def format_exploration_results_enhanced(self, results: List[Dict], state: EnhancedAgentState) -> str:
+        """Enhanced formatting for exploration questions."""
         if not results or not results[0]:
             return "No data found to explore."
         
         data = results[0]
-        response = f"🔍 **Found {len(data)} items:**\n\n"
         
-        for i, record in enumerate(data[:5], 1):  # Show first 5
-            if isinstance(record, dict):
+        # Handle sample data format
+        if "samples" in data:
+            samples = data["samples"]
+            response = f"🔍 **Data Exploration ({len(samples)} samples):**\n\n"
+            
+            for i, sample in enumerate(samples[:5], 1):
+                if isinstance(sample, dict) and "n" in sample:
+                    node = sample["n"]
+                    if isinstance(node, dict):
+                        labels = node.get("labels", ["Unknown"])
+                        properties = node.get("properties", {})
+                        
+                        response += f"{i}. **{labels[0]}**\n"
+                        
+                        # Show key properties
+                        key_props = ["name", "title", "id", "type"]
+                        shown_props = []
+                        for prop in key_props:
+                            if prop in properties:
+                                shown_props.append(f"{prop}: {properties[prop]}")
+                        
+                        if shown_props:
+                            response += f"   Properties: {', '.join(shown_props)}\n"
+                        response += "\n"
+        else:
+            # Regular exploration format
+            response = f"🔍 **Found {len(data) if isinstance(data, list) else 1} items:**\n\n"
+            
+            items_to_show = data[:5] if isinstance(data, list) else [data]
+            for i, record in enumerate(items_to_show, 1):
                 response += f"{i}. "
-                if 'n' in record:
-                    node = record['n']
-                    if isinstance(node, dict) and 'properties' in node:
-                        props = node['properties']
-                        name = props.get('name', props.get('title', f"Item {i}"))
-                        response += f"**{name}**"
-                        if node.get('labels'):
-                            response += f" ({node['labels'][0]})"
-                    else:
-                        response += f"**Node {i}**"
-                else:
+                if isinstance(record, dict):
                     # Show first few properties
                     shown_props = list(record.items())[:3]
                     prop_strs = [f"{k}: {v}" for k, v in shown_props]
                     response += ", ".join(prop_strs)
                 response += "\n"
         
-        if len(data) > 5:
-            response += f"\n... and {len(data) - 5} more items.\n"
-        
         return response
 
-    def format_general_results(self, results: List[Dict], question: str) -> str:
-        """Format general results."""
+    def format_general_results_enhanced(self, results: List[Dict], state: EnhancedAgentState) -> str:
+        """Enhanced formatting for general results."""
         if not results:
             return "No results found."
         
-        response = "📋 **Results:**\n\n"
-        response += f"```json\n{json.dumps(results[0][:10] if results[0] else results, indent=2)}\n```"
+        data = results[0]
+        response = "📋 **Query Results:**\n\n"
+        
+        # Handle enhanced result format
+        if isinstance(data, dict) and "data" in data:
+            actual_data = data["data"]
+            metadata = data.get("metadata", {})
+            response += f"*Executed in {metadata.get('execution_time_ms', 'unknown')}ms, returned {metadata.get('record_count', 'unknown')} records*\n\n"
+            display_data = actual_data
+        else:
+            display_data = data
+        
+        # Limit displayed results for readability
+        if isinstance(display_data, list):
+            display_data = display_data[:10]
+        
+        response += f"```json\n{json.dumps(display_data, indent=2)}\n```"
         
         return response
 
+    def add_performance_info(self, state: EnhancedAgentState):
+        """Add performance metrics to the final answer."""
+        performance_metrics = state.get("performance_metrics", {})
+        
+        if performance_metrics:
+            perf_info = "\n\n📊 **Performance Metrics:**\n"
+            
+            # Last execution metrics
+            if "last_execution" in performance_metrics:
+                exec_metrics = performance_metrics["last_execution"]
+                perf_info += f"• Execution time: {exec_metrics.get('execution_time_ms', 'unknown')}ms\n"
+                if exec_metrics.get("syntax_fixes_applied"):
+                    perf_info += f"• ✅ Automatic syntax fixes applied\n"
+            
+            # Server metrics
+            if "server_metrics" in performance_metrics:
+                server_metrics = performance_metrics["server_metrics"]
+                perf_info += f"• Server success rate: {server_metrics.get('success_rate', 'unknown')}%\n"
+                perf_info += f"• Total queries processed: {server_metrics.get('total_queries', 0)}\n"
+            
+            state["final_answer"] += perf_info
+
     async def run(self, question: str) -> str:
-        """Run the complete agent workflow."""
-        initial_state = AgentState(
+        """Run the complete enhanced agent workflow."""
+        initial_state = EnhancedAgentState(
             original_question=question,
             current_query="",
             attempts=0,
@@ -631,7 +863,10 @@ class DetailedNeo4jAgent:
             final_answer="",
             question_type="general",
             complexity_level="simple",
-            cortex_attempts=0
+            cortex_attempts=0,
+            validation_result={},
+            performance_metrics={},
+            sample_data={}
         )
         
         graph = self.create_graph()
@@ -640,32 +875,32 @@ class DetailedNeo4jAgent:
             final_state = await graph.ainvoke(initial_state)
             return final_state["final_answer"]
         except Exception as e:
-            return f"❌ Agent error: {str(e)}"
+            return f"❌ Enhanced agent error: {str(e)}"
 
 # Test and demonstration
-async def test_detailed_agent():
-    """Test the detailed agent with various question types."""
-    agent = DetailedNeo4jAgent()
+async def test_enhanced_agent():
+    """Test the enhanced agent with the specialized MCP server."""
+    agent = OptimizedNeo4jAgent()
     
     test_questions = [
-        "show me nodes with most connected nodes in the database?",
-        "what properties does the user node have?", 
+        "show me nodes with most connected nodes in the database?",  # Your original failing question
+        "what properties does the user node have?",
         "how many nodes are in the database?",
-        "list all the different types of nodes",
-        "find me some sample data from the database",
-        "what's the structure of this database?",
+        "give me a comprehensive database analysis",
+        "find interesting patterns in the data",
+        "what's the performance of this server?",
     ]
     
-    print("🧪 Testing Detailed Neo4j LangGraph Agent")
-    print("=" * 60)
+    print("🧪 Testing Enhanced Neo4j LangGraph Agent with Specialized MCP Server")
+    print("=" * 80)
     
     for i, question in enumerate(test_questions, 1):
         print(f"\n🤔 **Test {i}:** {question}")
-        print("-" * 50)
+        print("-" * 60)
         
         answer = await agent.run(question)
         print(f"\n🎯 **Answer:**\n{answer}\n")
-        print("=" * 60)
+        print("=" * 80)
 
 if __name__ == "__main__":
-    asyncio.run(test_detailed_agent())
+    asyncio.run(test_enhanced_agent())
