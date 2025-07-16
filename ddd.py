@@ -273,4 +273,325 @@ async def chat_with_analysis(chat_request: ChatRequest):
         
         # Debug logging
         logger.info(f"💬 Chat question: {chat_request.question}")
-        logger.info(f"
+        logger.info(f"📝 Chat history length: {len(chat_history)}")
+        logger.info(f"📊 Context available: {bool(chatbot_context)}")
+        
+        # Validate chatbot context
+        if not chatbot_context:
+            logger.error("❌ No chatbot context available")
+            return {
+                "success": False,
+                "session_id": session_id,
+                "response": "Chat context not available. Please run analysis first.",
+                "updated_chat_history": chat_history
+            }
+        
+        # Call the health agent chat method
+        response = health_agent.chat_with_data(
+            chat_request.question,
+            chatbot_context,
+            chat_history
+        )
+        
+        # Validate response
+        if not response or response.strip() == "":
+            logger.error("❌ Empty response from health agent")
+            response = "I'm sorry, I couldn't generate a response. Please try rephrasing your question."
+        elif '"detail"' in response or response.startswith("Error"):
+            logger.error(f"❌ Error in response: {response}")
+            response = "I encountered an error processing your question. Please try a different question about the medical analysis."
+        
+        # Create updated chat history
+        updated_history = chat_history + [
+            {"role": "user", "content": chat_request.question},
+            {"role": "assistant", "content": response}
+        ]
+        
+        logger.info(f"✅ Chat successful, response length: {len(response)}")
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "response": response,
+            "updated_chat_history": updated_history
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Chat failed with exception: {str(e)}")
+        
+        error_response = f"I encountered an error: {str(e)}. Please try a simpler question about the medical analysis."
+        
+        return {
+            "success": False,
+            "session_id": session_id,
+            "response": error_response,
+            "updated_chat_history": (chat_request.chat_history or []) + [
+                {"role": "user", "content": chat_request.question},
+                {"role": "assistant", "content": error_response}
+            ]
+        }
+
+@app.post("/chat-simple")
+async def simple_chat(request: SimpleChatRequest):
+    """Simple chat endpoint without chat history requirement"""
+    try:
+        # Create a ChatRequest object with empty chat history
+        chat_request = ChatRequest(
+            session_id=request.session_id,
+            question=request.question,
+            chat_history=[]
+        )
+        
+        # Use the main chat function
+        return await chat_with_analysis(chat_request)
+        
+    except Exception as e:
+        logger.error(f"❌ Simple chat error: {str(e)}")
+        return {
+            "success": False,
+            "session_id": request.session_id,
+            "response": f"Simple chat error: {str(e)}",
+            "updated_chat_history": []
+        }
+
+@app.get("/status/{session_id}")
+async def get_analysis_status(session_id: str):
+    """Get analysis status"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session_data = sessions[session_id]
+    return {
+        "session_id": session_id,
+        "status": session_data["status"],
+        "progress": session_data.get("progress", 0),
+        "current_step": session_data.get("current_step", "Unknown"),
+        "results_available": session_data.get("results") is not None,
+        "chat_ready": session_data.get("results", {}).get("chatbot_ready", False) if session_data.get("results") else False,
+        "created_at": session_data.get("created_at"),
+        "completed_at": session_data.get("completed_at")
+    }
+
+@app.get("/results/{session_id}")
+async def get_analysis_results(session_id: str):
+    """Get analysis results"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session_data = sessions[session_id]
+    if not session_data.get("results"):
+        raise HTTPException(status_code=404, detail="Results not available for this session")
+    
+    return {
+        "session_id": session_id,
+        "results": session_data["results"],
+        "completed_at": session_data.get("completed_at"),
+        "analysis_successful": session_data["results"].get("success", False),
+        "chat_ready": session_data["results"].get("chatbot_ready", False)
+    }
+
+@app.get("/sessions")
+async def list_sessions():
+    """List all sessions"""
+    return {
+        "total_sessions": len(sessions),
+        "sessions": [
+            {
+                "session_id": sid,
+                "status": data["status"],
+                "created_at": data["created_at"],
+                "progress": data.get("progress", 0),
+                "chat_ready": data.get("results", {}).get("chatbot_ready", False) if data.get("results") else False
+            }
+            for sid, data in sessions.items()
+        ]
+    }
+
+@app.get("/debug/{session_id}")
+async def debug_session(session_id: str):
+    """Debug session information"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session_data = sessions[session_id]
+    results = session_data.get("results", {})
+    
+    debug_info = {
+        "session_id": session_id,
+        "session_status": session_data.get("status"),
+        "analysis_success": results.get("success", False),
+        "chatbot_ready": results.get("chatbot_ready", False),
+        "has_chatbot_context": bool(results.get("chatbot_context")),
+        "chatbot_context_keys": list(results.get("chatbot_context", {}).keys()) if results.get("chatbot_context") else [],
+        "errors": results.get("errors", []),
+        "step_status": results.get("step_status", {}),
+        "processing_complete": results.get("processing_complete", False),
+        "heart_attack_prediction": bool(results.get("heart_attack_prediction")),
+        "entity_extraction": bool(results.get("entity_extraction")),
+        "created_at": session_data.get("created_at"),
+        "completed_at": session_data.get("completed_at")
+    }
+    
+    return debug_info
+
+@app.get("/test-chat/{session_id}")
+async def test_chat_endpoint(session_id: str):
+    """Test if chat is working for a session"""
+    try:
+        test_request = ChatRequest(
+            session_id=session_id,
+            question="Hello, are you working?",
+            chat_history=[]
+        )
+        
+        result = await chat_with_analysis(test_request)
+        return {
+            "test_successful": result["success"],
+            "session_id": session_id,
+            "test_response": result["response"],
+            "response_length": len(result["response"]) if result.get("response") else 0
+        }
+        
+    except Exception as e:
+        return {
+            "test_successful": False,
+            "session_id": session_id,
+            "error": str(e)
+        }
+
+# Background task for async analysis
+async def run_analysis_task(session_id: str, patient_data: Dict[str, Any]):
+    """Background task for analysis"""
+    try:
+        logger.info(f"🔬 Starting background analysis for session {session_id}")
+        
+        update_session(session_id, progress=10, current_step="Processing patient data...")
+        
+        # Run the analysis
+        results = health_agent.run_analysis(patient_data)
+        
+        update_session(session_id,
+            status="completed",
+            results=results,
+            progress=100,
+            current_step="Analysis completed",
+            completed_at=datetime.now().isoformat()
+        )
+        
+        logger.info(f"✅ Background analysis completed for session {session_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Background analysis failed for session {session_id}: {str(e)}")
+        
+        update_session(session_id, 
+            status="error", 
+            error=str(e),
+            current_step=f"Error: {str(e)}",
+            completed_at=datetime.now().isoformat()
+        )
+
+# Test endpoints
+@app.get("/test/agent")
+async def test_agent_connection():
+    """Test the health agent connection"""
+    if not AGENT_AVAILABLE:
+        return {"success": False, "error": import_error}
+    
+    if not health_agent:
+        return {"success": False, "error": "Agent not initialized"}
+    
+    try:
+        # Test LLM connection
+        llm_test = health_agent.test_llm_connection()
+        
+        # Test backend connection  
+        backend_test = health_agent.test_backend_connection()
+        
+        # Test FastAPI connection
+        fastapi_test = health_agent.test_fastapi_connection()
+        
+        return {
+            "success": True,
+            "agent_available": True,
+            "llm_connection": llm_test,
+            "backend_connection": backend_test,
+            "fastapi_connection": fastapi_test,
+            "config": {
+                "heart_attack_api_url": health_agent.config.heart_attack_api_url,
+                "backend_url": health_agent.config.fastapi_url
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/test/sample-data")
+async def get_sample_data():
+    """Get sample patient data for testing"""
+    return {
+        "sample_patient_data": {
+            "first_name": "John",
+            "last_name": "Doe", 
+            "ssn": "123456789",
+            "date_of_birth": "1980-01-01",
+            "gender": "M",
+            "zip_code": "12345"
+        },
+        "usage": "POST this data to /analyze-sync to test the analysis"
+    }
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    del sessions[session_id]
+    return {"message": f"Session {session_id} deleted successfully"}
+
+@app.delete("/sessions")
+async def clear_all_sessions():
+    """Clear all sessions"""
+    count = len(sessions)
+    sessions.clear()
+    return {"message": f"Cleared {count} sessions"}
+
+# Error handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return {
+        "error": exc.detail,
+        "status_code": exc.status_code,
+        "timestamp": datetime.now().isoformat()
+    }
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🚀 Health Analysis Agent FastAPI server starting up...")
+    logger.info(f"🏥 Agent available: {AGENT_AVAILABLE}")
+    if AGENT_AVAILABLE and health_agent:
+        logger.info("✅ Health agent initialized and ready")
+    else:
+        logger.warning("⚠️ Health agent not available or failed to initialize")
+
+if __name__ == "__main__":
+    import uvicorn
+    import sys
+    
+    # Try different ports if 8000 is busy
+    ports_to_try = [8000, 8001, 8002, 8003, 8080, 3001]
+    
+    for port in ports_to_try:
+        try:
+            print(f"🚀 Trying to start server on port {port}...")
+            uvicorn.run("__main__:app", host="127.0.0.1", port=port, reload=True)
+            break
+        except OSError as e:
+            if "10013" in str(e) or "Address already in use" in str(e):
+                print(f"❌ Port {port} is busy, trying next port...")
+                continue
+            else:
+                print(f"❌ Error: {e}")
+                sys.exit(1)
+    else:
+        print("❌ All ports are busy. Please close other applications or run as administrator.")
