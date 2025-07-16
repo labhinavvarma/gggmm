@@ -1,4 +1,3 @@
-
 def predict_heart_attack(self, state: HealthAnalysisState) -> HealthAnalysisState:
         """Enhanced LangGraph Node 7: Enhanced heart attack prediction with FastAPI compatibility"""
         logger.info("❤️ Enhanced Node 7: Starting enhanced heart attack prediction...")
