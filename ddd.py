@@ -576,22 +576,31 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    import sys
     
-    # Try different ports if 8000 is busy
-    ports_to_try = [8000, 8001, 8002, 8003, 8080, 3001]
+    # Fixed port 8008 as requested
+    PORT = 8008
+    HOST = "127.0.0.1"
     
-    for port in ports_to_try:
-        try:
-            print(f"🚀 Trying to start server on port {port}...")
-            uvicorn.run("__main__:app", host="127.0.0.1", port=port, reload=True)
-            break
-        except OSError as e:
-            if "10013" in str(e) or "Address already in use" in str(e):
-                print(f"❌ Port {port} is busy, trying next port...")
-                continue
-            else:
-                print(f"❌ Error: {e}")
-                sys.exit(1)
-    else:
-        print("❌ All ports are busy. Please close other applications or run as administrator.")
+    print(f"🚀 Starting Health Agent FastAPI server...")
+    print(f"🌐 Server URL: http://{HOST}:{PORT}")
+    print(f"📋 API Documentation: http://{HOST}:{PORT}/docs")
+    print(f"🔍 Health Check: http://{HOST}:{PORT}/health")
+    print(f"🧪 Test Agent: http://{HOST}:{PORT}/test/agent")
+    print("-" * 50)
+    
+    try:
+        uvicorn.run("__main__:app", host=HOST, port=PORT, reload=True)
+    except OSError as e:
+        if "10013" in str(e) or "Address already in use" in str(e):
+            print(f"❌ Port {PORT} is already in use!")
+            print("💡 Solutions:")
+            print(f"   1. Kill the process using port {PORT}")
+            print(f"   2. Run: netstat -ano | findstr :{PORT}")
+            print(f"   3. Then: taskkill /PID <PID> /F")
+            print(f"   4. Or restart your computer")
+        else:
+            print(f"❌ Server failed to start: {e}")
+    except KeyboardInterrupt:
+        print("\n🛑 Server stopped by user")
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
