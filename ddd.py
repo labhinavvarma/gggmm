@@ -1,33 +1,79 @@
-def _prepare_enhanced_fastapi_features(self, features: Dict[str, Any]) -> Optional[Dict[str, int]]:
-    """Prepare enhanced feature data for FastAPI server call"""
+def _call_heart_attack_prediction_sync(self, features: Dict[str, Any]) -> Dict[str, Any]:
+    """Synchronous heart attack prediction call to avoid event loop conflicts"""
     try:
-        # Extract the features from the feature extraction result
-        extracted_features = features.get("extracted_features", {})
+        import requests  # Import requests library
         
-        # Convert to FastAPI format with proper parameter names
-        fastapi_features = {
-            "age": int(extracted_features.get("Age", 50)),
-            "gender": int(extracted_features.get("Gender", 0)),
-            "diabetes": int(extracted_features.get("Diabetes", 0)),
-            "high_bp": int(extracted_features.get("High_BP", 0)),
-            "smoking": int(extracted_features.get("Smoking", 0))
+        # Try multiple endpoint formats for compatibility
+        endpoints = [
+            f"{self.config.heart_attack_api_url}/predict",
+            f"{self.config.heart_attack_api_url}/predict-simple"
+        ]
+        
+        # Use the features directly (they should already be integers)
+        params = {
+            "age": int(features.get("age", 50)),
+            "gender": int(features.get("gender", 0)),
+            "diabetes": int(features.get("diabetes", 0)),
+            "high_bp": int(features.get("high_bp", 0)),
+            "smoking": int(features.get("smoking", 0))
         }
         
-        # Validate age range
-        if fastapi_features["age"] < 0 or fastapi_features["age"] > 120:
-            logger.warning(f"Age {fastapi_features['age']} out of range, using default 50")
-            fastapi_features["age"] = 50
+        logger.info(f"📤 Sending synchronous prediction request: {params}")
         
-        # Validate binary features (0 or 1 only)
-        binary_features = ["gender", "diabetes", "high_bp", "smoking"]
-        for key in binary_features:
-            if fastapi_features[key] not in [0, 1]:
-                logger.warning(f"{key} value {fastapi_features[key]} invalid, using 0")
-                fastapi_features[key] = 0
+        # Try POST with JSON body first
+        try:
+            response = requests.post(endpoints[0], json=params, timeout=30)
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"✅ Synchronous FastAPI prediction successful (JSON): {result}")
+                return {
+                    "success": True,
+                    "prediction_data": result,
+                    "method": "POST_JSON_SYNC",
+                    "endpoint": endpoints[0]
+                }
+            else:
+                logger.warning(f"JSON method failed with status {response.status_code}")
+        except Exception as e:
+            logger.warning(f"JSON method failed: {str(e)}")
         
-        logger.info(f"✅ FastAPI features prepared: {fastapi_features}")
-        return fastapi_features
-        
+        # Try POST with query parameters as fallback
+        try:
+            response = requests.post(endpoints[1], params=params, timeout=30)
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"✅ Synchronous FastAPI prediction successful (params): {result}")
+                return {
+                    "success": True,
+                    "prediction_data": result,
+                    "method": "POST_PARAMS_SYNC",
+                    "endpoint": endpoints[1]
+                }
+            else:
+                error_text = response.text
+                logger.error(f"❌ All synchronous FastAPI methods failed. Status {response.status_code}: {error_text}")
+                return {
+                    "success": False,
+                    "error": f"FastAPI server error {response.status_code}: {error_text}",
+                    "tried_endpoints": endpoints
+                }
+        except Exception as e:
+            logger.error(f"Parameters method also failed: {str(e)}")
+            return {
+                "success": False,
+                "error": f"All synchronous prediction methods failed. Last error: {str(e)}",
+                "tried_endpoints": endpoints
+            }
+            
+    except ImportError:
+        logger.error("requests library not found. Please install: pip install requests")
+        return {
+            "success": False,
+            "error": "requests library not installed. Run: pip install requests"
+        }
     except Exception as e:
-        logger.error(f"Error preparing FastAPI features: {e}")
-        return None
+        logger.error(f"Error in synchronous FastAPI call: {e}")
+        return {
+            "success": False,
+            "error": f"Synchronous FastAPI call failed: {str(e)}"
+        }
