@@ -1,100 +1,136 @@
-def predict_heart_attack(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Enhanced LangGraph Node 7: Enhanced heart attack prediction with FastAPI compatibility"""
-        logger.info("❤️ Enhanced Node 7: Starting enhanced heart attack prediction...")
-        state["current_step"] = "predict_heart_attack"
-        state["step_status"]["predict_heart_attack"] = "running"
-        
+def call_fastapi_heart_attack_prediction_sync(self, features: Dict[str, Any]) -> Dict[str, Any]:
+        """Synchronous FastAPI heart attack prediction to avoid event loop conflicts"""
         try:
-            # Extract features using enhanced feature extraction
-            features = self._extract_enhanced_heart_attack_features(state)
-            state["heart_attack_features"] = features
+            logger.info(f"🔗 Calling FastAPI server for heart attack prediction (sync)...")
+            logger.info(f"📊 Features: {features}")
             
-            if not features or "error" in features:
-                state["errors"].append("Failed to extract enhanced features for heart attack prediction")
-                state["step_status"]["predict_heart_attack"] = "error"
-                return state
+            # Try multiple endpoint formats for compatibility
+            endpoints = [
+                f"{self.config.heart_attack_api_url}/predict",
+                f"{self.config.heart_attack_api_url}/predict-simple"
+            ]
             
-            # Prepare feature vector for enhanced FastAPI call
-            fastapi_features = self._prepare_enhanced_fastapi_features(features)
+            # Ensure all values are integers as required by the server
+            params = {
+                "age": int(features.get("age", 50)),
+                "gender": int(features.get("gender", 0)),
+                "diabetes": int(features.get("diabetes", 0)),
+                "high_bp": int(features.get("high_bp", 0)),
+                "smoking": int(features.get("smoking", 0))
+            }
             
-            if fastapi_features is None:
-                state["errors"].append("Failed to prepare enhanced feature vector for prediction")
-                state["step_status"]["predict_heart_attack"] = "error"
-                return state
+            logger.info(f"📤 Sending parameters: {params}")
             
-            # Make prediction using synchronous method (avoid event loop conflict)
+            # Try POST with JSON body first
             try:
-                prediction_result = self._call_heart_attack_prediction_sync(fastapi_features)
-            except Exception as sync_error:
-                logger.error(f"Enhanced prediction call failed: {sync_error}")
-                state["errors"].append(f"Enhanced FastAPI prediction call failed: {str(sync_error)}")
-                state["step_status"]["predict_heart_attack"] = "error"
-                return state
-            
-            if prediction_result.get("success", False):
-                # Process successful enhanced FastAPI prediction
-                prediction_data = prediction_result.get("prediction_data", {})
-                
-                # Extract key values from enhanced FastAPI response
-                risk_probability = prediction_data.get("probability", 0.0)
-                binary_prediction = prediction_data.get("prediction", 0)
-                
-                # Convert to percentage
-                risk_percentage = risk_probability * 100
-                confidence_percentage = (1 - risk_probability) * 100 if binary_prediction == 0 else risk_probability * 100
-                
-                # Determine enhanced risk level
-                if risk_percentage >= 70:
-                    risk_category = "High Risk"
-                elif risk_percentage >= 50:
-                    risk_category = "Medium Risk"
+                response = requests.post(endpoints[0], json=params, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"✅ FastAPI prediction successful (JSON): {result}")
+                    return {
+                        "success": True,
+                        "prediction_data": result,
+                        "method": "POST_JSON",
+                        "endpoint": endpoints[0]
+                    }
                 else:
-                    risk_category = "Low Risk"
-                
-                # Create enhanced prediction result
-                enhanced_prediction = {
-                    "risk_display": f"Heart Disease Risk: {risk_percentage:.1f}% ({risk_category})",
-                    "confidence_display": f"Confidence: {confidence_percentage:.1f}%",
-                    "combined_display": f"Heart Disease Risk: {risk_percentage:.1f}% ({risk_category}) | Confidence: {confidence_percentage:.1f}%",
-                    "raw_risk_score": risk_probability,
-                    "raw_prediction": binary_prediction,
-                    "risk_category": risk_category,
-                    "fastapi_server_url": self.config.heart_attack_api_url,
-                    "prediction_method": prediction_result.get("method", "unknown"),
-                    "prediction_endpoint": prediction_result.get("endpoint", "unknown"),
-                    "prediction_timestamp": datetime.now().isoformat(),
-                    "enhanced_features_used": features.get("feature_interpretation", {}),
-                    "model_enhanced": True
-                }
-                
-                state["heart_attack_prediction"] = enhanced_prediction
-                state["heart_attack_risk_score"] = float(risk_probability)
-                
-                logger.info(f"✅ Enhanced FastAPI heart attack prediction completed successfully")
-                logger.info(f"❤️ Display: {enhanced_prediction['combined_display']}")
-                
-            else:
-                # Handle enhanced FastAPI prediction failure
-                error_msg = prediction_result.get("error", "Unknown enhanced FastAPI error")
-                state["heart_attack_prediction"] = {
-                    "error": error_msg,
-                    "risk_display": "Heart Disease Risk: Error",
-                    "confidence_display": "Confidence: Error",
-                    "combined_display": f"Heart Disease Risk: Error - {error_msg}",
-                    "fastapi_server_url": self.config.heart_attack_api_url,
-                    "error_details": error_msg,
-                    "tried_endpoints": prediction_result.get("tried_endpoints", []),
-                    "model_enhanced": True
-                }
-                state["heart_attack_risk_score"] = 0.0
-                logger.warning(f"⚠️ Enhanced FastAPI heart attack prediction failed: {error_msg}")
+                    logger.warning(f"JSON method failed with status {response.status_code}")
+            except Exception as e:
+                logger.warning(f"JSON method failed: {str(e)}")
             
-            state["step_status"]["predict_heart_attack"] = "completed"
-            
+            # Try POST with query parameters as fallback
+            try:
+                response = requests.post(endpoints[1], params=params, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"✅ FastAPI prediction successful (params): {result}")
+                    return {
+                        "success": True,
+                        "prediction_data": result,
+                        "method": "POST_PARAMS",
+                        "endpoint": endpoints[1]
+                    }
+                else:
+                    error_text = response.text
+                    logger.error(f"❌ All FastAPI methods failed. Status {response.status_code}: {error_text}")
+                    return {
+                        "success": False,
+                        "error": f"FastAPI server error {response.status_code}: {error_text}",
+                        "tried_endpoints": endpoints
+                    }
+            except Exception as e:
+                logger.error(f"Parameters method also failed: {str(e)}")
+                return {
+                    "success": False,
+                    "error": f"All prediction methods failed. Last error: {str(e)}",
+                    "tried_endpoints": endpoints
+                }
+                        
         except Exception as e:
-            error_msg = f"Error in enhanced FastAPI heart attack prediction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"]["predict_heart_attack"] = "error"
-            logger.error(error_msg)
-        
-        return state
+            logger.error(f"Error calling FastAPI server: {e}")
+            return {
+                "success": False,
+                "error": f"FastAPI call failed: {str(e)}"
+            }
+
+    def test_fastapi_connection_sync(self) -> Dict[str, Any]:
+        """Synchronous FastAPI server connection test"""
+        try:
+            logger.info(f"🧪 Testing FastAPI server connection at {self.config.heart_attack_api_url}...")
+            
+            health_url = f"{self.config.heart_attack_api_url}/health"
+            
+            # Test health endpoint
+            response = requests.get(health_url, timeout=15)
+            if response.status_code == 200:
+                health_data = response.json()
+                
+                # Test prediction endpoint with sample data
+                test_features = {
+                    "age": 50,
+                    "gender": 1,
+                    "diabetes": 0,
+                    "high_bp": 0,
+                    "smoking": 0
+                }
+                
+                predict_url = f"{self.config.heart_attack_api_url}/predict"
+                pred_response = requests.post(predict_url, json=test_features, timeout=15)
+                
+                if pred_response.status_code == 200:
+                    pred_data = pred_response.json()
+                    return {
+                        "success": True,
+                        "health_check": health_data,
+                        "prediction_test": pred_data,
+                        "server_url": self.config.heart_attack_api_url,
+                        "test_features": test_features,
+                        "connection_method": "synchronous"
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Prediction endpoint error {pred_response.status_code}: {pred_response.text}",
+                        "server_url": self.config.heart_attack_api_url
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Health endpoint error {response.status_code}: {response.text}",
+                    "server_url": self.config.heart_attack_api_url
+                }
+                        
+        except requests.exceptions.Timeout:
+            return {
+                "success": False,
+                "error": "FastAPI server timeout - server may be down",
+                "server_url": self.config.heart_attack_api_url
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"FastAPI connection test failed: {str(e)}",
+                "server_url": self.config.heart_attack_api_url
+            }
+
+    def test_llm_connection(self) -> Dict[str, Any]:
