@@ -317,7 +317,7 @@ def render_status_indicator(status: bool, text: str):
     st.markdown(f'<span class="{color} status-indicator"></span>{text}', unsafe_allow_html=True)
 
 def render_tool_selector():
-    """Render the tool selection interface"""
+    """Render the tool selection interface without any nested components"""
     st.markdown("### 🛠️ Select Neo4j Tool")
     
     # Group tools by category
@@ -328,51 +328,44 @@ def render_tool_selector():
             categories[category] = []
         categories[category].append((tool_id, tool_info))
     
-    # Use tabs instead of nested expanders
-    category_names = list(categories.keys())
-    if len(category_names) > 1:
-        tabs = st.tabs(category_names)
-    else:
-        tabs = [st.container()]
-    
+    # Use simple selectbox instead of complex UI
     selected_tool = None
     
-    for i, (category, tools) in enumerate(categories.items()):
-        with tabs[i]:
-            for tool_id, tool_info in tools:
-                # Tool card container
-                with st.container():
-                    # Create columns for layout
-                    col1, col2 = st.columns([4, 1])
-                    
-                    with col1:
-                        # Tool information
-                        card_class = "tool-selected" if st.session_state.get('selected_tool') == tool_id else "tool-card"
-                        
-                        st.markdown(f"""
-                        <div class="{card_class}">
-                            <h4 style="color: {tool_info['color']}; margin: 0;">{tool_info['name']}</h4>
-                            <p style="margin: 0.5rem 0; color: #666;">{tool_info['description']}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Show example without nested expander
-                        if tool_info.get('example'):
-                            if st.checkbox(f"Show example for {tool_info['name']}", key=f"show_example_{tool_id}"):
-                                st.markdown("**💡 Example:**")
-                                if 'cypher' in str(tool_info.get('params', {})).lower():
-                                    st.code(tool_info['example'], language='cypher')
-                                else:
-                                    st.code(tool_info['example'], language='text')
-                    
-                    with col2:
-                        # Selection button
-                        button_type = "primary" if st.session_state.get('selected_tool') == tool_id else "secondary"
-                        if st.button(f"Select", key=f"select_{tool_id}", type=button_type):
-                            st.session_state.selected_tool = tool_id
-                            st.rerun()
+    # Create a simple dropdown for category selection
+    category_names = list(categories.keys())
+    selected_category = st.selectbox("📋 Choose Tool Category:", category_names)
+    
+    if selected_category:
+        st.markdown(f"#### {selected_category}")
+        
+        # Show tools in selected category
+        tools_in_category = categories[selected_category]
+        
+        for tool_id, tool_info in tools_in_category:
+            # Create a clean tool card
+            with st.container():
+                col1, col2 = st.columns([3, 1])
                 
-                # Add separator between tools
+                with col1:
+                    # Tool info
+                    st.markdown(f"**{tool_info['name']}**")
+                    st.markdown(f"*{tool_info['description']}*")
+                    
+                    # Show example if available (simple text, no expander)
+                    if tool_info.get('example'):
+                        st.markdown("**💡 Example:**")
+                        st.code(tool_info['example'], language='text')
+                
+                with col2:
+                    # Selection button
+                    is_selected = st.session_state.get('selected_tool') == tool_id
+                    button_label = "✅ Selected" if is_selected else "Select"
+                    button_type = "primary" if is_selected else "secondary"
+                    
+                    if st.button(button_label, key=f"select_{tool_id}", type=button_type):
+                        st.session_state.selected_tool = tool_id
+                        st.rerun()
+                
                 st.markdown("---")
     
     return st.session_state.get('selected_tool')
@@ -399,21 +392,24 @@ def render_parameter_inputs(tool_id: str):
                 f"🔤 {param_name.replace('_', ' ').title()}:",
                 placeholder=f"Enter your {param_name.replace('_', ' ')}...",
                 height=120,
-                help=f"Natural language input for {param_name}"
+                help=f"Natural language input for {param_name}",
+                key=f"param_{param_name}_{tool_id}"
             )
         elif param_type == "cypher":
             user_params[param_name] = st.text_area(
                 f"⚙️ {param_name.replace('_', ' ').title()}:",
                 placeholder="MATCH (n) RETURN n LIMIT 10",
                 height=150,
-                help="Enter your Cypher query"
+                help="Enter your Cypher query",
+                key=f"param_{param_name}_{tool_id}"
             )
         elif param_type == "json":
             json_input = st.text_area(
                 f"📋 {param_name.replace('_', ' ').title()} (JSON):",
                 placeholder='{"key": "value"}',
                 height=100,
-                help="Enter JSON parameters for the query"
+                help="Enter JSON parameters for the query",
+                key=f"param_{param_name}_{tool_id}"
             )
             if json_input.strip():
                 try:
@@ -705,7 +701,9 @@ def main():
         
         # Configuration display
         st.markdown("### ⚙️ Configuration")
-        with st.expander("📊 Neo4j Settings"):
+        
+        # Show configuration in simple format instead of expanders
+        if st.checkbox("📊 Show Neo4j Settings"):
             st.code(f"""
 URI: {NEO4J_URI}
 Database: {NEO4J_DATABASE}
@@ -713,7 +711,7 @@ Username: {NEO4J_USERNAME}
 Namespace: {NEO4J_NAMESPACE}
             """)
         
-        with st.expander("🤖 AI Settings"):
+        if st.checkbox("🤖 Show AI Settings"):
             st.code(f"""
 Model: {CORTEX_MODEL}
 API: Cortex LLM
@@ -736,7 +734,7 @@ Features: Intent Analysis, Query Generation, Business Insights
         st.info("Click the '🚀 Start' button in the sidebar to begin.")
         
         # Quick setup guide
-        with st.expander("📋 Quick Setup Guide"):
+        if st.checkbox("📋 Show Setup Guide"):
             st.markdown("""
             **Required Files:**
             1. `standalone_streamlit_neo4j_ui.py` (this file) ✅
@@ -762,12 +760,14 @@ Features: Intent Analysis, Query Generation, Business Insights
         # Execution controls
         st.markdown("### 🚀 Execute Tool")
         
+        # Get tool info for the selected tool
+        tool_info = MCP_TOOLS.get(selected_tool, {})
+        
         col1, col2, col3 = st.columns([3, 1, 1])
         
         with col1:
             if st.button("▶️ Execute Tool", type="primary", use_container_width=True):
                 # Validate parameters
-                tool_info = MCP_TOOLS[selected_tool]
                 required_params = tool_info.get("params", {})
                 
                 missing_params = []
@@ -779,7 +779,7 @@ Features: Intent Analysis, Query Generation, Business Insights
                     st.error(f"❌ Missing required parameters: {', '.join(missing_params)}")
                 else:
                     # Execute the tool
-                    with st.spinner(f"🤖 Executing {tool_info['name']}..."):
+                    with st.spinner(f"🤖 Executing {tool_info.get('name', 'tool')}..."):
                         try:
                             # Run async tool execution
                             loop = asyncio.new_event_loop()
@@ -793,7 +793,7 @@ Features: Intent Analysis, Query Generation, Business Insights
                             execution_record = {
                                 "timestamp": datetime.now(),
                                 "tool": selected_tool,
-                                "tool_name": tool_info["name"],
+                                "tool_name": tool_info.get("name", "Unknown Tool"),
                                 "parameters": parameters,
                                 "result": result
                             }
@@ -823,24 +823,28 @@ Features: Intent Analysis, Query Generation, Business Insights
         st.markdown("---")
         st.markdown("### 📚 Recent Executions")
         
-        # Show last 3 executions
+        # Show last 3 executions in simple format
         for i, record in enumerate(reversed(st.session_state.execution_history[-3:])):
-            with st.expander(f"🕒 {record['timestamp'].strftime('%H:%M:%S')} - {record['tool_name']}"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("**Parameters:**")
-                    st.json(record["parameters"])
-                
-                with col2:
-                    st.markdown("**Status:**")
-                    status = record["result"].get("status", "unknown")
-                    emoji = "✅" if status == "success" else "❌"
-                    st.write(f"{emoji} {status}")
-                
-                if st.button(f"🔄 Re-execute", key=f"rerun_{i}"):
+            st.markdown(f"#### 🕒 {record['timestamp'].strftime('%H:%M:%S')} - {record['tool_name']}")
+            
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            with col1:
+                st.markdown("**Parameters:**")
+                st.json(record["parameters"])
+            
+            with col2:
+                st.markdown("**Status:**")
+                status = record["result"].get("status", "unknown")
+                emoji = "✅" if status == "success" else "❌"
+                st.write(f"{emoji} {status}")
+            
+            with col3:
+                if st.button(f"🔄 Re-run", key=f"rerun_{i}"):
                     st.session_state.selected_tool = record["tool"]
                     st.rerun()
+            
+            st.markdown("---")
 
 if __name__ == "__main__":
     # App info
