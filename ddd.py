@@ -1,33 +1,40 @@
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+import httpx
 
-import streamlit as st
-import requests
-import uuid
+router = APIRouter()
+MCP_URL = "http://localhost:8000/mcp/"
 
-API_URL = "http://localhost:8081/chat"
+class CypherRequest(BaseModel):
+    query: str
+    params: dict = {}
 
-st.set_page_config(page_title="Neo4j LLM Agent", page_icon="🧠")
-st.title("🧠 Neo4j + LangGraph + Cortex Chat")
+@router.post("/cypher/read")
+async def read_cypher(request: CypherRequest):
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(f"{MCP_URL}read_neo4j_cypher", json=request.dict())
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+@router.post("/cypher/write")
+async def write_cypher(request: CypherRequest):
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(f"{MCP_URL}write_neo4j_cypher", json=request.dict())
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
-with st.form("chat_form", clear_on_submit=True):
-    user_input = st.text_input("Ask your question:", placeholder="e.g. How many nodes are there?")
-    submitted = st.form_submit_button("Send")
-
-if submitted and user_input:
-    session_id = str(uuid.uuid4())
-    response = requests.post(API_URL, json={"question": user_input, "session_id": session_id})
-    if response.status_code == 200:
-        result = response.json().get("answer", "No response.")
-        st.session_state.messages.append(("user", user_input))
-        st.session_state.messages.append(("agent", result))
-    else:
-        st.error("Something went wrong: " + response.text)
-
-st.divider()
-for role, message in reversed(st.session_state.messages):
-    if role == "user":
-        st.markdown(f"🧑 **You:** {message}")
-    else:
-        st.markdown(f"🤖 **Agent:** {message}")
+@router.get("/schema")
+async def get_schema():
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(f"{MCP_URL}get_neo4j_schema")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=500, detail=str(e))
