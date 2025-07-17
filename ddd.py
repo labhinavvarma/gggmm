@@ -4,10 +4,10 @@ from pydantic import BaseModel
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableLambda
 
-# Suppress InsecureRequestWarning for dev
+# Suppress insecure HTTPS warnings for local/dev
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- Agent state (required for LangGraph) ---
+# --------------- Agent State Schema ---------------
 class AgentState(BaseModel):
     question: str
     session_id: str
@@ -16,35 +16,89 @@ class AgentState(BaseModel):
     trace: str = ""
     answer: str = ""
 
-# --- Cortex LLM API configuration ---
-API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-MODEL = "llama3.1-70b"
+# --------------- Upgraded System Prompt ---------------
 SYS_MSG = """
-You are an AI agent that helps users interact with a Neo4j database using MCP tools.
-Use only the following tools, choosing the best one based on the user's request:
+You are an expert AI assistant that helps users query and manage a Neo4j database by selecting and using one of three MCP tools. Choose the most appropriate tool and generate the correct Cypher query or action.
 
 TOOL DESCRIPTIONS:
-- read_neo4j_cypher: For all read-only Cypher queries (MATCH, RETURN, count, etc).
-- write_neo4j_cypher: For creating, updating, or deleting nodes/relationships.
-- get_neo4j_schema: For requests about graph structure, schema, labels, or relationship types.
+- read_neo4j_cypher:
+    - Use for all read-only graph queries: exploring data, finding nodes/relationships, aggregation, reporting, analysis, counting.
+    - Only run safe queries (MATCH, RETURN, WHERE, OPTIONAL MATCH, etc).
+    - NEVER use this tool for CREATE, UPDATE, DELETE, SET, or any modification.
+    - Returns a list of matching nodes, relationships, or computed values.
 
-EXAMPLES:
+- write_neo4j_cypher:
+    - Use ONLY for write queries: CREATE, MERGE, SET, DELETE, REMOVE, or modifying properties or structure.
+    - Use to create nodes/edges, update, or delete data.
+    - NEVER use this for data retrieval only.
+    - Returns a confirmation that the action was executed.
+
+- get_neo4j_schema:
+    - Use when the user asks about structure, schema, labels, relationship types, available node kinds, or properties.
+    - Returns a detailed schema graph, including node labels, relationship types, and property keys.
+
+IMPORTANT GUIDELINES:
+- ALWAYS output your reasoning and then the tool and Cypher query (if any).
+- If the user requests the number of nodes and the result is unexpectedly low, try the admin-level count as a fallback:
+    CALL db.stats.retrieve('GRAPH COUNTS') YIELD data RETURN data['NodeCount'] AS node_count
+- If the user asks for schema, always use get_neo4j_schema.
+- For ambiguous requests, ask clarifying questions or choose the safest tool.
+
+FEW-SHOT EXAMPLES:
+
 User: How many nodes are in the graph?
 Tool: read_neo4j_cypher
 Query: MATCH (n) RETURN count(n)
+
+User: Give me the true node count (admin)
+Tool: read_neo4j_cypher
+Query: CALL db.stats.retrieve('GRAPH COUNTS') YIELD data RETURN data['NodeCount'] AS node_count
+
+User: List all Person nodes
+Tool: read_neo4j_cypher
+Query: MATCH (n:Person) RETURN n
+
+User: Show the schema of the database
+Tool: get_neo4j_schema
 
 User: Create a Person node named Alice
 Tool: write_neo4j_cypher
 Query: CREATE (:Person {name: 'Alice'})
 
-User: Show me the schema of the graph
+User: Update all Person nodes to set 'active' to true
+Tool: write_neo4j_cypher
+Query: MATCH (n:Person) SET n.active = true
+
+User: Delete all nodes with label Temp
+Tool: write_neo4j_cypher
+Query: MATCH (n:Temp) DETACH DELETE n
+
+User: What relationships exist between Employee and Department?
 Tool: get_neo4j_schema
 
-Always output your reasoning, then the tool name and the Cypher query (if needed).
+User: I want to change Bob's email
+Tool: write_neo4j_cypher
+Query: MATCH (n:Person {name: 'Bob'}) SET n.email = 'new@example.com'
+
+User: What properties does a Project node have?
+Tool: get_neo4j_schema
+
+User: Remove the "retired" property from all Employee nodes
+Tool: write_neo4j_cypher
+Query: MATCH (e:Employee) REMOVE e.retired
+
+ERROR CASES:
+- If the query seems ambiguous or unsafe, clarify or refuse with an explanation.
+- NEVER run write queries using read_neo4j_cypher.
+
+ALWAYS explain your choice of tool before outputting the tool and Cypher.
 """
 
-# --- Cortex LLM API interaction ---
+# --------------- Cortex LLM API Config ---------------
+API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+MODEL = "llama3.1-70b"
+
 def cortex_llm(prompt: str, session_id: str) -> str:
     headers = {
         "Authorization": f'Snowflake Token="{API_KEY}"',
@@ -68,7 +122,6 @@ def cortex_llm(prompt: str, session_id: str) -> str:
     resp = requests.post(API_URL, headers=headers, json=payload, verify=False)
     return resp.text.partition("end_of_stream")[0].strip()
 
-# --- LLM output parsing: extract tool, query, and trace ---
 def parse_llm_output(llm_output):
     import re
     trace = llm_output.strip()
@@ -82,12 +135,9 @@ def parse_llm_output(llm_output):
         query = query_match.group(1).strip()
     return tool, query, trace
 
-# --- LangGraph nodes ---
+# --------------- LangGraph Nodes ---------------
 
 def select_tool_node(state: AgentState) -> dict:
-    """
-    LLM chooses which MCP tool to use and what Cypher query to run.
-    """
     llm_output = cortex_llm(state.question, state.session_id)
     tool, query, trace = parse_llm_output(llm_output)
     return {
@@ -100,28 +150,69 @@ def select_tool_node(state: AgentState) -> dict:
     }
 
 def execute_tool_node(state: AgentState) -> dict:
-    """
-    Executes the tool selected by LLM, gets the result from FastAPI MCP server.
-    """
     tool = state.tool
     query = state.query
     trace = state.trace
     answer = ""
     valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
     try:
         if tool not in valid_tools:
             answer = f"⚠️ MCP tool not recognized: {tool}"
         elif tool == "get_neo4j_schema":
-            # This endpoint is POST but takes no body
             result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers)
             answer = result.json() if result.ok else result.text
-        elif tool in ("read_neo4j_cypher", "write_neo4j_cypher"):
+
+        elif tool == "read_neo4j_cypher":
+            # Node count fallback logic
+            node_count_query = (
+                query.strip().lower() == "match (n) return count(n)"
+                or query.strip().lower() == "match (n) return count(n) as node_count"
+            )
             data = {"query": query, "params": {}}
-            result = requests.post(f"http://localhost:8000/{tool}", json=data, headers=headers)
+            result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers)
+            if node_count_query:
+                try:
+                    rjson = result.json() if result.ok else {}
+                    reported_count = None
+                    if isinstance(rjson, list) and rjson:
+                        first_row = rjson[0]
+                        if "count(n)" in first_row:
+                            reported_count = int(first_row["count(n)"])
+                        elif "node_count" in first_row:
+                            reported_count = int(first_row["node_count"])
+                    # Fallback if count seems low
+                    if reported_count is not None and reported_count < 200:
+                        alt_data = {"query": "CALL db.stats.retrieve('GRAPH COUNTS') YIELD data RETURN data['NodeCount'] AS node_count", "params": {}}
+                        alt_result = requests.post("http://localhost:8000/read_neo4j_cypher", json=alt_data, headers=headers)
+                        alt_json = alt_result.json() if alt_result.ok else {}
+                        alt_count = None
+                        if isinstance(alt_json, list) and alt_json:
+                            alt_row = alt_json[0]
+                            if "node_count" in alt_row:
+                                alt_count = int(alt_row["node_count"])
+                        answer = {
+                            "Simple MATCH count(n)": reported_count,
+                            "Admin/Stats NodeCount": alt_count,
+                            "Raw results": {"MATCH": rjson, "ADMIN": alt_json},
+                            "note": "Tried fallback admin node count as result seemed low."
+                        }
+                    else:
+                        answer = rjson
+                except Exception as exc:
+                    answer = {"error": "Could not parse count result", "detail": str(exc)}
+            else:
+                answer = result.json() if result.ok else result.text
+
+        elif tool == "write_neo4j_cypher":
+            data = {"query": query, "params": {}}
+            result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers)
             answer = result.json() if result.ok else result.text
+
         else:
             answer = f"Unknown tool: {tool}"
+
     except Exception as e:
         answer = f"⚠️ MCP execution failed: {str(e)}"
     return {
@@ -133,7 +224,8 @@ def execute_tool_node(state: AgentState) -> dict:
         "answer": answer
     }
 
-# --- Build and compile the LangGraph workflow ---
+# --------------- Build LangGraph Agent ---------------
+
 def build_agent():
     workflow = StateGraph(state_schema=AgentState)
     workflow.add_node("select_tool", RunnableLambda(select_tool_node))
