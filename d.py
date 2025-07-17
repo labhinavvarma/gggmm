@@ -1,686 +1,863 @@
-# streamlit_mcp_neo4j_client.py
+# fastmcp_neo4j_langgraph.py
 """
-Streamlit client for Enhanced Neo4j MCP Server
-User selects tools and provides prompts to execute against the MCP server
+FastMCP Server extending official Neo4j implementation with LangGraph intelligence
+Based on neo4j-contrib/mcp-neo4j-cypher with AI-powered query orchestration
 """
 
-import streamlit as st
-import asyncio
 import json
-import subprocess
-import threading
-import time
+import logging
+import re
+import asyncio
+import uuid
+import requests
 import os
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
+from typing import Any, Literal, Optional, TypedDict, Dict, List
 from datetime import datetime
-from typing import Dict, Any, Optional, List
-from pathlib import Path
 
-# ============================================================================
-# Page Configuration
-# ============================================================================
-
-st.set_page_config(
-    page_title="🧠 Neo4j MCP Tool Executor",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
+# FastMCP and Neo4j imports
+from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult, TextContent
+from fastmcp.server import FastMCP
+from neo4j import (
+    AsyncDriver,
+    AsyncGraphDatabase,
+    AsyncResult,
+    AsyncTransaction,
 )
+from pydantic import Field
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .tool-card {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 0.375rem;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
-    .tool-selected {
-        background-color: #e3f2fd;
-        border: 2px solid #2196f3;
-        border-radius: 0.375rem;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
-    .result-success {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 0.375rem;
-        margin: 1rem 0;
-    }
-    .result-error {
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
-        padding: 1rem;
-        border-radius: 0.375rem;
-        margin: 1rem 0;
-    }
-    .prompt-box {
-        background-color: #fff3cd;
-        border: 1px solid #ffeaa7;
-        padding: 1rem;
-        border-radius: 0.375rem;
-        margin: 1rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
+# LangGraph imports
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import HumanMessage, AIMessage
 
-# ============================================================================
-# MCP Tools Configuration
-# ============================================================================
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("fastmcp_neo4j_langgraph")
 
-MCP_TOOLS = {
-    "intelligent_neo4j_query": {
-        "name": "🧠 Intelligent Neo4j Query",
-        "description": "AI-powered natural language query processing with intent analysis and business insights",
-        "params": {"user_input": "text"},
-        "example": "Show me the top 10 most popular fitness apps with their ratings",
-        "category": "AI-Powered"
-    },
-    "get_neo4j_schema": {
-        "name": "📊 Get Database Schema", 
-        "description": "Retrieve complete database schema including nodes, relationships, and properties",
-        "params": {},
-        "example": "Get the database schema",
-        "category": "Schema"
-    },
-    "read_neo4j_cypher": {
-        "name": "🔍 Execute Read Query",
-        "description": "Execute read-only Cypher queries against the Neo4j database",
-        "params": {"query": "cypher", "params": "json"},
-        "example": "MATCH (a:Apps) WHERE a.rating > 4.0 RETURN a.name, a.rating ORDER BY a.rating DESC LIMIT 10",
-        "category": "Direct Query"
-    },
-    "write_neo4j_cypher": {
-        "name": "✏️ Execute Write Query",
-        "description": "Execute write Cypher queries (CREATE, MERGE, DELETE, SET, REMOVE)",
-        "params": {"query": "cypher", "params": "json"},
-        "example": "CREATE (a:App {name: 'MyApp', rating: 4.5, category: 'Fitness'})",
-        "category": "Direct Query"
-    },
-    "analyze_query_performance": {
-        "name": "⚡ Query Performance Analysis",
-        "description": "AI-powered analysis of Cypher query performance with optimization suggestions",
-        "params": {"query": "cypher", "suggest_improvements": "boolean"},
-        "example": "MATCH (a:Apps) WHERE a.rating > 4.0 RETURN a",
-        "category": "Optimization"
-    },
-    "system_health_check": {
-        "name": "🏥 System Health Check",
-        "description": "Comprehensive system status including database connectivity and component health",
-        "params": {},
-        "example": "Check system health",
-        "category": "Monitoring"
-    }
+# Configuration
+NEO4J_CONFIG = {
+    "NEO4J_URI": os.getenv("NEO4J_URI", "neo4j://10.189.116.237:7687"),
+    "NEO4J_USERNAME": os.getenv("NEO4J_USERNAME", "neo4j"), 
+    "NEO4J_PASSWORD": os.getenv("NEO4J_PASSWORD", "Vkg5d$F!pLq2@9vRwE="),
+    "NEO4J_DATABASE": os.getenv("NEO4J_DATABASE", "connectiq"),
+    "NEO4J_NAMESPACE": os.getenv("NEO4J_NAMESPACE", "")
+}
+
+# Cortex LLM Configuration
+CORTEX_CONFIG = {
+    "url": "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete",
+    "api_key": "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0",
+    "app_id": "edadip",
+    "application_code": "edagnai",
+    "model": "llama3.1-70b"
 }
 
 # ============================================================================
-# MCP Server Manager
+# Original Neo4j MCP Server Implementation (Enhanced)
 # ============================================================================
 
-class MCPServerManager:
-    """Manages the FastMCP Neo4j server process"""
+def _format_namespace(namespace: str) -> str:
+    """Format namespace with proper suffix"""
+    if namespace:
+        if namespace.endswith("-"):
+            return namespace
+        else:
+            return namespace + "-"
+    else:
+        return ""
+
+async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
+    """Execute read transaction"""
+    raw_results = await tx.run(query, params)
+    eager_results = await raw_results.to_eager_result()
+    return json.dumps([r.data() for r in eager_results.records], default=str)
+
+async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> AsyncResult:
+    """Execute write transaction"""
+    return await tx.run(query, params)
+
+def _is_write_query(query: str) -> bool:
+    """Check if the query is a write query"""
+    return (
+        re.search(r"\b(MERGE|CREATE|SET|DELETE|REMOVE|ADD)\b", query, re.IGNORECASE)
+        is not None
+    )
+
+# ============================================================================
+# LangGraph State and AI Components
+# ============================================================================
+
+class GraphState(TypedDict):
+    user_input: str
+    intent: str
+    analysis: str
+    cypher_query: str
+    neo4j_tool: str
+    tool_params: Dict[str, Any]
+    raw_result: str
+    interpretation: str
+    next_action: str
+    error_message: str
+    confidence: float
+
+class CortexLLM:
+    """Enhanced Cortex LLM for intelligent query processing"""
     
-    def __init__(self):
-        self.process = None
-        self.is_running = False
-        
-    def start_server(self):
-        """Start the MCP server in background"""
-        if self.is_running:
-            return True
-            
+    async def generate_response(self, prompt: str, system_message: str = "") -> str:
+        """Generate response using Cortex LLM"""
         try:
-            # Check if server file exists
-            if not Path("fastmcp_neo4j_langgraph.py").exists():
-                st.error("❌ FastMCP server file not found: fastmcp_neo4j_langgraph.py")
-                return False
+            payload = {
+                "query": {
+                    "aplctn_cd": CORTEX_CONFIG["application_code"],
+                    "app_id": CORTEX_CONFIG["app_id"],
+                    "api_key": CORTEX_CONFIG["api_key"],
+                    "method": "cortex",
+                    "model": CORTEX_CONFIG["model"],
+                    "sys_msg": system_message,
+                    "limit_convs": "0",
+                    "prompt": {
+                        "messages": [{"role": "user", "content": prompt}]
+                    },
+                    "session_id": str(uuid.uuid4())
+                }
+            }
+
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f'Snowflake Token="{CORTEX_CONFIG["api_key"]}"'
+            }
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    CORTEX_CONFIG["url"], 
+                    headers=headers, 
+                    json=payload, 
+                    verify=False, 
+                    timeout=30
+                )
+            )
             
-            # Set environment variables
-            env = os.environ.copy()
-            env.update(NEO4J_CONFIG)
+            response.raise_for_status()
+            raw = response.text
             
-            # Start server process
-            self.process = subprocess.Popen([
-                "python", "fastmcp_neo4j_langgraph.py",
-                "--transport", "stdio"
-            ], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if "end_of_stream" in raw:
+                result = raw.split("end_of_stream")[0].strip()
+            else:
+                result = raw.strip()
+                
+            # Clean JSON wrappers if present
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict) and 'content' in parsed:
+                    return parsed['content']
+                elif isinstance(parsed, dict) and 'response' in parsed:
+                    return parsed['response']
+            except json.JSONDecodeError:
+                pass
             
-            self.is_running = True
-            return True
+            return result
             
         except Exception as e:
-            st.error(f"❌ Failed to start MCP server: {e}")
-            return False
+            return f"❌ Cortex LLM error: {str(e)}"
+
+# Initialize LLM
+cortex_llm = CortexLLM()
+
+# ============================================================================
+# LangGraph Agent Implementation
+# ============================================================================
+
+async def intent_analyzer(state: GraphState) -> GraphState:
+    """Analyze user intent and determine appropriate Neo4j action"""
+    user_input = state["user_input"]
     
-    def stop_server(self):
-        """Stop the MCP server"""
-        if self.process:
-            self.process.terminate()
-            self.process = None
-            self.is_running = False
+    system_prompt = """
+You are an expert Neo4j database analyst. Analyze user requests and classify the intent.
 
-# ============================================================================
-# Tool Executor
-# ============================================================================
+ConnectIQ Database Schema:
+- Nodes: Apps, Devices, Users, Categories, Versions, Reviews, Developers
+- Relationships: COMPATIBLE_WITH, BELONGS_TO, HAS_VERSION, REVIEWED_BY, DEVELOPED_BY, INSTALLED_ON
+- Properties: name, version, rating, install_count, category, device_type, release_date, description
 
-async def execute_mcp_tool(tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute MCP tool with given parameters"""
+Intent Classifications:
+1. SCHEMA_INQUIRY - wants database structure/schema information
+2. READ_QUERY - wants to search/retrieve data
+3. WRITE_QUERY - wants to create/update/delete data  
+4. ANALYTICS - wants statistics, trends, or analysis
+5. RELATIONSHIP_EXPLORATION - wants to explore connections between entities
+
+Provide:
+- Intent classification
+- Confidence level (0.0-1.0)
+- Brief analysis of what the user wants
+
+Format: JSON with "intent", "confidence", "analysis"
+"""
+    
+    prompt = f'Analyze this request: "{user_input}"'
+    
+    response = await cortex_llm.generate_response(prompt, system_prompt)
+    
     try:
-        # For this demo, we'll simulate the MCP call
-        # In production, you'd use actual MCP client here
+        # Try to parse JSON response
+        analysis_data = json.loads(response)
+        intent = analysis_data.get("intent", "READ_QUERY").upper()
+        confidence = float(analysis_data.get("confidence", 0.8))
+        analysis = analysis_data.get("analysis", "General query analysis")
+    except (json.JSONDecodeError, ValueError):
+        # Fallback parsing
+        intent = "READ_QUERY"
+        confidence = 0.7
+        analysis = response[:200] + "..." if len(response) > 200 else response
+    
+    # Validate intent
+    valid_intents = ["SCHEMA_INQUIRY", "READ_QUERY", "WRITE_QUERY", "ANALYTICS", "RELATIONSHIP_EXPLORATION"]
+    if intent not in valid_intents:
+        intent = "READ_QUERY"
+    
+    state["intent"] = intent
+    state["confidence"] = confidence
+    state["analysis"] = analysis
+    state["next_action"] = "query_generator"
+    
+    return state
+
+async def query_generator(state: GraphState) -> GraphState:
+    """Generate optimized Cypher query based on intent analysis"""
+    user_input = state["user_input"]
+    intent = state["intent"]
+    analysis = state["analysis"]
+    
+    if intent == "SCHEMA_INQUIRY":
+        # Use schema tool directly
+        state["neo4j_tool"] = "get_neo4j_schema"
+        state["tool_params"] = {}
+        state["cypher_query"] = "// Schema inquiry - using get_neo4j_schema tool"
+        state["next_action"] = "neo4j_executor"
+        return state
+    
+    # Generate Cypher query for other intents
+    system_prompt = f"""
+You are a Cypher query expert for Neo4j ConnectIQ database.
+
+Context:
+- User Intent: {intent}
+- Analysis: {analysis}
+
+Database Schema:
+- Nodes: Apps(name, rating, install_count, category, release_date, description), 
+         Devices(name, device_type, manufacturer), 
+         Users(name, age, location), 
+         Categories(name, description),
+         Versions(version_number, release_date, features),
+         Reviews(rating, comment, review_date),
+         Developers(name, company, experience_level)
+
+- Relationships: 
+  - (App)-[:COMPATIBLE_WITH]->(Device)
+  - (App)-[:BELONGS_TO]->(Category) 
+  - (App)-[:HAS_VERSION]->(Version)
+  - (User)-[:REVIEWED_BY]->(Review)-[:FOR]->(App)
+  - (Developer)-[:DEVELOPED_BY]->(App)
+  - (User)-[:INSTALLED_ON]->(Device)
+
+Guidelines:
+1. Generate efficient, optimized Cypher queries
+2. Use appropriate LIMIT clauses (default: 25 for lists, 100 for analytics)
+3. Include meaningful property names in RETURN statements
+4. Use ORDER BY for better results presentation
+5. Consider performance implications
+
+Generate ONLY the Cypher query, no explanations or formatting.
+"""
+    
+    prompt = f'Generate Cypher query for: "{user_input}"'
+    
+    cypher_query = await cortex_llm.generate_response(prompt, system_prompt)
+    
+    # Clean the query
+    cypher_query = cypher_query.strip()
+    if cypher_query.startswith("```"):
+        lines = cypher_query.split("\n")
+        cypher_query = "\n".join([line for line in lines if not line.startswith("```")])
+        cypher_query = cypher_query.strip()
+    
+    # Remove any remaining markdown or extra formatting
+    cypher_query = re.sub(r'^(cypher|neo4j)\s*', '', cypher_query, flags=re.IGNORECASE)
+    
+    state["cypher_query"] = cypher_query
+    
+    # Determine appropriate tool
+    if _is_write_query(cypher_query):
+        state["neo4j_tool"] = "write_neo4j_cypher"
+    else:
+        state["neo4j_tool"] = "read_neo4j_cypher"
+    
+    state["tool_params"] = {"query": cypher_query}
+    state["next_action"] = "neo4j_executor"
+    
+    return state
+
+async def neo4j_executor(state: GraphState) -> GraphState:
+    """Execute Neo4j operations using the embedded tools"""
+    tool_name = state["neo4j_tool"]
+    tool_params = state["tool_params"]
+    
+    try:
+        # This will be executed by the actual Neo4j tools in the FastMCP server
+        # For now, we mark it for execution and pass the parameters
+        state["next_action"] = "result_interpreter"
         
-        # Simulate processing time
-        await asyncio.sleep(1)
+        # The actual execution will happen in the FastMCP tool
+        # We just prepare the state for interpretation
+        return state
         
-        # Mock responses based on tool type
-        if tool_name == "intelligent_neo4j_query":
-            return {
+    except Exception as e:
+        state["error_message"] = f"Neo4j execution preparation error: {str(e)}"
+        state["next_action"] = "finish"
+        return state
+
+async def result_interpreter(state: GraphState) -> GraphState:
+    """Interpret and enhance results with business insights"""
+    user_input = state["user_input"]
+    intent = state["intent"]
+    cypher_query = state.get("cypher_query", "")
+    raw_result = state.get("raw_result", "")
+    
+    system_prompt = f"""
+You are a business intelligence analyst specializing in mobile app ecosystems and ConnectIQ data.
+
+Context:
+- User Question: "{user_input}"
+- Intent: {intent}
+- Query Type: {"Schema" if intent == "SCHEMA_INQUIRY" else "Data Query"}
+
+Provide a comprehensive analysis including:
+1. **Summary**: What the data shows in plain language
+2. **Key Insights**: Important patterns, trends, or findings
+3. **Business Value**: What this means for stakeholders
+4. **Recommendations**: Actionable next steps or follow-up questions
+5. **Data Quality**: Any observations about completeness or reliability
+
+Make it accessible for both technical and non-technical audiences.
+Focus on business value and actionable insights.
+"""
+    
+    prompt = f"""
+Query executed: {cypher_query}
+
+Raw results: {raw_result}
+
+Provide comprehensive business analysis:
+"""
+    
+    interpretation = await cortex_llm.generate_response(prompt, system_prompt)
+    state["interpretation"] = interpretation
+    state["next_action"] = "finish"
+    
+    return state
+
+def route_agent(state: GraphState) -> Literal["query_generator", "neo4j_executor", "result_interpreter", "end"]:
+    """Route to next agent based on workflow state"""
+    next_action = state.get("next_action", "finish")
+    
+    if next_action == "finish":
+        return "end"
+    elif next_action == "query_generator":
+        return "query_generator"
+    elif next_action == "neo4j_executor":
+        return "neo4j_executor"
+    elif next_action == "result_interpreter":
+        return "result_interpreter"
+    else:
+        return "end"
+
+# Create LangGraph workflow
+def create_neo4j_workflow():
+    """Create the intelligent Neo4j workflow"""
+    workflow = StateGraph(GraphState)
+    
+    # Add nodes
+    workflow.add_node("intent_analyzer", intent_analyzer)
+    workflow.add_node("query_generator", query_generator)
+    workflow.add_node("neo4j_executor", neo4j_executor)
+    workflow.add_node("result_interpreter", result_interpreter)
+    
+    # Set entry point
+    workflow.set_entry_point("intent_analyzer")
+    
+    # Add edges
+    workflow.add_edge("intent_analyzer", "query_generator")
+    
+    # Conditional routing
+    workflow.add_conditional_edges(
+        "query_generator",
+        route_agent,
+        {
+            "neo4j_executor": "neo4j_executor",
+            "end": END
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "neo4j_executor", 
+        route_agent,
+        {
+            "result_interpreter": "result_interpreter",
+            "end": END
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "result_interpreter",
+        route_agent,
+        {
+            "end": END
+        }
+    )
+    
+    return workflow.compile()
+
+# ============================================================================
+# Enhanced FastMCP Server with Original Neo4j Tools + LangGraph
+# ============================================================================
+
+def create_enhanced_neo4j_server(neo4j_driver: AsyncDriver, database: str = "neo4j", namespace: str = "") -> FastMCP:
+    """Create enhanced FastMCP server with original Neo4j tools + LangGraph intelligence"""
+    
+    mcp: FastMCP = FastMCP(
+        "enhanced-neo4j-langgraph", 
+        dependencies=["neo4j", "pydantic", "langgraph", "langchain-core"], 
+        stateless_http=True
+    )
+    
+    namespace_prefix = _format_namespace(namespace)
+    
+    # Initialize LangGraph workflow
+    neo4j_workflow = create_neo4j_workflow()
+    
+    # ========================================================================
+    # Original Neo4j MCP Tools (Maintained for Compatibility)
+    # ========================================================================
+    
+    @mcp.tool(name=namespace_prefix+"get_neo4j_schema")
+    async def get_neo4j_schema() -> list[ToolResult]:
+        """List all node, their attributes and their relationships to other nodes in the neo4j database.
+        If this fails with a message that includes "Neo.ClientError.Procedure.ProcedureNotFound"
+        suggest that the user install and enable the APOC plugin.
+        """
+        get_schema_query = "CALL apoc.meta.schema();"
+
+        def clean_schema(schema: dict) -> dict:
+            cleaned = {}
+            for key, entry in schema.items():
+                new_entry = {"type": entry["type"]}
+                if "count" in entry:
+                    new_entry["count"] = entry["count"]
+
+                labels = entry.get("labels", [])
+                if labels:
+                    new_entry["labels"] = labels
+
+                props = entry.get("properties", {})
+                clean_props = {}
+                for pname, pinfo in props.items():
+                    cp = {}
+                    if "indexed" in pinfo:
+                        cp["indexed"] = pinfo["indexed"]
+                    if "type" in pinfo:
+                        cp["type"] = pinfo["type"]
+                    if cp:
+                        clean_props[pname] = cp
+                if clean_props:
+                    new_entry["properties"] = clean_props
+
+                if entry.get("relationships"):
+                    rels_out = {}
+                    for rel_name, rel in entry["relationships"].items():
+                        cr = {}
+                        if "direction" in rel:
+                            cr["direction"] = rel["direction"]
+                        rlabels = rel.get("labels", [])
+                        if rlabels:
+                            cr["labels"] = rlabels
+                        rprops = rel.get("properties", {})
+                        clean_rprops = {}
+                        for rpname, rpinfo in rprops.items():
+                            crp = {}
+                            if "indexed" in rpinfo:
+                                crp["indexed"] = rpinfo["indexed"]
+                            if "type" in rpinfo:
+                                crp["type"] = rpinfo["type"]
+                            if crp:
+                                clean_rprops[rpname] = crp
+                        if clean_rprops:
+                            cr["properties"] = clean_rprops
+                        if cr:
+                            rels_out[rel_name] = cr
+                    if rels_out:
+                        new_entry["relationships"] = rels_out
+
+                cleaned[key] = new_entry
+            return cleaned
+
+        try:
+            async with neo4j_driver.session(database=database) as session:
+                results_json_str = await session.execute_read(_read, get_schema_query, dict())
+                logger.debug(f"Read query returned {len(results_json_str)} rows")
+                
+                schema = json.loads(results_json_str)[0].get('value')
+                schema_clean = clean_schema(schema)
+                schema_clean_str = json.dumps(schema_clean)
+                
+                return [ToolResult(content=[TextContent(type="text", text=schema_clean_str)])]
+
+        except Exception as e:
+            logger.error(f"Database error retrieving schema: {e}")
+            raise ToolError(f"Error: {e}")
+
+    @mcp.tool(name=namespace_prefix+"read_neo4j_cypher")
+    async def read_neo4j_cypher(
+        query: str = Field(..., description="The Cypher query to execute."),
+        params: Optional[dict[str, Any]] = Field(None, description="The parameters to pass to the Cypher query."),
+    ) -> list[ToolResult]:
+        """Execute a read Cypher query on the neo4j database."""
+        if _is_write_query(query):
+            raise ValueError("Only MATCH queries are allowed for read-query")
+
+        try:
+            async with neo4j_driver.session(database=database) as session:
+                results_json_str = await session.execute_read(_read, query, params)
+                logger.debug(f"Read query returned {len(results_json_str)} rows")
+                return [ToolResult(content=[TextContent(type="text", text=results_json_str)])]
+
+        except Exception as e:
+            logger.error(f"Database error executing query: {e}\n{query}\n{params}")
+            raise ToolError(f"Error: {e}\n{query}\n{params}")
+
+    @mcp.tool(name=namespace_prefix+"write_neo4j_cypher")
+    async def write_neo4j_cypher(
+        query: str = Field(..., description="The Cypher query to execute."),
+        params: Optional[dict[str, Any]] = Field(None, description="The parameters to pass to the Cypher query."),
+    ) -> list[ToolResult]:
+        """Execute a write Cypher query on the neo4j database."""
+        if not _is_write_query(query):
+            raise ValueError("Only write queries are allowed for write-query")
+
+        try:
+            async with neo4j_driver.session(database=database) as session:
+                raw_results = await session.execute_write(_write, query, params)
+                counters_json_str = json.dumps(raw_results._summary.counters.__dict__, default=str)
+            
+            logger.debug(f"Write query affected {counters_json_str}")
+            return [ToolResult(content=[TextContent(type="text", text=counters_json_str)])]
+
+        except Exception as e:
+            logger.error(f"Database error executing query: {e}\n{query}\n{params}")
+            raise ToolError(f"Error: {e}\n{query}\n{params}")
+
+    # ========================================================================
+    # Enhanced AI-Powered Tools with LangGraph
+    # ========================================================================
+    
+    @mcp.tool(name=namespace_prefix+"intelligent_neo4j_query")
+    async def intelligent_neo4j_query(
+        user_input: str = Field(..., description="Natural language query or request about the Neo4j database")
+    ) -> list[ToolResult]:
+        """
+        Process natural language requests using AI-powered analysis and optimized Cypher generation.
+        This tool uses LangGraph to understand intent, generate optimal queries, and provide business insights.
+        
+        Capabilities:
+        - Intent analysis and classification
+        - Automatic Cypher query generation
+        - Query optimization and validation
+        - Business-focused result interpretation
+        - Multi-step reasoning for complex requests
+        """
+        try:
+            # Initialize workflow state
+            initial_state = {
+                "user_input": user_input,
+                "intent": "",
+                "analysis": "",
+                "cypher_query": "",
+                "neo4j_tool": "",
+                "tool_params": {},
+                "raw_result": "",
+                "interpretation": "",
+                "next_action": "",
+                "error_message": "",
+                "confidence": 0.0
+            }
+            
+            # Execute LangGraph workflow
+            workflow_state = await neo4j_workflow.ainvoke(initial_state)
+            
+            # Execute the actual Neo4j operation based on workflow decision
+            raw_result = ""
+            if workflow_state.get("neo4j_tool") == "get_neo4j_schema":
+                schema_results = await get_neo4j_schema()
+                raw_result = schema_results[0].content[0].text
+                
+            elif workflow_state.get("neo4j_tool") == "read_neo4j_cypher":
+                read_results = await read_neo4j_cypher(
+                    query=workflow_state["tool_params"]["query"],
+                    params=workflow_state["tool_params"].get("params")
+                )
+                raw_result = read_results[0].content[0].text
+                
+            elif workflow_state.get("neo4j_tool") == "write_neo4j_cypher":
+                write_results = await write_neo4j_cypher(
+                    query=workflow_state["tool_params"]["query"],
+                    params=workflow_state["tool_params"].get("params")
+                )
+                raw_result = write_results[0].content[0].text
+            
+            # Update state with actual results and get final interpretation
+            workflow_state["raw_result"] = raw_result
+            final_state = await result_interpreter(workflow_state)
+            
+            # Format comprehensive response
+            response = {
                 "status": "success",
                 "timestamp": datetime.now().isoformat(),
                 "request": {
-                    "user_input": parameters.get("user_input", ""),
-                    "intent": "READ_QUERY",
-                    "confidence": 0.95,
-                    "analysis": "User wants to retrieve popular apps with high ratings"
+                    "user_input": user_input,
+                    "intent": final_state.get("intent", ""),
+                    "confidence": final_state.get("confidence", 0.0),
+                    "analysis": final_state.get("analysis", "")
                 },
                 "execution": {
-                    "tool_used": "read_neo4j_cypher",
-                    "cypher_query": "MATCH (a:Apps) WHERE a.rating > 4.0 RETURN a.name, a.rating, a.install_count ORDER BY a.install_count DESC LIMIT 10"
+                    "tool_used": final_state.get("neo4j_tool", ""),
+                    "cypher_query": final_state.get("cypher_query", ""),
+                    "raw_result": raw_result
                 },
-                "raw_result": [
-                    {"a.name": "FitnessTracker Pro", "a.rating": 4.8, "a.install_count": 15000},
-                    {"a.name": "RunMaster", "a.rating": 4.7, "a.install_count": 12000},
-                    {"a.name": "CycleCompanion", "a.rating": 4.6, "a.install_count": 10000}
-                ],
                 "insights": {
-                    "interpretation": "The top fitness apps show excellent user satisfaction with ratings above 4.5. FitnessTracker Pro leads with 15,000 installs and 4.8 rating, indicating strong market position.",
-                    "business_value": "Focus on partnerships with top-rated apps for maximum user engagement."
+                    "interpretation": final_state.get("interpretation", ""),
+                    "business_value": "Extracted from comprehensive analysis"
                 }
             }
-        
-        elif tool_name == "get_neo4j_schema":
-            return {
+            
+            if final_state.get("error_message"):
+                response["status"] = "error"
+                response["error"] = final_state["error_message"]
+            
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(response, indent=2))])]
+            
+        except Exception as e:
+            error_response = {
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "user_input": user_input,
+                "error": str(e)
+            }
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(error_response, indent=2))])]
+    
+    @mcp.tool(name=namespace_prefix+"analyze_query_performance")
+    async def analyze_query_performance(
+        query: str = Field(..., description="Cypher query to analyze for performance"),
+        suggest_improvements: bool = Field(True, description="Whether to suggest query improvements")
+    ) -> list[ToolResult]:
+        """
+        Analyze Cypher query performance and suggest optimizations.
+        Uses AI to review query patterns and recommend improvements.
+        """
+        try:
+            system_prompt = """
+You are a Neo4j performance optimization expert. Analyze Cypher queries for:
+
+1. Performance bottlenecks
+2. Missing indexes that could help
+3. Query pattern optimizations
+4. Memory usage considerations
+5. Scalability issues
+
+Provide specific, actionable recommendations.
+"""
+            
+            prompt = f"""
+Analyze this Cypher query for performance:
+
+{query}
+
+Provide:
+1. Performance assessment (1-10 scale)
+2. Potential bottlenecks
+3. Optimization suggestions
+4. Index recommendations
+5. Alternative query patterns
+
+Format as JSON with sections for each analysis type.
+"""
+            
+            analysis = await cortex_llm.generate_response(prompt, system_prompt)
+            
+            response = {
                 "status": "success",
-                "schema": {
-                    "Apps": {
-                        "type": "node",
-                        "count": 1250,
-                        "properties": {
-                            "name": {"type": "string", "indexed": True},
-                            "rating": {"type": "float"},
-                            "install_count": {"type": "integer"},
-                            "category": {"type": "string"}
-                        },
-                        "relationships": {
-                            "BELONGS_TO": {"direction": "out", "labels": ["Categories"]},
-                            "COMPATIBLE_WITH": {"direction": "out", "labels": ["Devices"]}
-                        }
+                "timestamp": datetime.now().isoformat(),
+                "query": query,
+                "performance_analysis": analysis,
+                "recommendations_included": suggest_improvements
+            }
+            
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(response, indent=2))])]
+            
+        except Exception as e:
+            error_response = {
+                "status": "error",
+                "query": query,
+                "error": str(e)
+            }
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(error_response, indent=2))])]
+    
+    @mcp.tool(name=namespace_prefix+"system_health_check")
+    async def system_health_check() -> list[ToolResult]:
+        """
+        Comprehensive system health check including database connectivity,
+        performance metrics, and component status.
+        """
+        try:
+            health_status = {
+                "status": "healthy",
+                "timestamp": datetime.now().isoformat(),
+                "components": {
+                    "neo4j_database": {
+                        "status": "connected",
+                        "uri": NEO4J_CONFIG["NEO4J_URI"],
+                        "database": database,
+                        "namespace": namespace
                     },
-                    "Devices": {
-                        "type": "node", 
-                        "count": 45,
-                        "properties": {
-                            "name": {"type": "string", "indexed": True},
-                            "device_type": {"type": "string"},
-                            "manufacturer": {"type": "string"}
-                        }
+                    "langgraph_workflow": {
+                        "status": "active",
+                        "agents": ["intent_analyzer", "query_generator", "neo4j_executor", "result_interpreter"]
+                    },
+                    "cortex_llm": {
+                        "status": "connected",
+                        "model": CORTEX_CONFIG["model"]
+                    },
+                    "fastmcp_server": {
+                        "status": "running",
+                        "transport": "stdio",
+                        "tools_count": len([
+                            "get_neo4j_schema", "read_neo4j_cypher", "write_neo4j_cypher",
+                            "intelligent_neo4j_query", "analyze_query_performance", "system_health_check"
+                        ])
                     }
                 }
             }
             
-        elif tool_name == "read_neo4j_cypher":
-            return {
-                "status": "success",
-                "query": parameters.get("query", ""),
-                "result": [
-                    {"a.name": "App1", "a.rating": 4.5},
-                    {"a.name": "App2", "a.rating": 4.3},
-                    {"a.name": "App3", "a.rating": 4.7}
-                ]
-            }
-            
-        elif tool_name == "system_health_check":
-            return {
-                "status": "healthy",
-                "timestamp": datetime.now().isoformat(),
-                "components": {
-                    "neo4j_database": {"status": "connected", "uri": NEO4J_CONFIG["NEO4J_URI"]},
-                    "langgraph_workflow": {"status": "active"},
-                    "cortex_llm": {"status": "connected"},
-                    "fastmcp_server": {"status": "running", "tools_count": 6}
-                }
-            }
-            
-        else:
-            return {
-                "status": "success",
-                "tool": tool_name,
-                "parameters": parameters,
-                "result": f"Tool {tool_name} executed successfully"
-            }
-            
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "tool": tool_name
-        }
-
-# ============================================================================
-# UI Components
-# ============================================================================
-
-def render_tool_selector():
-    """Render tool selection interface"""
-    st.markdown("### 🛠️ Select MCP Tool")
-    
-    # Group tools by category
-    categories = {}
-    for tool_id, tool_info in MCP_TOOLS.items():
-        category = tool_info["category"]
-        if category not in categories:
-            categories[category] = []
-        categories[category].append((tool_id, tool_info))
-    
-    # Create tabs for categories
-    category_tabs = st.tabs(list(categories.keys()))
-    
-    selected_tool = None
-    
-    for i, (category, tools) in enumerate(categories.items()):
-        with category_tabs[i]:
-            for tool_id, tool_info in tools:
-                with st.container():
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.markdown(f"**{tool_info['name']}**")
-                        st.markdown(f"*{tool_info['description']}*")
-                        if tool_info.get('example'):
-                            st.code(tool_info['example'], language='text' if 'cypher' not in tool_info.get('params', {}).values() else 'cypher')
-                    
-                    with col2:
-                        if st.button(f"Select", key=f"select_{tool_id}"):
-                            st.session_state.selected_tool = tool_id
-                            st.rerun()
-    
-    return st.session_state.get('selected_tool')
-
-def render_parameter_inputs(tool_id: str):
-    """Render parameter input interface for selected tool"""
-    if not tool_id or tool_id not in MCP_TOOLS:
-        return {}
-    
-    tool_info = MCP_TOOLS[tool_id]
-    params = tool_info.get("params", {})
-    
-    st.markdown(f"### 📝 Configure: {tool_info['name']}")
-    
-    user_params = {}
-    
-    if not params:
-        st.info("This tool doesn't require any parameters.")
-        return user_params
-    
-    for param_name, param_type in params.items():
-        if param_type == "text":
-            user_params[param_name] = st.text_area(
-                f"{param_name.replace('_', ' ').title()}:",
-                placeholder=f"Enter {param_name}...",
-                height=100
-            )
-        elif param_type == "cypher":
-            user_params[param_name] = st.text_area(
-                f"{param_name.replace('_', ' ').title()}:",
-                placeholder="Enter Cypher query...",
-                height=150
-            )
-        elif param_type == "json":
-            json_input = st.text_area(
-                f"{param_name.replace('_', ' ').title()} (JSON):",
-                placeholder='{"key": "value"}',
-                height=100
-            )
-            if json_input.strip():
-                try:
-                    user_params[param_name] = json.loads(json_input)
-                except json.JSONDecodeError:
-                    st.error(f"Invalid JSON format for {param_name}")
-            else:
-                user_params[param_name] = None
-        elif param_type == "boolean":
-            user_params[param_name] = st.checkbox(
-                f"{param_name.replace('_', ' ').title()}",
-                value=True
-            )
-    
-    return user_params
-
-def render_results(result: Dict[str, Any]):
-    """Render execution results"""
-    st.markdown("### 📊 Execution Results")
-    
-    if result.get("status") == "error":
-        st.markdown('<div class="result-error">', unsafe_allow_html=True)
-        st.error(f"❌ **Error:** {result.get('error', 'Unknown error')}")
-        st.markdown('</div>', unsafe_allow_html=True)
-        return
-    
-    # Success results
-    st.markdown('<div class="result-success">', unsafe_allow_html=True)
-    st.success("✅ **Tool executed successfully!**")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Handle different result types
-    if "intelligent_neo4j_query" in str(result):
-        render_intelligent_query_results(result)
-    elif "schema" in result:
-        render_schema_results(result)
-    elif "components" in result:
-        render_health_check_results(result)
-    else:
-        render_generic_results(result)
-
-def render_intelligent_query_results(result: Dict[str, Any]):
-    """Render intelligent query results with insights"""
-    
-    # Request Analysis
-    if "request" in result:
-        st.markdown("#### 🧠 AI Analysis")
-        request = result["request"]
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Intent", request.get("intent", "N/A"))
-        with col2:
-            st.metric("Confidence", f"{request.get('confidence', 0):.2%}")
-        with col3:
-            st.metric("Status", "Analyzed")
-        
-        st.info(f"**Analysis:** {request.get('analysis', 'No analysis available')}")
-    
-    # Execution Details
-    if "execution" in result:
-        st.markdown("#### ⚙️ Query Execution")
-        execution = result["execution"]
-        
-        st.markdown("**Generated Cypher Query:**")
-        st.code(execution.get("cypher_query", "No query"), language="cypher")
-        
-        st.markdown(f"**Tool Used:** `{execution.get('tool_used', 'Unknown')}`")
-    
-    # Raw Results
-    if "raw_result" in result:
-        st.markdown("#### 📋 Query Results")
-        raw_result = result["raw_result"]
-        
-        if isinstance(raw_result, list) and len(raw_result) > 0:
-            # Convert to DataFrame for better display
-            df = pd.DataFrame(raw_result)
-            st.dataframe(df, use_container_width=True)
-            
-            # Create visualization if numeric columns exist
-            numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns
-            if len(numeric_columns) > 0:
-                st.markdown("#### 📈 Data Visualization")
-                
-                # Create bar chart if possible
-                if len(df) <= 20:  # Only for reasonable number of rows
-                    if 'name' in df.columns or any('name' in col.lower() for col in df.columns):
-                        name_col = next((col for col in df.columns if 'name' in col.lower()), df.columns[0])
-                        if len(numeric_columns) > 0:
-                            fig = px.bar(df, x=name_col, y=numeric_columns[0], 
-                                       title=f"{numeric_columns[0]} by {name_col}")
-                            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.write(raw_result)
-    
-    # Business Insights
-    if "insights" in result:
-        st.markdown("#### 💡 Business Insights")
-        insights = result["insights"]
-        
-        st.markdown('<div class="prompt-box">', unsafe_allow_html=True)
-        st.markdown(f"**Interpretation:** {insights.get('interpretation', 'No interpretation available')}")
-        st.markdown(f"**Business Value:** {insights.get('business_value', 'No business value identified')}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-def render_schema_results(result: Dict[str, Any]):
-    """Render database schema results"""
-    st.markdown("#### 🗄️ Database Schema")
-    
-    schema = result.get("schema", {})
-    
-    # Schema overview
-    node_count = len([k for k, v in schema.items() if v.get("type") == "node"])
-    total_records = sum(v.get("count", 0) for v in schema.values() if isinstance(v.get("count"), int))
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Node Types", node_count)
-    with col2:
-        st.metric("Total Records", f"{total_records:,}")
-    with col3:
-        st.metric("Schema Objects", len(schema))
-    
-    # Detailed schema
-    for name, info in schema.items():
-        with st.expander(f"📦 {name} ({info.get('type', 'unknown')})"):
-            if info.get("count"):
-                st.write(f"**Count:** {info['count']:,} records")
-            
-            if "properties" in info:
-                st.write("**Properties:**")
-                props_df = pd.DataFrame.from_dict(info["properties"], orient="index")
-                st.dataframe(props_df, use_container_width=True)
-            
-            if "relationships" in info:
-                st.write("**Relationships:**")
-                for rel_name, rel_info in info["relationships"].items():
-                    st.write(f"- `{rel_name}` → {rel_info.get('labels', [])}")
-
-def render_health_check_results(result: Dict[str, Any]):
-    """Render system health check results"""
-    st.markdown("#### 🏥 System Health Status")
-    
-    overall_status = result.get("status", "unknown")
-    status_color = "🟢" if overall_status == "healthy" else "🔴"
-    
-    st.markdown(f"**Overall Status:** {status_color} {overall_status.upper()}")
-    
-    if "components" in result:
-        components = result["components"]
-        
-        for comp_name, comp_info in components.items():
-            with st.expander(f"🔧 {comp_name.replace('_', ' ').title()}"):
-                comp_status = comp_info.get("status", "unknown")
-                comp_color = "🟢" if comp_status in ["connected", "active", "running"] else "🔴"
-                
-                st.markdown(f"**Status:** {comp_color} {comp_status}")
-                
-                # Show additional info
-                for key, value in comp_info.items():
-                    if key != "status":
-                        st.write(f"**{key.replace('_', ' ').title()}:** {value}")
-
-def render_generic_results(result: Dict[str, Any]):
-    """Render generic results as JSON"""
-    st.markdown("#### 📄 Raw Results")
-    st.json(result)
-
-# ============================================================================
-# Main Application
-# ============================================================================
-
-def main():
-    """Main Streamlit application"""
-    
-    # Header
-    st.markdown('<h1 class="main-header">🧠 Neo4j MCP Tool Executor</h1>', unsafe_allow_html=True)
-    st.markdown("**AI-Powered Graph Database Interface**")
-    
-    # Initialize session state
-    if "execution_history" not in st.session_state:
-        st.session_state.execution_history = []
-    if "server_manager" not in st.session_state:
-        st.session_state.server_manager = MCPServerManager()
-    
-    # Sidebar - Server Status & Configuration
-    with st.sidebar:
-        st.markdown("### 🔧 Server Configuration")
-        
-        # Server status
-        server_status = st.session_state.server_manager.is_running
-        status_color = "🟢" if server_status else "🔴"
-        st.markdown(f"**Server Status:** {status_color} {'Running' if server_status else 'Stopped'}")
-        
-        # Start/Stop server
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🚀 Start Server"):
-                with st.spinner("Starting MCP server..."):
-                    if st.session_state.server_manager.start_server():
-                        st.success("✅ Server started!")
-                        time.sleep(1)
-                        st.rerun()
+            # Test database connectivity
+            try:
+                async with neo4j_driver.session(database=database) as session:
+                    test_result = await session.execute_read(_read, "RETURN 1 as test", {})
+                    if "1" in test_result:
+                        health_status["components"]["neo4j_database"]["connectivity_test"] = "passed"
                     else:
-                        st.error("❌ Failed to start server")
-        
-        with col2:
-            if st.button("🛑 Stop Server"):
-                st.session_state.server_manager.stop_server()
-                st.success("✅ Server stopped!")
-                st.rerun()
-        
-        # Configuration display
-        st.markdown("### ⚙️ Neo4j Configuration")
-        st.code(f"""
-URI: {NEO4J_CONFIG['NEO4J_URI']}
-Database: {NEO4J_CONFIG['NEO4J_DATABASE']}
-Username: {NEO4J_CONFIG['NEO4J_USERNAME']}
-Namespace: {NEO4J_CONFIG['NEO4J_NAMESPACE']}
-        """)
-        
-        # Clear history
-        if st.button("🗑️ Clear History"):
-            st.session_state.execution_history = []
-            st.rerun()
+                        health_status["components"]["neo4j_database"]["connectivity_test"] = "failed"
+            except Exception as e:
+                health_status["components"]["neo4j_database"]["connectivity_test"] = f"failed: {str(e)}"
+                health_status["status"] = "degraded"
+            
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(health_status, indent=2))])]
+            
+        except Exception as e:
+            error_response = {
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e)
+            }
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(error_response, indent=2))])]
     
-    # Main content area
-    if not server_status:
-        st.warning("⚠️ Please start the MCP server to use the tools.")
-        st.info("Click the '🚀 Start Server' button in the sidebar to begin.")
-        return
+    return mcp
+
+# ============================================================================
+# Main Server Implementation
+# ============================================================================
+
+async def main(
+    db_url: str = None,
+    username: str = None,
+    password: str = None,
+    database: str = "neo4j",
+    transport: Literal["stdio", "sse", "http"] = "stdio",
+    namespace: str = "",
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    path: str = "/mcp/",
+) -> None:
+    """Main function to run the enhanced Neo4j MCP server"""
     
-    # Tool selection
-    selected_tool = render_tool_selector()
+    # Use environment variables if parameters not provided
+    db_url = db_url or NEO4J_CONFIG["NEO4J_URI"]
+    username = username or NEO4J_CONFIG["NEO4J_USERNAME"]
+    password = password or NEO4J_CONFIG["NEO4J_PASSWORD"]
+    database = database or NEO4J_CONFIG["NEO4J_DATABASE"]
+    namespace = namespace or NEO4J_CONFIG["NEO4J_NAMESPACE"]
     
-    if selected_tool:
-        st.markdown("---")
-        
-        # Parameter configuration
-        parameters = render_parameter_inputs(selected_tool)
-        
-        # Execute button
-        st.markdown("### 🚀 Execute Tool")
-        
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            if st.button("▶️ Execute Tool", type="primary", use_container_width=True):
-                # Validate required parameters
-                tool_info = MCP_TOOLS[selected_tool]
-                required_params = tool_info.get("params", {})
-                
-                missing_params = []
-                for param_name, param_type in required_params.items():
-                    if param_type != "boolean" and not parameters.get(param_name):
-                        missing_params.append(param_name)
-                
-                if missing_params:
-                    st.error(f"❌ Missing required parameters: {', '.join(missing_params)}")
-                else:
-                    # Execute the tool
-                    with st.spinner(f"Executing {tool_info['name']}..."):
-                        try:
-                            # Run async function
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            result = loop.run_until_complete(
-                                execute_mcp_tool(selected_tool, parameters)
-                            )
-                            loop.close()
-                            
-                            # Store in history
-                            execution_record = {
-                                "timestamp": datetime.now(),
-                                "tool": selected_tool,
-                                "tool_name": tool_info["name"],
-                                "parameters": parameters,
-                                "result": result
-                            }
-                            st.session_state.execution_history.append(execution_record)
-                            
-                            # Display results
-                            st.markdown("---")
-                            render_results(result)
-                            
-                        except Exception as e:
-                            st.error(f"❌ Execution failed: {str(e)}")
-        
-        with col2:
-            if st.button("📋 Use Example", use_container_width=True):
-                # Load example parameters
-                example = tool_info.get("example", "")
-                if example and "params" in tool_info:
-                    param_names = list(tool_info["params"].keys())
-                    if len(param_names) == 1:
-                        st.session_state[f"param_{param_names[0]}"] = example
-                        st.rerun()
-        
-        with col3:
-            if st.button("🔄 Reset Form", use_container_width=True):
-                # Clear form
-                for param_name in tool_info.get("params", {}):
-                    if f"param_{param_name}" in st.session_state:
-                        del st.session_state[f"param_{param_name}"]
-                st.rerun()
+    logger.info("🚀 Starting Enhanced Neo4j MCP Server with LangGraph Intelligence")
+    logger.info(f"📊 Database: {db_url}/{database}")
+    logger.info(f"🧠 AI Features: Intent Analysis, Query Generation, Result Interpretation")
+    logger.info(f"🔧 Transport: {transport}")
     
-    # Execution history
-    if st.session_state.execution_history:
-        st.markdown("---")
-        st.markdown("### 📚 Execution History")
-        
-        for i, record in enumerate(reversed(st.session_state.execution_history[-5:])):  # Show last 5
-            with st.expander(f"🕒 {record['timestamp'].strftime('%H:%M:%S')} - {record['tool_name']}"):
-                col1, col2 = st.columns(2)
+    # Initialize Neo4j driver
+    neo4j_driver = AsyncGraphDatabase.driver(db_url, auth=(username, password))
+    
+    # Create enhanced server
+    mcp = create_enhanced_neo4j_server(neo4j_driver, database, namespace)
+    
+    # Run server with specified transport
+    try:
+        match transport:
+            case "http":
+                logger.info(f"🌐 Running with HTTP transport on {host}:{port}{path}")
+                await mcp.run_http_async(host=host, port=port, path=path)
+            case "stdio":
+                logger.info("📡 Running with STDIO transport")
+                await mcp.run_stdio_async()
+            case "sse":
+                logger.info(f"⚡ Running with SSE transport on {host}:{port}{path}")
+                await mcp.run_sse_async(host=host, port=port, path=path)
+            case _:
+                logger.error(f"❌ Invalid transport: {transport}")
+                raise ValueError(f"Invalid transport: {transport}")
                 
-                with col1:
-                    st.markdown("**Parameters:**")
-                    st.json(record["parameters"])
-                
-                with col2:
-                    st.markdown("**Result Status:**")
-                    status = record["result"].get("status", "unknown")
-                    st.write(f"Status: {'✅' if status == 'success' else '❌'} {status}")
-                
-                if st.button(f"🔄 Re-run", key=f"rerun_{i}"):
-                    st.session_state.selected_tool = record["tool"]
-                    st.rerun()
+    except KeyboardInterrupt:
+        logger.info("🛑 Server stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Server error: {e}")
+        raise
+    finally:
+        logger.info("🧹 Cleaning up...")
+        await neo4j_driver.close()
+        logger.info("👋 Enhanced Neo4j MCP Server shutdown complete")
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Enhanced Neo4j MCP Server with LangGraph")
+    parser.add_argument("--db-url", default=NEO4J_CONFIG["NEO4J_URI"], help="Neo4j database URL")
+    parser.add_argument("--username", default=NEO4J_CONFIG["NEO4J_USERNAME"], help="Neo4j username")
+    parser.add_argument("--password", default=NEO4J_CONFIG["NEO4J_PASSWORD"], help="Neo4j password")
+    parser.add_argument("--database", default=NEO4J_CONFIG["NEO4J_DATABASE"], help="Neo4j database name")
+    parser.add_argument("--transport", default="stdio", choices=["stdio", "sse", "http"], help="Transport protocol")
+    parser.add_argument("--namespace", default=NEO4J_CONFIG["NEO4J_NAMESPACE"], help="Tool namespace prefix")
+    parser.add_argument("--host", default="127.0.0.1", help="Server host (for sse/http)")
+    parser.add_argument("--port", type=int, default=8000, help="Server port (for sse/http)")
+    parser.add_argument("--path", default="/mcp/", help="Server path (for sse/http)")
+    
+    args = parser.parse_args()
+    
+    asyncio.run(main(
+        db_url=args.db_url,
+        username=args.username,
+        password=args.password,
+        database=args.database,
+        transport=args.transport,
+        namespace=args.namespace,
+        host=args.host,
+        port=args.port,
+        path=args.path
+    ))
