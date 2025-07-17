@@ -1,64 +1,144 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
-from neo4j import AsyncGraphDatabase, AsyncTransaction
+import requests
+import urllib3
 from pydantic import BaseModel
-from typing import Optional, Any
-import re
-import json
-import uvicorn
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableLambda
 
-# -------- Neo4j connection config ---------
-NEO4J_URI = "neo4j://10.189.116.237:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASS = "Vkg5d$F!pLq2@9vRwE="
-DATABASE = "connectiq"
-driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+# Suppress InsecureRequestWarning for dev
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# -------- FastAPI app --------
-app = FastAPI(title="Neo4j FastAPI MCP Replacement")
+# --- Agent state (required for LangGraph) ---
+class AgentState(BaseModel):
+    question: str
+    session_id: str
+    tool: str = ""
+    query: str = ""
+    trace: str = ""
+    answer: str = ""
 
-# -------- Helper Functions --------
-def _is_write(query: str) -> bool:
-    return bool(re.search(r"\b(CREATE|MERGE|SET|DELETE|REMOVE|DROP)\b", query, re.IGNORECASE))
+# --- Cortex LLM API configuration ---
+API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+MODEL = "llama3.1-70b"
+SYS_MSG = """
+You are an AI agent that helps users interact with a Neo4j database using MCP tools.
+Use only the following tools, choosing the best one based on the user's request:
 
-async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> list:
-    res = await tx.run(query, params)
-    eager_results = await res.to_eager_result()
-    return [r.data() for r in eager_results.records]
+TOOL DESCRIPTIONS:
+- read_neo4j_cypher: For all read-only Cypher queries (MATCH, RETURN, count, etc).
+- write_neo4j_cypher: For creating, updating, or deleting nodes/relationships.
+- get_neo4j_schema: For requests about graph structure, schema, labels, or relationship types.
 
-async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]):
-    return await tx.run(query, params)
+EXAMPLES:
+User: How many nodes are in the graph?
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN count(n)
 
-# -------- Request Schemas --------
-class CypherRequest(BaseModel):
-    query: str
-    params: Optional[dict] = {}
+User: Create a Person node named Alice
+Tool: write_neo4j_cypher
+Query: CREATE (:Person {name: 'Alice'})
 
-# -------- Endpoints --------
+User: Show me the schema of the graph
+Tool: get_neo4j_schema
 
-@app.post("/read_neo4j_cypher", response_class=JSONResponse)
-async def read_neo4j_cypher(request: CypherRequest):
-    if _is_write(request.query):
-        raise HTTPException(status_code=400, detail="Only read queries allowed")
-    async with driver.session(database=DATABASE) as session:
-        results = await session.execute_read(_read, request.query, request.params or {})
-        return JSONResponse(content=results)
+Always output your reasoning, then the tool name and the Cypher query (if needed).
+"""
 
-@app.post("/write_neo4j_cypher", response_class=JSONResponse)
-async def write_neo4j_cypher(request: CypherRequest):
-    if not _is_write(request.query):
-        raise HTTPException(status_code=400, detail="Only write queries allowed")
-    async with driver.session(database=DATABASE) as session:
-        await session.execute_write(_write, request.query, request.params or {})
-        return JSONResponse(content={"status": "Write query executed"})
+# --- Cortex LLM API interaction ---
+def cortex_llm(prompt: str, session_id: str) -> str:
+    headers = {
+        "Authorization": f'Snowflake Token="{API_KEY}"',
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "query": {
+            "aplctn_cd": "edagnai",
+            "app_id": "edadip",
+            "api_key": API_KEY,
+            "method": "cortex",
+            "model": MODEL,
+            "sys_msg": SYS_MSG,
+            "limit_convs": "0",
+            "prompt": {
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            "session_id": session_id
+        }
+    }
+    resp = requests.post(API_URL, headers=headers, json=payload, verify=False)
+    return resp.text.partition("end_of_stream")[0].strip()
 
-@app.post("/get_neo4j_schema", response_class=JSONResponse)
-async def get_neo4j_schema():
-    query = "CALL apoc.meta.schema();"
-    async with driver.session(database=DATABASE) as session:
-        results = await session.execute_read(_read, query, {})
-        val = results[0].get("value") if results else {}
-        return JSONResponse(content=val or {})
+# --- LLM output parsing: extract tool, query, and trace ---
+def parse_llm_output(llm_output):
+    import re
+    trace = llm_output.strip()
+    tool = None
+    query = None
+    tool_match = re.search(r"Tool: ([\w_]+)", llm_output, re.I)
+    if tool_match:
+        tool = tool_match.group(1)
+    query_match = re.search(r"Query: (.+)", llm_output, re.I)
+    if query_match:
+        query = query_match.group(1).strip()
+    return tool, query, trace
 
-if __name__ == "__main__":
-    uvicorn.run("mcpserver:app", host="0.0.0.0", port=8000, reload=True)
+# --- LangGraph nodes ---
+
+def select_tool_node(state: AgentState) -> dict:
+    """
+    LLM chooses which MCP tool to use and what Cypher query to run.
+    """
+    llm_output = cortex_llm(state.question, state.session_id)
+    tool, query, trace = parse_llm_output(llm_output)
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool or "",
+        "query": query or "",
+        "trace": trace or "",
+        "answer": ""
+    }
+
+def execute_tool_node(state: AgentState) -> dict:
+    """
+    Executes the tool selected by LLM, gets the result from FastAPI MCP server.
+    """
+    tool = state.tool
+    query = state.query
+    trace = state.trace
+    answer = ""
+    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    try:
+        if tool not in valid_tools:
+            answer = f"⚠️ MCP tool not recognized: {tool}"
+        elif tool == "get_neo4j_schema":
+            # This endpoint is POST but takes no body
+            result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers)
+            answer = result.json() if result.ok else result.text
+        elif tool in ("read_neo4j_cypher", "write_neo4j_cypher"):
+            data = {"query": query, "params": {}}
+            result = requests.post(f"http://localhost:8000/{tool}", json=data, headers=headers)
+            answer = result.json() if result.ok else result.text
+        else:
+            answer = f"Unknown tool: {tool}"
+    except Exception as e:
+        answer = f"⚠️ MCP execution failed: {str(e)}"
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool,
+        "query": query,
+        "trace": trace,
+        "answer": answer
+    }
+
+# --- Build and compile the LangGraph workflow ---
+def build_agent():
+    workflow = StateGraph(state_schema=AgentState)
+    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
+    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
+    workflow.set_entry_point("select_tool")
+    workflow.add_edge("select_tool", "execute_tool")
+    workflow.add_edge("execute_tool", END)
+    return workflow.compile()
