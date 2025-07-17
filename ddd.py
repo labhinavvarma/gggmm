@@ -1,277 +1,135 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from langgraph_agent import build_agent, AgentState
+import streamlit as st
+import requests
 import uuid
-import logging
-from typing import Optional
-
-# Try to import config, fallback to defaults
+ 
+# Try to import config, fallback to hardcoded values
 try:
-    from config import SERVER_CONFIG, DEBUG_CONFIG
+    from config import SERVER_CONFIG
     APP_PORT = SERVER_CONFIG["app_port"]
-    ENABLE_DEBUG = DEBUG_CONFIG["enable_debug_logging"]
 except ImportError:
     APP_PORT = 8081
-    ENABLE_DEBUG = True
-
-# Set up logging
-if ENABLE_DEBUG:
-    logging.basicConfig(level=logging.DEBUG)
-else:
-    logging.basicConfig(level=logging.INFO)
-
-logger = logging.getLogger("neo4j_langgraph_app")
-
-# Initialize FastAPI app
-app = FastAPI(
-    title="Neo4j LangGraph MCP+LLM Agent",
-    description="AI Agent for Neo4j database queries using LangGraph and Snowflake Cortex",
-    version="1.0.0"
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure this for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize agent at startup
-agent = None
-
-class ChatRequest(BaseModel):
-    question: str
-    session_id: Optional[str] = None
-
-class ChatResponse(BaseModel):
-    trace: str
-    tool: str
-    query: str
-    answer: str
-    session_id: str
-    success: bool = True
-    error: Optional[str] = None
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the agent when the app starts"""
-    global agent
-    try:
-        logger.info("🚀 Starting Neo4j LangGraph MCP Agent...")
-        logger.info("Building LangGraph agent...")
-        agent = build_agent()
-        logger.info("✅ Agent built successfully")
-        logger.info(f"🌐 App will be available on port {APP_PORT}")
-    except Exception as e:
-        logger.error(f"❌ Failed to build agent: {e}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up when the app shuts down"""
-    logger.info("🛑 Shutting down Neo4j LangGraph MCP Agent...")
-    logger.info("👋 Goodbye!")
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    Main chat endpoint that processes user questions through the LangGraph agent
-    """
-    try:
-        # Generate session ID if not provided
-        session_id = request.session_id or str(uuid.uuid4())
-        
-        logger.info(f"📝 Processing question: {request.question}")
-        logger.info(f"🆔 Session ID: {session_id}")
-        
-        # Create agent state
-        state = AgentState(
-            question=request.question,
-            session_id=session_id
-        )
-        
-        # Run the agent without timeout
-        try:
-            result = await agent.ainvoke(state)
-        except Exception as e:
-            logger.error(f"⚠️ Agent execution failed: {e}")
-            return ChatResponse(
-                trace="Agent execution failed",
-                tool="",
-                query="",
-                answer="⚠️ The agent encountered an error. Please try again or rephrase your question.",
-                session_id=session_id,
-                success=False,
-                error=str(e)
-            )
-        
-        logger.info(f"✅ Agent completed successfully")
-        logger.info(f"🔧 Tool used: {result.get('tool', 'none')}")
-        logger.info(f"📊 Query: {result.get('query', 'none')}")
-        
-        # Ensure answer is always a string
-        answer = result.get("answer", "No answer generated")
-        if not isinstance(answer, str):
-            logger.warning(f"Answer is not a string, converting: {type(answer)}")
-            answer = str(answer)
-        
-        return ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=answer,
-            session_id=session_id,
-            success=True
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat endpoint: {e}")
-        return ChatResponse(
-            trace=f"Error occurred: {str(e)}",
-            tool="",
-            query="",
-            answer=f"⚠️ An error occurred while processing your request: {str(e)}",
-            session_id=request.session_id or str(uuid.uuid4()),
-            success=False,
-            error=str(e)
-        )
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    try:
-        # Check if agent is initialized
-        if agent is None:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "unhealthy",
-                    "message": "Agent not initialized",
-                    "services": {
-                        "agent": "not_initialized",
-                        "mcp_server": "unknown"
-                    }
-                }
-            )
-        
-        # Test MCP server connection
-        import requests
-        try:
-            from config import SERVER_CONFIG
-            mcp_port = SERVER_CONFIG["mcp_port"]
-        except ImportError:
-            mcp_port = 8000
-            
-        try:
-            mcp_response = requests.get(f"http://localhost:{mcp_port}/health", timeout=5)
-            mcp_status = "healthy" if mcp_response.status_code == 200 else "unhealthy"
-        except Exception as e:
-            mcp_status = f"error: {str(e)}"
-        
-        return {
-            "status": "healthy",
-            "message": "All systems operational",
-            "services": {
-                "agent": "initialized",
-                "mcp_server": mcp_status
-            },
-            "port": APP_PORT
-        }
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "unhealthy",
-                "message": f"Health check failed: {str(e)}",
-                "services": {
-                    "agent": "error",
-                    "mcp_server": "unknown"
-                }
-            }
-        )
-
-@app.get("/")
-async def root():
-    """Root endpoint with basic info"""
-    return {
-        "message": "Neo4j LangGraph MCP+LLM Agent",
-        "version": "1.0.0",
-        "endpoints": {
-            "chat": "/chat",
-            "health": "/health",
-            "docs": "/docs"
-        },
-        "description": "AI Agent for Neo4j database queries using LangGraph and Snowflake Cortex"
+ 
+st.set_page_config(page_title="Neo4j LLM Agent", page_icon="🧠")
+ 
+st.title("🧠 Neo4j LangGraph MCP Agent (Cortex LLM)")
+ 
+# Initialize session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+ 
+def send_query(query):
+    """Send query to backend and handle response - NO TIMEOUTS"""
+    payload = {
+        "question": query,
+        "session_id": st.session_state.session_id
     }
-
-@app.get("/status")
-async def get_status():
-    """Get detailed status information"""
+   
     try:
-        # Get configuration info
-        try:
-            from config import NEO4J_CONFIG, CORTEX_CONFIG, SERVER_CONFIG
-            config_status = "loaded"
-            neo4j_uri = NEO4J_CONFIG["uri"]
-            cortex_model = CORTEX_CONFIG["model"]
-        except ImportError:
-            config_status = "using_defaults"
-            neo4j_uri = "neo4j://localhost:7687"
-            cortex_model = "llama3.1-70b"
-        
-        return {
-            "agent_status": "initialized" if agent else "not_initialized",
-            "config_status": config_status,
-            "neo4j_uri": neo4j_uri,
-            "cortex_model": cortex_model,
-            "debug_enabled": ENABLE_DEBUG,
-            "timeout": CORTEX_TIMEOUT,
-            "port": APP_PORT
-        }
-        
+        with st.spinner("Processing your query..."):
+            # NO timeout parameter - will wait indefinitely
+            response = requests.post(f"http://localhost:{APP_PORT}/chat", json=payload)
+            
+        if response.status_code == 200:
+            result = response.json()
+            agent_reply = f"**Tool:** {result['tool']}\n\n**Query:** {result['query']}\n\n**Answer:** {result['answer']}"
+            
+            # Add messages to session state
+            st.session_state.messages.append(("user", query))
+            st.session_state.messages.append(("bot", agent_reply))
+            
+            st.success("✅ Query processed successfully!")
+            return True
+        else:
+            error_msg = f"❌ Error {response.status_code}: {response.text}"
+            st.session_state.messages.append(("user", query))
+            st.session_state.messages.append(("bot", error_msg))
+            st.error("❌ Query failed")
+            return False
+            
     except Exception as e:
-        logger.error(f"Status check failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Status check failed: {str(e)}"}
-        )
+        error_msg = f"❌ Request failed: {str(e)}"
+        st.session_state.messages.append(("user", query))
+        st.session_state.messages.append(("bot", error_msg))
+        st.error(f"❌ Request failed: {str(e)}")
+        return False
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler"""
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": str(exc) if ENABLE_DEBUG else "An error occurred"
-        }
+# Handle example query selection first
+if hasattr(st.session_state, 'example_query'):
+    selected_query = st.session_state.example_query
+    st.info(f"Running example: {selected_query}")
+    send_query(selected_query)
+    del st.session_state.example_query
+    st.rerun()
+ 
+# Chat input form
+with st.form("chat_form", clear_on_submit=True):
+    user_query = st.text_input(
+        "Ask a question:", 
+        key="chat_input", 
+        placeholder="e.g. How many nodes are in the graph?"
     )
+    submitted = st.form_submit_button("Send")
+ 
+# Handle form submission
+if submitted and user_query:
+    send_query(user_query)
+    st.rerun()
+ 
+st.divider()
+ 
+# Display chat messages
+if st.session_state.messages:
+    st.markdown("### 💬 Chat History")
+    for role, message in reversed(st.session_state.messages):
+        if role == "user":
+            st.markdown(f"🧑 **You:** {message}")
+        else:
+            st.markdown(f"🤖 **Agent:** {message}")
+else:
+    st.info("👋 Welcome! Ask a question or try an example from the sidebar.")
+ 
+# Sidebar with system info
+st.sidebar.title("🔧 System Info")
+st.sidebar.markdown(f"**App Port:** {APP_PORT}")
+st.sidebar.markdown(f"**Session ID:** `{st.session_state.session_id[:8]}...`")
+st.sidebar.markdown("**Services:**")
+st.sidebar.markdown("- MCP Server: Port 8000")
+st.sidebar.markdown("- Main App: Port 8081")
+st.sidebar.markdown("- Streamlit UI: Port 8501")
 
-# Include router if it exists
+# Check service status - NO TIMEOUT
+st.sidebar.markdown("**Status Check:**")
 try:
-    from router import router
-    app.include_router(router)
-    logger.info("✅ Additional routes loaded from router.py")
-except ImportError:
-    logger.info("ℹ️  No additional router found")
+    # NO timeout parameter - will wait indefinitely
+    health_response = requests.get(f"http://localhost:{APP_PORT}/health")
+    if health_response.status_code == 200:
+        st.sidebar.success("🟢 Backend Online")
+    else:
+        st.sidebar.warning("🟡 Backend Issues")
+except:
+    st.sidebar.error("🔴 Backend Offline")
+ 
+# Example queries
+st.sidebar.title("📝 Example Queries")
+examples = [
+    "How many nodes are in the graph?",
+    "Show me the schema",
+    "List all Person nodes",
+    "Find nodes with most relationships",
+    "Create a new Person node named John",
+    "Count all relationships"
+]
+ 
+for example in examples:
+    if st.sidebar.button(example, key=f"example_{example}"):
+        st.session_state.example_query = example
+        st.rerun()
 
-if __name__ == "__main__":
-    import uvicorn
-    
-    logger.info("🚀 Starting Neo4j LangGraph MCP Agent directly...")
-    logger.info(f"🌐 Server will run on http://localhost:{APP_PORT}")
-    
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=APP_PORT,
-        reload=True,
-        log_level="debug" if ENABLE_DEBUG else "info"
-    )
+# Clear chat button
+st.sidebar.title("🗑️ Actions")
+if st.sidebar.button("Clear Chat History"):
+    st.session_state.messages = []
+    st.success("Chat history cleared!")
+    st.rerun()
