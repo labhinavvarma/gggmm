@@ -54,8 +54,8 @@ def start_mcp_server():
         # Set server ready flag
         _mcp_server_ready = True
         
-        # Start the MCP server
-        loop.run_until_complete(run_mcp_server())
+        # Start the MCP server (disable signals since we're in a background thread)
+        loop.run_until_complete(run_mcp_server(enable_signals=False))
         
     except Exception as e:
         print(f"❌ Failed to start MCP server: {e}")
