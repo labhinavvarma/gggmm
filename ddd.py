@@ -1,283 +1,174 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from langgraph_agent import build_agent, AgentState
-import uuid
-import logging
 import asyncio
+import json
+import logging
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
 from typing import Optional
 
-# Try to import config, fallback to defaults
-try:
-    from config import SERVER_CONFIG, DEBUG_CONFIG, TIMEOUT_CONFIG
-    APP_PORT = SERVER_CONFIG["app_port"]
-    ENABLE_DEBUG = DEBUG_CONFIG["enable_debug_logging"]
-    CORTEX_TIMEOUT = TIMEOUT_CONFIG["cortex_timeout"]
-except ImportError:
-    APP_PORT = 8081
-    ENABLE_DEBUG = True
-    CORTEX_TIMEOUT = 30
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mcp_neo4j_cypher")
 
-# Set up logging
+try:
+    from config import NEO4J_CONFIG, DEBUG_CONFIG
+    NEO4J_URI = NEO4J_CONFIG["uri"]
+    NEO4J_USER = NEO4J_CONFIG["user"]
+    NEO4J_PASSWORD = NEO4J_CONFIG["password"]
+    NEO4J_DATABASE = NEO4J_CONFIG["database"]
+    ENABLE_DEBUG = DEBUG_CONFIG["enable_debug_logging"]
+except ImportError:
+    # Fallback to hardcoded values if config.py is not available
+    NEO4J_URI = "neo4j://localhost:7687"
+    NEO4J_USER = "neo4j"
+    NEO4J_PASSWORD = "your_neo4j_password"
+    NEO4J_DATABASE = "neo4j"
+    ENABLE_DEBUG = True
+
+# Set logging level based on config
 if ENABLE_DEBUG:
     logging.basicConfig(level=logging.DEBUG)
 else:
     logging.basicConfig(level=logging.INFO)
 
-logger = logging.getLogger("neo4j_langgraph_app")
-
-# Initialize FastAPI app
-app = FastAPI(
-    title="Neo4j LangGraph MCP+LLM Agent",
-    description="AI Agent for Neo4j database queries using LangGraph and Snowflake Cortex",
-    version="1.0.0"
+driver: AsyncDriver = AsyncGraphDatabase.driver(
+    NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
 )
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure this for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="MCP Neo4j Cypher API")
 
-# Initialize agent at startup
-agent = None
-
-class ChatRequest(BaseModel):
-    question: str
-    session_id: Optional[str] = None
-
-class ChatResponse(BaseModel):
-    trace: str
-    tool: str
+class CypherRequest(BaseModel):
     query: str
-    answer: str
-    session_id: str
-    success: bool = True
-    error: Optional[str] = None
+    params: dict = {}
+
+@app.post("/read_neo4j_cypher")
+async def read_neo4j_cypher(request: CypherRequest):
+    try:
+        logger.info(f"Executing read query: {request.query}")
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, request.query, request.params or {})
+        
+        parsed_result = json.loads(result)
+        logger.info(f"Read query returned {len(parsed_result)} records")
+        return parsed_result
+    except Exception as e:
+        logger.error(f"Error in read_neo4j_cypher: {e}")
+        logger.error(f"Query was: {request.query}")
+        raise HTTPException(status_code=500, detail=f"Neo4j read error: {str(e)}")
+
+@app.post("/write_neo4j_cypher")
+async def write_neo4j_cypher(request: CypherRequest):
+    try:
+        logger.info(f"Executing write query: {request.query}")
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_write(_write, request.query, request.params or {})
+        
+        counters = result._summary.counters
+        logger.info(f"Write query completed. Counters: {counters}")
+        return {
+            "result": str(counters),
+            "success": True,
+            "counters": {
+                "nodes_created": counters.nodes_created,
+                "nodes_deleted": counters.nodes_deleted,
+                "relationships_created": counters.relationships_created,
+                "relationships_deleted": counters.relationships_deleted,
+                "properties_set": counters.properties_set,
+                "labels_added": counters.labels_added,
+                "labels_removed": counters.labels_removed
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in write_neo4j_cypher: {e}")
+        logger.error(f"Query was: {request.query}")
+        raise HTTPException(status_code=500, detail=f"Neo4j write error: {str(e)}")
+
+@app.post("/get_neo4j_schema")
+async def get_neo4j_schema():
+    get_schema_query = "CALL apoc.meta.schema();"
+    try:
+        logger.info("Fetching Neo4j schema")
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, get_schema_query, {})
+        
+        parsed_result = json.loads(result)
+        if parsed_result and len(parsed_result) > 0:
+            schema = parsed_result[0].get('value', {})
+            logger.info(f"Schema fetched successfully with {len(schema)} elements")
+            return schema
+        else:
+            logger.warning("Schema query returned empty result")
+            return {"error": "Schema query returned empty result"}
+    except Exception as e:
+        logger.error(f"Error in get_neo4j_schema: {e}")
+        # Fallback to basic schema queries if APOC is not available
+        try:
+            logger.info("Trying fallback schema queries")
+            async with driver.session(database=NEO4J_DATABASE) as session:
+                # Get labels
+                labels_result = await session.execute_read(_read, "CALL db.labels() YIELD label RETURN collect(label) as labels", {})
+                labels = json.loads(labels_result)[0].get('labels', [])
+                
+                # Get relationship types
+                rels_result = await session.execute_read(_read, "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types", {})
+                rel_types = json.loads(rels_result)[0].get('types', [])
+                
+                # Get property keys
+                props_result = await session.execute_read(_read, "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys", {})
+                prop_keys = json.loads(props_result)[0].get('keys', [])
+                
+                return {
+                    "labels": labels,
+                    "relationship_types": rel_types,
+                    "property_keys": prop_keys,
+                    "note": "Basic schema info (APOC not available)"
+                }
+        except Exception as fallback_e:
+            logger.error(f"Fallback schema queries also failed: {fallback_e}")
+            raise HTTPException(status_code=500, detail=f"Schema fetch error: {str(e)}")
+
+@app.get("/health")
+async def health_check():
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, "RETURN 1 as test", {})
+        return {"status": "healthy", "neo4j": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "neo4j": "disconnected", "error": str(e)}
+
+async def _read(tx: AsyncTransaction, query: str, params: dict):
+    try:
+        res = await tx.run(query, params)
+        records = await res.to_eager_result()
+        return json.dumps([r.data() for r in records.records], default=str)
+    except Exception as e:
+        logger.error(f"Transaction read error: {e}")
+        raise
+
+async def _write(tx: AsyncTransaction, query: str, params: dict):
+    try:
+        return await tx.run(query, params)
+    except Exception as e:
+        logger.error(f"Transaction write error: {e}")
+        raise
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the agent when the app starts"""
-    global agent
+    logger.info("MCP Neo4j server starting up...")
     try:
-        logger.info("🚀 Starting Neo4j LangGraph MCP Agent...")
-        logger.info("Building LangGraph agent...")
-        agent = build_agent()
-        logger.info("✅ Agent built successfully")
-        logger.info(f"🌐 App will be available on port {APP_PORT}")
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, "RETURN 1 as test", {})
+        logger.info("Neo4j connection established successfully")
     except Exception as e:
-        logger.error(f"❌ Failed to build agent: {e}")
+        logger.error(f"Failed to connect to Neo4j: {e}")
         raise
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up when the app shuts down"""
-    logger.info("🛑 Shutting down Neo4j LangGraph MCP Agent...")
-    logger.info("👋 Goodbye!")
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    Main chat endpoint that processes user questions through the LangGraph agent
-    """
-    try:
-        # Generate session ID if not provided
-        session_id = request.session_id or str(uuid.uuid4())
-        
-        logger.info(f"📝 Processing question: {request.question}")
-        logger.info(f"🆔 Session ID: {session_id}")
-        
-        # Create agent state
-        state = AgentState(
-            question=request.question,
-            session_id=session_id
-        )
-        
-        # Run the agent with timeout
-        try:
-            result = await asyncio.wait_for(
-                agent.ainvoke(state),
-                timeout=CORTEX_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"⏰ Agent execution timed out after {CORTEX_TIMEOUT}s")
-            return ChatResponse(
-                trace="Agent execution timed out",
-                tool="",
-                query="",
-                answer="⚠️ The request timed out. Please try again or rephrase your question.",
-                session_id=session_id,
-                success=False,
-                error="Timeout"
-            )
-        
-        logger.info(f"✅ Agent completed successfully")
-        logger.info(f"🔧 Tool used: {result.get('tool', 'none')}")
-        logger.info(f"📊 Query: {result.get('query', 'none')}")
-        
-        # Ensure answer is always a string
-        answer = result.get("answer", "No answer generated")
-        if not isinstance(answer, str):
-            logger.warning(f"Answer is not a string, converting: {type(answer)}")
-            answer = str(answer)
-        
-        return ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=answer,
-            session_id=session_id,
-            success=True
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat endpoint: {e}")
-        return ChatResponse(
-            trace=f"Error occurred: {str(e)}",
-            tool="",
-            query="",
-            answer=f"⚠️ An error occurred while processing your request: {str(e)}",
-            session_id=request.session_id or str(uuid.uuid4()),
-            success=False,
-            error=str(e)
-        )
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    try:
-        # Check if agent is initialized
-        if agent is None:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "unhealthy",
-                    "message": "Agent not initialized",
-                    "services": {
-                        "agent": "not_initialized",
-                        "mcp_server": "unknown"
-                    }
-                }
-            )
-        
-        # Test MCP server connection
-        import requests
-        try:
-            from config import SERVER_CONFIG
-            mcp_port = SERVER_CONFIG["mcp_port"]
-        except ImportError:
-            mcp_port = 8000
-            
-        try:
-            mcp_response = requests.get(f"http://localhost:{mcp_port}/health", timeout=5)
-            mcp_status = "healthy" if mcp_response.status_code == 200 else "unhealthy"
-        except Exception as e:
-            mcp_status = f"error: {str(e)}"
-        
-        return {
-            "status": "healthy",
-            "message": "All systems operational",
-            "services": {
-                "agent": "initialized",
-                "mcp_server": mcp_status
-            },
-            "port": APP_PORT
-        }
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "unhealthy",
-                "message": f"Health check failed: {str(e)}",
-                "services": {
-                    "agent": "error",
-                    "mcp_server": "unknown"
-                }
-            }
-        )
-
-@app.get("/")
-async def root():
-    """Root endpoint with basic info"""
-    return {
-        "message": "Neo4j LangGraph MCP+LLM Agent",
-        "version": "1.0.0",
-        "endpoints": {
-            "chat": "/chat",
-            "health": "/health",
-            "docs": "/docs"
-        },
-        "description": "AI Agent for Neo4j database queries using LangGraph and Snowflake Cortex"
-    }
-
-@app.get("/status")
-async def get_status():
-    """Get detailed status information"""
-    try:
-        # Get configuration info
-        try:
-            from config import NEO4J_CONFIG, CORTEX_CONFIG, SERVER_CONFIG
-            config_status = "loaded"
-            neo4j_uri = NEO4J_CONFIG["uri"]
-            cortex_model = CORTEX_CONFIG["model"]
-        except ImportError:
-            config_status = "using_defaults"
-            neo4j_uri = "neo4j://localhost:7687"
-            cortex_model = "llama3.1-70b"
-        
-        return {
-            "agent_status": "initialized" if agent else "not_initialized",
-            "config_status": config_status,
-            "neo4j_uri": neo4j_uri,
-            "cortex_model": cortex_model,
-            "debug_enabled": ENABLE_DEBUG,
-            "timeout": CORTEX_TIMEOUT,
-            "port": APP_PORT
-        }
-        
-    except Exception as e:
-        logger.error(f"Status check failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Status check failed: {str(e)}"}
-        )
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler"""
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": str(exc) if ENABLE_DEBUG else "An error occurred"
-        }
-    )
-
-# Include router if it exists
-try:
-    from router import router
-    app.include_router(router)
-    logger.info("✅ Additional routes loaded from router.py")
-except ImportError:
-    logger.info("ℹ️  No additional router found")
+    logger.info("MCP Neo4j server shutting down...")
+    await driver.close()
+    logger.info("Neo4j driver closed")
 
 if __name__ == "__main__":
     import uvicorn
-    
-    logger.info("🚀 Starting Neo4j LangGraph MCP Agent directly...")
-    logger.info(f"🌐 Server will run on http://localhost:{APP_PORT}")
-    
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=APP_PORT,
-        reload=True,
-        log_level="debug" if ENABLE_DEBUG else "info"
-    )
+    uvicorn.run("mcpserver:app", host="0.0.0.0", port=8000, reload=True)
