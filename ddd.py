@@ -1,606 +1,391 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
-from typing import Dict, Any, List, Optional
-import uuid
-import json
-from datetime import datetime, date
-import logging
-from contextlib import asynccontextmanager
+# mcpserver.py
 
-# Import your health agent
-try:
-    from health_agent_core import HealthAnalysisAgent, Config
-    AGENT_AVAILABLE = True
-except ImportError as e:
-    AGENT_AVAILABLE = False
-    import_error = str(e)
+import json
+import re
+import logging
+import asyncio
+import signal
+import sys
+from typing import Any, Optional, Dict, List
+from datetime import datetime
+from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult, TextContent
+from fastmcp.server import FastMCP
+from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncTransaction
+from neo4j.exceptions import Neo4jError, ServiceUnavailable, AuthError
+from pydantic import Field
+import uvicorn
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Global variables
-health_agent = None
-sessions: Dict[str, Dict[str, Any]] = {}
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize the health agent on startup"""
-    global health_agent
-    
-    if AGENT_AVAILABLE:
-        try:
-            config = Config()
-            health_agent = HealthAnalysisAgent(config)
-            logger.info("✅ Health Analysis Agent initialized successfully")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Health Agent: {str(e)}")
-            health_agent = None
-    else:
-        logger.error(f"❌ Health Agent not available: {import_error}")
-    
-    yield
-    logger.info("🔄 Shutting down Health Agent FastAPI server")
-
-# Create FastAPI app
-app = FastAPI(
-    title="Health Analysis Agent API",
-    description="FastAPI wrapper for comprehensive health analysis",
-    version="1.0.0",
-    lifespan=lifespan
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger("neo4j_mcp")
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Neo4j Configuration
+NEO4J_URI = "neo4j://10.189.116.237:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "Vkg5d$F!pLq2@9vRwE="
+NEO4J_DATABASE = "connectiq"
 
-# Pydantic models
-class PatientData(BaseModel):
-    first_name: str = Field(..., min_length=1, max_length=50)
-    last_name: str = Field(..., min_length=1, max_length=50)
-    ssn: str = Field(..., min_length=9, max_length=11)
-    date_of_birth: str = Field(..., description="Date in YYYY-MM-DD format")
-    gender: str = Field(..., pattern=r'^[MF]$')
-    zip_code: str = Field(..., min_length=5, max_length=10)
+# Server Configuration
+MCP_HOST = "0.0.0.0"
+MCP_PORT = 8000
+MCP_PATH = "/messages/"
+
+class Neo4jMCPServer:
+    """Enhanced Neo4j MCP Server with better error handling and monitoring"""
     
-    @field_validator('date_of_birth')
-    @classmethod
-    def validate_date_of_birth(cls, v):
+    def __init__(self):
+        self.driver: Optional[AsyncDriver] = None
+        self.mcp_server: Optional[FastMCP] = None
+        self.is_running = False
+        self.connection_verified = False
+        
+    async def initialize_driver(self) -> bool:
+        """Initialize Neo4j driver with connection validation"""
         try:
-            birth_date = datetime.strptime(v, '%Y-%m-%d').date()
-            today = date.today()
-            age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+            logger.info("🔌 Connecting to Neo4j database...")
             
-            if age > 150 or age < 0:
-                raise ValueError('Invalid age')
-            return v
-        except ValueError:
-            raise ValueError('Invalid date format. Use YYYY-MM-DD')
+            self.driver = AsyncGraphDatabase.driver(
+                NEO4J_URI,
+                auth=(NEO4J_USER, NEO4J_PASSWORD),
+                max_connection_lifetime=3600,
+                max_connection_pool_size=50,
+                connection_acquisition_timeout=60
+            )
+            
+            # Verify connection
+            await self.verify_connection()
+            logger.info("✅ Neo4j connection established successfully")
+            return True
+            
+        except AuthError as e:
+            logger.error(f"❌ Neo4j authentication failed: {e}")
+            return False
+        except ServiceUnavailable as e:
+            logger.error(f"❌ Neo4j service unavailable: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Neo4j driver: {e}")
+            return False
     
-    @field_validator('ssn')
-    @classmethod
-    def validate_ssn(cls, v):
-        ssn_digits = ''.join(filter(str.isdigit, v))
-        if len(ssn_digits) != 9:
-            raise ValueError('SSN must contain exactly 9 digits')
-        return ssn_digits
+    async def verify_connection(self):
+        """Verify Neo4j connection and database access"""
+        if not self.driver:
+            raise Exception("Driver not initialized")
+        
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                result = await session.run("RETURN 1 as test")
+                record = await result.single()
+                if record and record["test"] == 1:
+                    self.connection_verified = True
+                    logger.info(f"✅ Database '{NEO4J_DATABASE}' connection verified")
+                else:
+                    raise Exception("Connection test failed")
+        except Exception as e:
+            logger.error(f"❌ Connection verification failed: {e}")
+            raise
     
-    @field_validator('zip_code')
-    @classmethod
-    def validate_zip_code(cls, v):
-        zip_digits = ''.join(filter(str.isdigit, v))
-        if len(zip_digits) < 5:
-            raise ValueError('Zip code must contain at least 5 digits')
-        return zip_digits
-
-class ChatRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    question: str = Field(..., min_length=1, max_length=1000)
-    chat_history: Optional[List[Dict[str, str]]] = Field(default_factory=list)
-
-class SimpleChatRequest(BaseModel):
-    session_id: str = Field(..., min_length=1)
-    question: str = Field(..., min_length=1, max_length=1000)
-
-# Helper functions
-def check_agent_available():
-    """Check if health agent is available"""
-    if not AGENT_AVAILABLE:
-        raise HTTPException(status_code=503, detail=f"Health Agent not available: {import_error}")
-    if not health_agent:
-        raise HTTPException(status_code=503, detail="Health Agent not initialized")
-
-def create_session(patient_data: dict, status: str = "running") -> str:
-    """Create a new session"""
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "status": status,
-        "created_at": datetime.now().isoformat(),
-        "patient_data": patient_data,
-        "progress": 0,
-        "current_step": "Initializing...",
-        "results": None,
-        "error": None
-    }
-    return session_id
-
-def update_session(session_id: str, **kwargs):
-    """Update session data"""
-    if session_id in sessions:
-        sessions[session_id].update(kwargs)
-
-# Main endpoints
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "message": "Health Analysis Agent API",
-        "version": "1.0.0",
-        "status": "running",
-        "agent_available": AGENT_AVAILABLE and health_agent is not None,
-        "endpoints": {
-            "health": "/health",
-            "analyze": "/analyze-sync",
-            "chat": "/chat",
-            "docs": "/docs"
-        }
-    }
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "agent_available": AGENT_AVAILABLE and health_agent is not None,
-        "total_sessions": len(sessions)
-    }
-
-@app.get("/info")
-async def get_server_info():
-    """Get detailed server information"""
-    return {
-        "title": "Health Analysis Agent API",
-        "version": "1.0.0", 
-        "description": "FastAPI wrapper for comprehensive health analysis",
-        "agent_available": AGENT_AVAILABLE,
-        "agent_initialized": health_agent is not None,
-        "total_sessions": len(sessions),
-        "endpoints": {
-            "health": "GET /health - Health check",
-            "analyze": "POST /analyze-sync - Run health analysis",
-            "chat": "POST /chat - Chat with analysis results",
-            "chat_simple": "POST /chat-simple - Simple chat interface",
-            "status": "GET /status/{session_id} - Check analysis status",
-            "results": "GET /results/{session_id} - Get analysis results",
-            "sessions": "GET /sessions - List all sessions",
-            "debug": "GET /debug/{session_id} - Debug session info"
-        }
-    }
-
-@app.post("/analyze")
-async def analyze_patient_data(patient_data: PatientData, background_tasks: BackgroundTasks):
-    """Start asynchronous health analysis"""
-    check_agent_available()
+    async def get_database_info(self) -> Dict[str, Any]:
+        """Get database information for diagnostics"""
+        if not self.driver or not self.connection_verified:
+            return {"error": "Database not connected"}
+        
+        try:
+            async with self.driver.session(database=NEO4J_DATABASE) as session:
+                # Get node counts
+                node_result = await session.run("MATCH (n) RETURN count(n) as node_count")
+                node_count = (await node_result.single())["node_count"]
+                
+                # Get relationship counts
+                rel_result = await session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
+                rel_count = (await rel_result.single())["rel_count"]
+                
+                # Get node labels
+                labels_result = await session.run("CALL db.labels()")
+                labels = [record["label"] for record in await labels_result.data()]
+                
+                # Get relationship types
+                types_result = await session.run("CALL db.relationshipTypes()")
+                rel_types = [record["relationshipType"] for record in await types_result.data()]
+                
+                return {
+                    "database": NEO4J_DATABASE,
+                    "node_count": node_count,
+                    "relationship_count": rel_count,
+                    "node_labels": labels,
+                    "relationship_types": rel_types,
+                    "connection_time": datetime.now().isoformat()
+                }
+        except Exception as e:
+            logger.error(f"Error getting database info: {e}")
+            return {"error": str(e)}
     
-    session_id = create_session(patient_data.dict())
-    background_tasks.add_task(run_analysis_task, session_id, patient_data.dict())
+    def _is_write_query(self, query: str) -> bool:
+        """Determine if query is a write operation"""
+        write_patterns = [
+            r"\bCREATE\b", r"\bMERGE\b", r"\bDELETE\b", 
+            r"\bSET\b", r"\bREMOVE\b", r"\bDROP\b",
+            r"\bDETACH\s+DELETE\b"
+        ]
+        return any(re.search(pattern, query, re.IGNORECASE) for pattern in write_patterns)
     
-    return {
-        "success": True,
-        "session_id": session_id,
-        "message": "Analysis started. Use session ID to check status and get results.",
-        "status_endpoint": f"/status/{session_id}",
-        "results_endpoint": f"/results/{session_id}"
-    }
-
-@app.post("/analyze-sync")
-async def analyze_patient_data_sync(patient_data: PatientData):
-    """Run synchronous health analysis (recommended)"""
-    check_agent_available()
-    
-    session_id = create_session(patient_data.dict(), "running")
-    
-    try:
-        logger.info(f"🔬 Starting synchronous analysis for session {session_id}")
-        
-        # Update session status
-        update_session(session_id, current_step="Running comprehensive analysis...")
-        
-        # Run analysis
-        results = health_agent.run_analysis(patient_data.dict())
-        
-        # Update session with results
-        update_session(session_id, 
-            status="completed", 
-            results=results, 
-            progress=100,
-            current_step="Analysis completed",
-            completed_at=datetime.now().isoformat()
-        )
-        
-        logger.info(f"✅ Analysis completed for session {session_id}")
-        
-        return {
-            "success": results.get("success", False),
-            "session_id": session_id,
-            "message": "Analysis completed successfully" if results.get("success") else "Analysis completed with errors",
-            "analysis_results": results,
-            "chat_ready": results.get("chatbot_ready", False),
-            "errors": results.get("errors", [])
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Analysis failed for session {session_id}: {str(e)}")
-        
-        update_session(session_id, 
-            status="error", 
-            error=str(e),
-            current_step=f"Error: {str(e)}",
-            completed_at=datetime.now().isoformat()
-        )
-        
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-@app.post("/chat")
-async def chat_with_analysis(chat_request: ChatRequest):
-    """Chat with medical analysis data - works with empty chat history"""
-    check_agent_available()
-    
-    session_id = chat_request.session_id
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session_data = sessions[session_id]
-    if session_data["status"] != "completed" or not session_data.get("results"):
-        raise HTTPException(status_code=400, detail="Analysis not completed or failed")
-    
-    results = session_data["results"]
-    if not results.get("chatbot_ready", False):
-        raise HTTPException(status_code=400, detail="Chatbot not ready. Analysis may have failed.")
-    
-    try:
-        chatbot_context = results.get("chatbot_context", {})
-        
-        # Ensure chat_history is always a list
-        chat_history = chat_request.chat_history or []
-        
-        # Debug logging
-        logger.info(f"💬 Chat question: {chat_request.question}")
-        logger.info(f"📝 Chat history length: {len(chat_history)}")
-        logger.info(f"📊 Context available: {bool(chatbot_context)}")
-        
-        # Validate chatbot context
-        if not chatbot_context:
-            logger.error("❌ No chatbot context available")
-            return {
-                "success": False,
-                "session_id": session_id,
-                "response": "Chat context not available. Please run analysis first.",
-                "updated_chat_history": chat_history
-            }
-        
-        # Call the health agent chat method
-        response = health_agent.chat_with_data(
-            chat_request.question,
-            chatbot_context,
-            chat_history
-        )
-        
-        # Validate response
-        if not response or response.strip() == "":
-            logger.error("❌ Empty response from health agent")
-            response = "I'm sorry, I couldn't generate a response. Please try rephrasing your question."
-        elif '"detail"' in response or response.startswith("Error"):
-            logger.error(f"❌ Error in response: {response}")
-            response = "I encountered an error processing your question. Please try a different question about the medical analysis."
-        
-        # Create updated chat history
-        updated_history = chat_history + [
-            {"role": "user", "content": chat_request.question},
-            {"role": "assistant", "content": response}
+    def _sanitize_query(self, query: str) -> str:
+        """Basic query sanitization"""
+        # Remove potentially dangerous operations
+        dangerous_patterns = [
+            r"\bCALL\s+dbms\.", r"\bCALL\s+db\.",
+            r"\bLOAD\s+CSV\b", r"\bUSING\s+PERIODIC\s+COMMIT\b"
         ]
         
-        logger.info(f"✅ Chat successful, response length: {len(response)}")
+        for pattern in dangerous_patterns:
+            if re.search(pattern, query, re.IGNORECASE):
+                raise ToolError(f"Query contains restricted operation: {pattern}")
         
-        return {
-            "success": True,
-            "session_id": session_id,
-            "response": response,
-            "updated_chat_history": updated_history
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Chat failed with exception: {str(e)}")
-        
-        error_response = f"I encountered an error: {str(e)}. Please try a simpler question about the medical analysis."
-        
-        return {
-            "success": False,
-            "session_id": session_id,
-            "response": error_response,
-            "updated_chat_history": (chat_request.chat_history or []) + [
-                {"role": "user", "content": chat_request.question},
-                {"role": "assistant", "content": error_response}
-            ]
-        }
-
-@app.post("/chat-simple")
-async def simple_chat(request: SimpleChatRequest):
-    """Simple chat endpoint without chat history requirement"""
-    try:
-        # Create a ChatRequest object with empty chat history
-        chat_request = ChatRequest(
-            session_id=request.session_id,
-            question=request.question,
-            chat_history=[]
-        )
-        
-        # Use the main chat function
-        return await chat_with_analysis(chat_request)
-        
-    except Exception as e:
-        logger.error(f"❌ Simple chat error: {str(e)}")
-        return {
-            "success": False,
-            "session_id": request.session_id,
-            "response": f"Simple chat error: {str(e)}",
-            "updated_chat_history": []
-        }
-
-@app.get("/status/{session_id}")
-async def get_analysis_status(session_id: str):
-    """Get analysis status"""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+        return query.strip()
     
-    session_data = sessions[session_id]
-    return {
-        "session_id": session_id,
-        "status": session_data["status"],
-        "progress": session_data.get("progress", 0),
-        "current_step": session_data.get("current_step", "Unknown"),
-        "results_available": session_data.get("results") is not None,
-        "chat_ready": session_data.get("results", {}).get("chatbot_ready", False) if session_data.get("results") else False,
-        "created_at": session_data.get("created_at"),
-        "completed_at": session_data.get("completed_at")
-    }
-
-@app.get("/results/{session_id}")
-async def get_analysis_results(session_id: str):
-    """Get analysis results"""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+    async def _execute_read(self, tx: AsyncTransaction, query: str, params: Dict[str, Any]) -> str:
+        """Execute read query and return formatted results"""
+        try:
+            result = await tx.run(query, params or {})
+            records = await result.data()
+            
+            # Format results for better readability
+            if not records:
+                return json.dumps({"message": "No results found", "count": 0})
+            
+            return json.dumps({
+                "data": records,
+                "count": len(records),
+                "query_type": "READ"
+            }, default=str, indent=2)
+            
+        except Exception as e:
+            logger.error(f"Read query error: {e}")
+            raise ToolError(f"Read query failed: {str(e)}")
     
-    session_data = sessions[session_id]
-    if not session_data.get("results"):
-        raise HTTPException(status_code=404, detail="Results not available for this session")
+    async def _execute_write(self, tx: AsyncTransaction, query: str, params: Dict[str, Any]) -> str:
+        """Execute write query and return summary"""
+        try:
+            result = await tx.run(query, params or {})
+            summary = await result.consume()
+            
+            counters = summary.counters
+            return json.dumps({
+                "summary": {
+                    "nodes_created": counters.nodes_created,
+                    "nodes_deleted": counters.nodes_deleted,
+                    "relationships_created": counters.relationships_created,
+                    "relationships_deleted": counters.relationships_deleted,
+                    "properties_set": counters.properties_set,
+                    "labels_added": counters.labels_added,
+                    "labels_removed": counters.labels_removed
+                },
+                "query_type": "WRITE",
+                "execution_time": summary.result_available_after + summary.result_consumed_after
+            }, default=str, indent=2)
+            
+        except Exception as e:
+            logger.error(f"Write query error: {e}")
+            raise ToolError(f"Write query failed: {str(e)}")
     
-    return {
-        "session_id": session_id,
-        "results": session_data["results"],
-        "completed_at": session_data.get("completed_at"),
-        "analysis_successful": session_data["results"].get("success", False),
-        "chat_ready": session_data["results"].get("chatbot_ready", False)
-    }
-
-@app.get("/sessions")
-async def list_sessions():
-    """List all sessions"""
-    return {
-        "total_sessions": len(sessions),
-        "sessions": [
-            {
-                "session_id": sid,
-                "status": data["status"],
-                "created_at": data["created_at"],
-                "progress": data.get("progress", 0),
-                "chat_ready": data.get("results", {}).get("chatbot_ready", False) if data.get("results") else False
+    def create_mcp_server(self) -> FastMCP:
+        """Create and configure MCP server with tools"""
+        mcp = FastMCP("neo4j-cypher", stateless_http=True)
+        
+        @mcp.tool(name="read_neo4j_cypher")
+        async def read_neo4j_cypher(
+            query: str = Field(..., description="Cypher query to execute (READ operations only)"),
+            params: Optional[Dict[str, Any]] = Field(None, description="Query parameters")
+        ) -> List[ToolResult]:
+            """Execute read-only Cypher queries against Neo4j database"""
+            
+            if not self.connection_verified:
+                raise ToolError("Database connection not available")
+            
+            # Sanitize and validate query
+            clean_query = self._sanitize_query(query)
+            
+            if self._is_write_query(clean_query):
+                raise ToolError("Write operations not allowed in read tool. Use write_neo4j_cypher instead.")
+            
+            try:
+                logger.info(f"Executing READ query: {clean_query[:100]}...")
+                
+                async with self.driver.session(database=NEO4J_DATABASE) as session:
+                    result = await session.execute_read(self._execute_read, clean_query, params)
+                    return [ToolResult(content=[TextContent(type="text", text=result)])]
+                    
+            except Neo4jError as e:
+                error_msg = f"Neo4j error: {str(e)}"
+                logger.error(error_msg)
+                raise ToolError(error_msg)
+            except Exception as e:
+                error_msg = f"Unexpected error: {str(e)}"
+                logger.error(error_msg)
+                raise ToolError(error_msg)
+        
+        @mcp.tool(name="write_neo4j_cypher")
+        async def write_neo4j_cypher(
+            query: str = Field(..., description="Cypher query to execute (WRITE operations only)"),
+            params: Optional[Dict[str, Any]] = Field(None, description="Query parameters")
+        ) -> List[ToolResult]:
+            """Execute write Cypher queries against Neo4j database"""
+            
+            if not self.connection_verified:
+                raise ToolError("Database connection not available")
+            
+            # Sanitize and validate query
+            clean_query = self._sanitize_query(query)
+            
+            if not self._is_write_query(clean_query):
+                raise ToolError("Only write operations allowed in write tool. Use read_neo4j_cypher for queries.")
+            
+            try:
+                logger.info(f"Executing WRITE query: {clean_query[:100]}...")
+                
+                async with self.driver.session(database=NEO4J_DATABASE) as session:
+                    result = await session.execute_write(self._execute_write, clean_query, params)
+                    return [ToolResult(content=[TextContent(type="text", text=result)])]
+                    
+            except Neo4jError as e:
+                error_msg = f"Neo4j error: {str(e)}"
+                logger.error(error_msg)
+                raise ToolError(error_msg)
+            except Exception as e:
+                error_msg = f"Unexpected error: {str(e)}"
+                logger.error(error_msg)
+                raise ToolError(error_msg)
+        
+        @mcp.tool(name="get_database_schema")
+        async def get_database_schema() -> List[ToolResult]:
+            """Get Neo4j database schema information"""
+            
+            if not self.connection_verified:
+                raise ToolError("Database connection not available")
+            
+            try:
+                schema_info = await self.get_database_info()
+                return [ToolResult(content=[TextContent(type="text", text=json.dumps(schema_info, indent=2))])]
+            except Exception as e:
+                error_msg = f"Failed to get schema: {str(e)}"
+                logger.error(error_msg)
+                raise ToolError(error_msg)
+        
+        @mcp.tool(name="health_check")
+        async def health_check() -> List[ToolResult]:
+            """Check server and database health"""
+            
+            health_status = {
+                "server_status": "running" if self.is_running else "stopped",
+                "database_connected": self.connection_verified,
+                "timestamp": datetime.now().isoformat()
             }
-            for sid, data in sessions.items()
-        ]
-    }
-
-@app.get("/debug/{session_id}")
-async def debug_session(session_id: str):
-    """Debug session information"""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+            
+            if self.connection_verified:
+                try:
+                    db_info = await self.get_database_info()
+                    health_status.update(db_info)
+                except Exception as e:
+                    health_status["database_error"] = str(e)
+            
+            return [ToolResult(content=[TextContent(type="text", text=json.dumps(health_status, indent=2))])]
+        
+        return mcp
     
-    session_data = sessions[session_id]
-    results = session_data.get("results", {})
+    async def start_server(self):
+        """Start the MCP server"""
+        try:
+            # Initialize Neo4j connection
+            if not await self.initialize_driver():
+                logger.error("❌ Failed to initialize database connection")
+                return False
+            
+            # Create MCP server
+            self.mcp_server = self.create_mcp_server()
+            logger.info("🚀 Starting MCP server...")
+            
+            # Set running flag
+            self.is_running = True
+            
+            # Start server
+            await self.mcp_server.run_sse_async(
+                host=MCP_HOST,
+                port=MCP_PORT,
+                path=MCP_PATH
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start MCP server: {e}")
+            self.is_running = False
+            return False
     
-    debug_info = {
-        "session_id": session_id,
-        "session_status": session_data.get("status"),
-        "analysis_success": results.get("success", False),
-        "chatbot_ready": results.get("chatbot_ready", False),
-        "has_chatbot_context": bool(results.get("chatbot_context")),
-        "chatbot_context_keys": list(results.get("chatbot_context", {}).keys()) if results.get("chatbot_context") else [],
-        "errors": results.get("errors", []),
-        "step_status": results.get("step_status", {}),
-        "processing_complete": results.get("processing_complete", False),
-        "heart_attack_prediction": bool(results.get("heart_attack_prediction")),
-        "entity_extraction": bool(results.get("entity_extraction")),
-        "created_at": session_data.get("created_at"),
-        "completed_at": session_data.get("completed_at")
-    }
+    async def stop_server(self):
+        """Stop the MCP server and close connections"""
+        logger.info("🛑 Stopping MCP server...")
+        
+        self.is_running = False
+        
+        if self.driver:
+            await self.driver.close()
+            logger.info("✅ Neo4j driver closed")
+        
+        logger.info("✅ MCP server stopped")
     
-    return debug_info
+    def setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown"""
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, shutting down...")
+            asyncio.create_task(self.stop_server())
+            sys.exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
 
-@app.get("/test-chat/{session_id}")
-async def test_chat_endpoint(session_id: str):
-    """Test if chat is working for a session"""
-    try:
-        test_request = ChatRequest(
-            session_id=session_id,
-            question="Hello, are you working?",
-            chat_history=[]
-        )
-        
-        result = await chat_with_analysis(test_request)
-        return {
-            "test_successful": result["success"],
-            "session_id": session_id,
-            "test_response": result["response"],
-            "response_length": len(result["response"]) if result.get("response") else 0
-        }
-        
-    except Exception as e:
-        return {
-            "test_successful": False,
-            "session_id": session_id,
-            "error": str(e)
-        }
+# Global server instance
+_server_instance = None
 
-# Background task for async analysis
-async def run_analysis_task(session_id: str, patient_data: Dict[str, Any]):
-    """Background task for analysis"""
-    try:
-        logger.info(f"🔬 Starting background analysis for session {session_id}")
-        
-        update_session(session_id, progress=10, current_step="Processing patient data...")
-        
-        # Run the analysis
-        results = health_agent.run_analysis(patient_data)
-        
-        update_session(session_id,
-            status="completed",
-            results=results,
-            progress=100,
-            current_step="Analysis completed",
-            completed_at=datetime.now().isoformat()
-        )
-        
-        logger.info(f"✅ Background analysis completed for session {session_id}")
-        
-    except Exception as e:
-        logger.error(f"❌ Background analysis failed for session {session_id}: {str(e)}")
-        
-        update_session(session_id, 
-            status="error", 
-            error=str(e),
-            current_step=f"Error: {str(e)}",
-            completed_at=datetime.now().isoformat()
-        )
-
-# Test endpoints
-@app.get("/test/agent")
-async def test_agent_connection():
-    """Test the health agent connection"""
-    if not AGENT_AVAILABLE:
-        return {"success": False, "error": import_error}
+async def run_mcp_server():
+    """Main function to run the MCP server"""
+    global _server_instance
     
-    if not health_agent:
-        return {"success": False, "error": "Agent not initialized"}
+    logger.info("🌟 Starting Neo4j MCP Server...")
+    
+    _server_instance = Neo4jMCPServer()
+    _server_instance.setup_signal_handlers()
     
     try:
-        # Test LLM connection
-        llm_test = health_agent.test_llm_connection()
-        
-        # Test backend connection  
-        backend_test = health_agent.test_backend_connection()
-        
-        # Test FastAPI connection
-        fastapi_test = health_agent.test_fastapi_connection()
-        
-        return {
-            "success": True,
-            "agent_available": True,
-            "llm_connection": llm_test,
-            "backend_connection": backend_test,
-            "fastapi_connection": fastapi_test,
-            "config": {
-                "heart_attack_api_url": health_agent.config.heart_attack_api_url,
-                "backend_url": health_agent.config.fastapi_url
-            }
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/test/sample-data")
-async def get_sample_data():
-    """Get sample patient data for testing"""
-    return {
-        "sample_patient_data": {
-            "first_name": "John",
-            "last_name": "Doe", 
-            "ssn": "123456789",
-            "date_of_birth": "1980-01-01",
-            "gender": "M",
-            "zip_code": "12345"
-        },
-        "usage": "POST this data to /analyze-sync to test the analysis"
-    }
-
-@app.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session"""
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    del sessions[session_id]
-    return {"message": f"Session {session_id} deleted successfully"}
-
-@app.delete("/sessions")
-async def clear_all_sessions():
-    """Clear all sessions"""
-    count = len(sessions)
-    sessions.clear()
-    return {"message": f"Cleared {count} sessions"}
-
-# Error handlers
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    return {
-        "error": exc.detail,
-        "status_code": exc.status_code,
-        "timestamp": datetime.now().isoformat()
-    }
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    logger.info("🚀 Health Analysis Agent FastAPI server starting up...")
-    logger.info(f"🏥 Agent available: {AGENT_AVAILABLE}")
-    if AGENT_AVAILABLE and health_agent:
-        logger.info("✅ Health agent initialized and ready")
-    else:
-        logger.warning("⚠️ Health agent not available or failed to initialize")
-
-if __name__ == "__main__":
-    import uvicorn
-    
-    # Fixed port 8008 as requested
-    PORT = 8008
-    HOST = "127.0.0.1"
-    
-    print(f"🚀 Starting Health Agent FastAPI server...")
-    print(f"🌐 Server URL: http://{HOST}:{PORT}")
-    print(f"📋 API Documentation: http://{HOST}:{PORT}/docs")
-    print(f"🔍 Health Check: http://{HOST}:{PORT}/health")
-    print(f"🧪 Test Agent: http://{HOST}:{PORT}/test/agent")
-    print("-" * 50)
-    
-    try:
-        uvicorn.run("__main__:app", host=HOST, port=PORT, reload=True)
-    except OSError as e:
-        if "10013" in str(e) or "Address already in use" in str(e):
-            print(f"❌ Port {PORT} is already in use!")
-            print("💡 Solutions:")
-            print(f"   1. Kill the process using port {PORT}")
-            print(f"   2. Run: netstat -ano | findstr :{PORT}")
-            print(f"   3. Then: taskkill /PID <PID> /F")
-            print(f"   4. Or restart your computer")
-        else:
-            print(f"❌ Server failed to start: {e}")
+        await _server_instance.start_server()
     except KeyboardInterrupt:
-        print("\n🛑 Server stopped by user")
+        logger.info("Received keyboard interrupt")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        logger.error(f"Server error: {e}")
+    finally:
+        if _server_instance:
+            await _server_instance.stop_server()
+
+async def get_server_status():
+    """Get current server status"""
+    global _server_instance
+    
+    if not _server_instance:
+        return {"status": "not_initialized"}
+    
+    return {
+        "status": "running" if _server_instance.is_running else "stopped",
+        "database_connected": _server_instance.connection_verified,
+        "database": NEO4J_DATABASE
+    }
+
+# CLI entry point
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_mcp_server())
+    except KeyboardInterrupt:
+        logger.info("👋 Goodbye!")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
