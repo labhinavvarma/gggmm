@@ -1,277 +1,403 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+import requests
+import urllib3
 from pydantic import BaseModel
-from langgraph_agent import build_agent, AgentState
-import uuid
-import logging
-import asyncio
-from typing import Optional
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableLambda
+import re
 
-# Try to import config, fallback to defaults
-try:
-    from config import SERVER_CONFIG, DEBUG_CONFIG, TIMEOUT_CONFIG
-    APP_PORT = SERVER_CONFIG["app_port"]
-    ENABLE_DEBUG = DEBUG_CONFIG["enable_debug_logging"]
-    CORTEX_TIMEOUT = TIMEOUT_CONFIG["cortex_timeout"]
-except ImportError:
-    APP_PORT = 8081
-    ENABLE_DEBUG = True
-    CORTEX_TIMEOUT = 30
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Set up logging
-if ENABLE_DEBUG:
-    logging.basicConfig(level=logging.DEBUG)
-else:
-    logging.basicConfig(level=logging.INFO)
-
-logger = logging.getLogger("neo4j_langgraph_app")
-
-# Initialize FastAPI app
-app = FastAPI(
-    title="Neo4j LangGraph MCP+LLM Agent",
-    description="AI Agent for Neo4j database queries using LangGraph and Snowflake Cortex",
-    version="1.0.0"
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure this for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize agent at startup
-agent = None
-
-class ChatRequest(BaseModel):
+class AgentState(BaseModel):
     question: str
-    session_id: Optional[str] = None
-
-class ChatResponse(BaseModel):
-    trace: str
-    tool: str
-    query: str
-    answer: str
     session_id: str
-    success: bool = True
-    error: Optional[str] = None
+    tool: str = ""
+    query: str = ""
+    trace: str = ""
+    answer: str = ""
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the agent when the app starts"""
-    global agent
-    try:
-        logger.info("🚀 Starting Neo4j LangGraph MCP Agent...")
-        logger.info("Building LangGraph agent...")
-        agent = build_agent()
-        logger.info("✅ Agent built successfully")
-        logger.info(f"🌐 App will be available on port {APP_PORT}")
-    except Exception as e:
-        logger.error(f"❌ Failed to build agent: {e}")
-        raise
+def clean_cypher_query(query: str) -> str:
+    # Remove code block markers
+    query = re.sub(r'```(?:cypher|sql)?\s*', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'```', '', query)
+    
+    # Remove extra whitespace and newlines
+    query = re.sub(r'[\r\n]+', ' ', query)
+    
+    # Add proper spacing around keywords
+    keywords = [
+        "MATCH", "WITH", "RETURN", "ORDER BY", "UNWIND", "WHERE", "LIMIT",
+        "SKIP", "CALL", "YIELD", "CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
+    ]
+    for kw in keywords:
+        query = re.sub(rf'(?<!\s)({kw})', r' \1', query)
+        query = re.sub(rf'({kw})([^\s\(])', r'\1 \2', query)
+    
+    # Clean up multiple spaces
+    query = re.sub(r'\s+', ' ', query)
+    return query.strip()
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up when the app shuts down"""
-    logger.info("🛑 Shutting down Neo4j LangGraph MCP Agent...")
-    logger.info("👋 Goodbye!")
+SYS_MSG = """
+You are an expert AI assistant that helps users query and manage a Neo4j database by selecting and using one of three MCP tools. Choose the most appropriate tool and generate the correct Cypher query or action.
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    Main chat endpoint that processes user questions through the LangGraph agent
-    """
-    try:
-        # Generate session ID if not provided
-        session_id = request.session_id or str(uuid.uuid4())
-        
-        logger.info(f"📝 Processing question: {request.question}")
-        logger.info(f"🆔 Session ID: {session_id}")
-        
-        # Create agent state
-        state = AgentState(
-            question=request.question,
-            session_id=session_id
-        )
-        
-        # Run the agent with timeout
-        try:
-            result = await asyncio.wait_for(
-                agent.ainvoke(state),
-                timeout=CORTEX_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"⏰ Agent execution timed out after {CORTEX_TIMEOUT}s")
-            return ChatResponse(
-                trace="Agent execution timed out",
-                tool="",
-                query="",
-                answer="⚠️ The request timed out. Please try again or rephrase your question.",
-                session_id=session_id,
-                success=False,
-                error="Timeout"
-            )
-        
-        logger.info(f"✅ Agent completed successfully")
-        logger.info(f"🔧 Tool used: {result.get('tool', 'none')}")
-        logger.info(f"📊 Query: {result.get('query', 'none')}")
-        
-        return ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=result.get("answer", "No answer generated"),
-            session_id=session_id,
-            success=True
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error in chat endpoint: {e}")
-        return ChatResponse(
-            trace=f"Error occurred: {str(e)}",
-            tool="",
-            query="",
-            answer=f"⚠️ An error occurred while processing your request: {str(e)}",
-            session_id=request.session_id or str(uuid.uuid4()),
-            success=False,
-            error=str(e)
-        )
+TOOL DESCRIPTIONS:
+- read_neo4j_cypher:
+    - Use for all read-only graph queries: exploring data, finding nodes/relationships, aggregation, reporting, analysis, counting.
+    - Only run safe queries (MATCH, RETURN, WHERE, OPTIONAL MATCH, etc).
+    - NEVER use this tool for CREATE, UPDATE, DELETE, SET, or any modification.
+    - Returns a list of matching nodes, relationships, or computed values.
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    try:
-        # Check if agent is initialized
-        if agent is None:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "unhealthy",
-                    "message": "Agent not initialized",
-                    "services": {
-                        "agent": "not_initialized",
-                        "mcp_server": "unknown"
-                    }
-                }
-            )
-        
-        # Test MCP server connection
-        import requests
-        try:
-            from config import SERVER_CONFIG
-            mcp_port = SERVER_CONFIG["mcp_port"]
-        except ImportError:
-            mcp_port = 8000
-            
-        try:
-            mcp_response = requests.get(f"http://localhost:{mcp_port}/health", timeout=5)
-            mcp_status = "healthy" if mcp_response.status_code == 200 else "unhealthy"
-        except Exception as e:
-            mcp_status = f"error: {str(e)}"
-        
-        return {
-            "status": "healthy",
-            "message": "All systems operational",
-            "services": {
-                "agent": "initialized",
-                "mcp_server": mcp_status
+- write_neo4j_cypher:
+    - Use ONLY for write queries: CREATE, MERGE, SET, DELETE, REMOVE, or modifying properties or structure.
+    - Use to create nodes/edges, update, or delete data.
+    - NEVER use this for data retrieval only.
+    - Returns a confirmation that the action was executed.
+
+- get_neo4j_schema:
+    - Use when the user asks about structure, schema, labels, relationship types, available node kinds, or properties.
+    - Returns a detailed schema graph, including node labels, relationship types, and property keys.
+
+IMPORTANT GUIDELINES:
+- ALWAYS output your reasoning and then the tool and Cypher query (if any).
+- Use this EXACT format for your response:
+  Tool: [tool_name]
+  Query: [cypher_query_on_single_line]
+- Do NOT use code blocks or markdown formatting for the query.
+- Put the entire Cypher query on one line after "Query: ".
+- If the user requests the number of nodes and the result is unexpectedly low, try the admin-level count as a fallback:
+    CALL db.stats.retrieve('GRAPH COUNTS') YIELD data RETURN data['NodeCount'] AS node_count
+- If the user asks for schema, always use get_neo4j_schema.
+- For ambiguous requests, ask clarifying questions or choose the safest tool.
+
+FEW-SHOT EXAMPLES:
+
+User: How many nodes are in the graph?
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN count(n)
+
+User: Give me the true node count (admin)
+Tool: read_neo4j_cypher
+Query: CALL db.stats.retrieve('GRAPH COUNTS') YIELD data RETURN data['NodeCount'] AS node_count
+
+User: List all Person nodes
+Tool: read_neo4j_cypher
+Query: MATCH (n:Person) RETURN n
+
+User: Show the schema of the database
+Tool: get_neo4j_schema
+
+User: Create a Person node named Alice
+Tool: write_neo4j_cypher
+Query: CREATE (:Person {name: 'Alice'})
+
+User: List all nodes with most number of relationships
+Tool: read_neo4j_cypher
+Query: MATCH (n) WITH n, size((n)--()) as rel_count WITH collect({node: n, count: rel_count}) as node_rel_counts, max(rel_count) as max_rel_count UNWIND node_rel_counts as node_rel_count WHERE node_rel_count.count = max_rel_count RETURN node_rel_count.node
+
+User: Update all Person nodes to set 'active' to true
+Tool: write_neo4j_cypher
+Query: MATCH (n:Person) SET n.active = true
+
+User: Delete all nodes with label Temp
+Tool: write_neo4j_cypher
+Query: MATCH (n:Temp) DETACH DELETE n
+
+User: What relationships exist between Employee and Department?
+Tool: get_neo4j_schema
+
+User: I want to change Bob's email
+Tool: write_neo4j_cypher
+Query: MATCH (n:Person {name: 'Bob'}) SET n.email = 'new@example.com'
+
+User: What properties does a Project node have?
+Tool: get_neo4j_schema
+
+User: Remove the "retired" property from all Employee nodes
+Tool: write_neo4j_cypher
+Query: MATCH (e:Employee) REMOVE e.retired
+
+ERROR CASES:
+- If the query seems ambiguous or unsafe, clarify or refuse with an explanation.
+- NEVER run write queries using read_neo4j_cypher.
+
+ALLOWED TOOLS: Only use these exact tool names:
+- read_neo4j_cypher
+- write_neo4j_cypher
+- get_neo4j_schema
+
+Never invent, abbreviate, or use other names.
+If unsure, ask a clarifying question.
+
+ALWAYS explain your choice of tool before outputting the tool and Cypher.
+REMEMBER: Put the query on a single line after "Query: " without code blocks.
+"""
+
+try:
+    from config import CORTEX_CONFIG, SERVER_CONFIG, DEBUG_CONFIG
+    API_URL = CORTEX_CONFIG["api_url"]
+    API_KEY = CORTEX_CONFIG["api_key"]
+    MODEL = CORTEX_CONFIG["model"]
+    APP_CODE = CORTEX_CONFIG["app_code"]
+    APP_ID = CORTEX_CONFIG["app_id"]
+    MCP_PORT = SERVER_CONFIG["mcp_port"]
+    PRINT_DEBUG = DEBUG_CONFIG["print_llm_output"]
+    PRINT_QUERIES = DEBUG_CONFIG["print_queries"]
+except ImportError:
+    # Fallback to hardcoded values if config.py is not available
+    API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+    API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+    MODEL = "llama3.1-70b"
+    APP_CODE = "edagnai"
+    APP_ID = "edadip"
+    MCP_PORT = 8000
+    PRINT_DEBUG = True
+    PRINT_QUERIES = True
+
+def cortex_llm(prompt: str, session_id: str) -> str:
+    headers = {
+        "Authorization": f'Snowflake Token="{API_KEY}"',
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "query": {
+            "aplctn_cd": APP_CODE,
+            "app_id": APP_ID,
+            "api_key": API_KEY,
+            "method": "cortex",
+            "model": MODEL,
+            "sys_msg": SYS_MSG,
+            "limit_convs": "0",
+            "prompt": {
+                "messages": [{"role": "user", "content": prompt}]
             },
-            "port": APP_PORT
+            "session_id": session_id
         }
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "unhealthy",
-                "message": f"Health check failed: {str(e)}",
-                "services": {
-                    "agent": "error",
-                    "mcp_server": "unknown"
-                }
-            }
-        )
+    }
+    resp = requests.post(API_URL, headers=headers, json=payload, verify=False)
+    return resp.text.partition("end_of_stream")[0].strip()
 
-@app.get("/")
-async def root():
-    """Root endpoint with basic info"""
+def parse_llm_output(llm_output):
+    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    trace = llm_output.strip()
+    tool = None
+    query = None
+    
+    # Find tool
+    tool_match = re.search(r"Tool:\s*([\w_]+)", llm_output, re.I)
+    if tool_match:
+        tname = tool_match.group(1).strip()
+        if tname in allowed_tools:
+            tool = tname
+    
+    # Find query - handle both single line and multi-line queries
+    query_match = re.search(r"Query:\s*(.*?)(?=\n\n|\n[A-Z]|\Z)", llm_output, re.I | re.DOTALL)
+    if query_match:
+        query_text = query_match.group(1).strip()
+        
+        # Handle code blocks
+        if "```" in query_text:
+            # Extract content between code blocks
+            code_block_match = re.search(r'```(?:cypher|sql)?\s*\n?(.*?)\n?```', query_text, re.DOTALL | re.IGNORECASE)
+            if code_block_match:
+                query = code_block_match.group(1).strip()
+            else:
+                # If no proper code block, remove all ``` markers
+                query = re.sub(r'```[^\n]*', '', query_text).strip()
+        else:
+            query = query_text
+        
+        # Clean up the query
+        if query:
+            query = clean_cypher_query(query)
+    
+    return tool, query, trace
+
+def format_response(data) -> str:
+    """Format the response from MCP server into a human-readable string"""
+    if isinstance(data, str):
+        return data
+    
+    if isinstance(data, dict):
+        # Handle write operation responses
+        if "result" in data and "success" in data:
+            if data["success"]:
+                counters = data.get("counters", {})
+                if any(counters.values()):
+                    parts = []
+                    if counters.get("nodes_created", 0) > 0:
+                        parts.append(f"Created {counters['nodes_created']} nodes")
+                    if counters.get("relationships_created", 0) > 0:
+                        parts.append(f"Created {counters['relationships_created']} relationships")
+                    if counters.get("properties_set", 0) > 0:
+                        parts.append(f"Set {counters['properties_set']} properties")
+                    if counters.get("nodes_deleted", 0) > 0:
+                        parts.append(f"Deleted {counters['nodes_deleted']} nodes")
+                    if counters.get("relationships_deleted", 0) > 0:
+                        parts.append(f"Deleted {counters['relationships_deleted']} relationships")
+                    
+                    return "✅ " + ", ".join(parts) if parts else "✅ Operation completed successfully"
+                else:
+                    return "✅ Operation completed successfully (no changes made)"
+            else:
+                return f"❌ Operation failed: {data.get('result', 'Unknown error')}"
+        
+        # Handle schema responses
+        if "labels" in data or "relationship_types" in data:
+            parts = []
+            if "labels" in data:
+                parts.append(f"**Node Labels:** {', '.join(data['labels'])}")
+            if "relationship_types" in data:
+                parts.append(f"**Relationship Types:** {', '.join(data['relationship_types'])}")
+            if "property_keys" in data:
+                parts.append(f"**Property Keys:** {', '.join(data['property_keys'])}")
+            return "\n".join(parts)
+        
+        # Handle other dict responses - try to format nicely
+        try:
+            import json
+            return json.dumps(data, indent=2, default=str)
+        except:
+            return str(data)
+    
+    if isinstance(data, list):
+        if not data:
+            return "No results found"
+        
+        # Handle single count results
+        if len(data) == 1 and isinstance(data[0], dict):
+            single_item = data[0]
+            if len(single_item) == 1:
+                key, value = list(single_item.items())[0]
+                # Format count results nicely
+                if "count" in key.lower():
+                    return f"**Result:** {value}"
+                else:
+                    return f"**{key}:** {value}"
+        
+        # Handle multiple results
+        if len(data) <= 10:  # Show all results if 10 or fewer
+            results = []
+            for i, item in enumerate(data, 1):
+                if isinstance(item, dict):
+                    formatted_item = []
+                    for key, value in item.items():
+                        formatted_item.append(f"{key}: {value}")
+                    results.append(f"{i}. {', '.join(formatted_item)}")
+                else:
+                    results.append(f"{i}. {item}")
+            return "\n".join(results)
+        else:
+            # Show first 10 results and summary
+            results = []
+            for i, item in enumerate(data[:10], 1):
+                if isinstance(item, dict):
+                    formatted_item = []
+                    for key, value in item.items():
+                        formatted_item.append(f"{key}: {value}")
+                    results.append(f"{i}. {', '.join(formatted_item)}")
+                else:
+                    results.append(f"{i}. {item}")
+            
+            results.append(f"\n... and {len(data) - 10} more results")
+            return "\n".join(results)
+    
+    # Fallback for any other type
+    return str(data)
+
+def select_tool_node(state: AgentState) -> dict:
+    llm_output = cortex_llm(state.question, state.session_id)
+    tool, query, trace = parse_llm_output(llm_output)
+    
+    # Debug logging
+    if PRINT_DEBUG:
+        print(f"LLM Output: {llm_output}")
+        print(f"Parsed Tool: {tool}")
+        print(f"Parsed Query: {query}")
+    
     return {
-        "message": "Neo4j LangGraph MCP+LLM Agent",
-        "version": "1.0.0",
-        "endpoints": {
-            "chat": "/chat",
-            "health": "/health",
-            "docs": "/docs"
-        },
-        "description": "AI Agent for Neo4j database queries using LangGraph and Snowflake Cortex"
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool or "",
+        "query": query or "",
+        "trace": trace or "",
+        "answer": ""
     }
 
-@app.get("/status")
-async def get_status():
-    """Get detailed status information"""
+def execute_tool_node(state: AgentState) -> dict:
+    tool = state.tool
+    query = state.query
+    trace = state.trace
+    answer = ""
+    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    
     try:
-        # Get configuration info
-        try:
-            from config import NEO4J_CONFIG, CORTEX_CONFIG, SERVER_CONFIG
-            config_status = "loaded"
-            neo4j_uri = NEO4J_CONFIG["uri"]
-            cortex_model = CORTEX_CONFIG["model"]
-        except ImportError:
-            config_status = "using_defaults"
-            neo4j_uri = "neo4j://localhost:7687"
-            cortex_model = "llama3.1-70b"
-        
-        return {
-            "agent_status": "initialized" if agent else "not_initialized",
-            "config_status": config_status,
-            "neo4j_uri": neo4j_uri,
-            "cortex_model": cortex_model,
-            "debug_enabled": ENABLE_DEBUG,
-            "timeout": CORTEX_TIMEOUT,
-            "port": APP_PORT
-        }
-        
+        if not tool:
+            answer = (
+                "⚠️ The agent did not choose a valid tool (recognized: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema). "
+                "Please rephrase your question to be about graph data, updates, or schema."
+            )
+        elif tool not in valid_tools:
+            answer = f"⚠️ MCP tool not recognized: {tool}. Only these are allowed: {', '.join(valid_tools)}"
+        elif tool == "read_neo4j_cypher" and query and query.strip().lower() == "return db.name() as name":
+            answer = "Your Neo4j does not support querying the database name via Cypher. Check your connection settings."
+        elif tool == "get_neo4j_schema":
+            result = requests.post(f"http://localhost:{MCP_PORT}/get_neo4j_schema", headers=headers)
+            if result.ok:
+                answer = format_response(result.json())
+            else:
+                answer = result.text
+        elif tool == "read_neo4j_cypher":
+            if not query or not query.strip():
+                answer = "⚠️ Sorry, I could not generate a valid Cypher query for your question. Please try to rephrase or clarify."
+            else:
+                query_clean = clean_cypher_query(query)
+                if PRINT_QUERIES:
+                    print(f"Executing query: {query_clean}")  # Debug logging
+                
+                node_count_query = (
+                    query_clean.lower() == "match (n) return count(n)"
+                    or query_clean.lower() == "match (n) return count(n) as node_count"
+                )
+                
+                data = {"query": query_clean, "params": {}}
+                result = requests.post(f"http://localhost:{MCP_PORT}/read_neo4j_cypher", json=data, headers=headers)
+                if result.ok:
+                    answer = format_response(result.json())
+                else:
+                    answer = result.text
+        elif tool == "write_neo4j_cypher":
+            if not query or not query.strip():
+                answer = "⚠️ Sorry, I could not generate a valid Cypher query for your action. Please try to rephrase or clarify."
+            else:
+                query_clean = clean_cypher_query(query)
+                if PRINT_QUERIES:
+                    print(f"Executing write query: {query_clean}")  # Debug logging
+                
+                data = {"query": query_clean, "params": {}}
+                result = requests.post(f"http://localhost:{MCP_PORT}/write_neo4j_cypher", json=data, headers=headers)
+                if result.ok:
+                    answer = format_response(result.json())
+                else:
+                    answer = result.text
+        else:
+            answer = f"Unknown tool: {tool}"
     except Exception as e:
-        logger.error(f"Status check failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Status check failed: {str(e)}"}
-        )
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler"""
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": str(exc) if ENABLE_DEBUG else "An error occurred"
-        }
-    )
-
-# Include router if it exists
-try:
-    from router import router
-    app.include_router(router)
-    logger.info("✅ Additional routes loaded from router.py")
-except ImportError:
-    logger.info("ℹ️  No additional router found")
-
-if __name__ == "__main__":
-    import uvicorn
+        answer = f"⚠️ MCP execution failed: {str(e)}"
     
-    logger.info("🚀 Starting Neo4j LangGraph MCP Agent directly...")
-    logger.info(f"🌐 Server will run on http://localhost:{APP_PORT}")
-    
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=APP_PORT,
-        reload=True,
-        log_level="debug" if ENABLE_DEBUG else "info"
-    )
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool,
+        "query": query,
+        "trace": trace,
+        "answer": answer
+    }
+
+def build_agent():
+    workflow = StateGraph(state_schema=AgentState)
+    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
+    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
+    workflow.set_entry_point("select_tool")
+    workflow.add_edge("select_tool", "execute_tool")
+    workflow.add_edge("execute_tool", END)
+    return workflow.compile()
