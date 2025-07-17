@@ -1,71 +1,124 @@
-import json
-import logging
-import re
-from typing import Any, Optional
-from fastmcp.exceptions import ToolError
-from fastmcp.tools.tool import ToolResult, TextContent
-from fastmcp.server import FastMCP
-from neo4j import AsyncGraphDatabase, AsyncTransaction
-from pydantic import Field
+import requests
+from pydantic import BaseModel
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableLambda
 
-logger = logging.getLogger("mcp_neo4j")
+class AgentState(BaseModel):
+    question: str
+    session_id: str
+    tool: str = ""
+    query: str = ""
+    trace: str = ""
+    answer: str = ""
 
-def _is_write(query: str) -> bool:
-    return bool(re.search(r"\b(CREATE|MERGE|SET|DELETE|REMOVE|DROP)\b", query, re.IGNORECASE))
+API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+MODEL = "llama3.1-70b"
+SYS_MSG = """
+You are an AI agent that helps users interact with a Neo4j database using MCP tools.
+Use only the following tools, choosing the best one based on the user's request:
 
-async def _read(tx: AsyncTransaction, query: str, params: dict[str, Any]) -> str:
-    res = await tx.run(query, params)
-    eager_results = await res.to_eager_result()
-    return json.dumps([r.data() for r in eager_results.records], default=str)
+TOOL DESCRIPTIONS:
+- read_neo4j_cypher: For all read-only Cypher queries (MATCH, RETURN, count, etc).
+- write_neo4j_cypher: For creating, updating, or deleting nodes/relationships.
+- get_neo4j_schema: For requests about graph structure, schema, labels, or relationship types.
 
-async def _write(tx: AsyncTransaction, query: str, params: dict[str, Any]):
-    return await tx.run(query, params)
+EXAMPLES:
+User: How many nodes are in the graph?
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN count(n)
 
-# Neo4j connection
-neo4j_driver = AsyncGraphDatabase.driver(
-    "neo4j://10.189.116.237:7687", auth=("neo4j", "Vkg5d$F!pLq2@9vRwE=")
-)
-mcp = FastMCP("mcp-neo4j", stateless_http=True)
+User: Create a Person node named Alice
+Tool: write_neo4j_cypher
+Query: CREATE (:Person {name: 'Alice'})
 
-@mcp.tool(description="Returns schema metadata for the Neo4j database (labels, properties, relationship types).")
-async def get_neo4j_schema() -> list[ToolResult]:
-    """
-    Return graph structure, labels, properties, and relationships.
-    """
-    query = "CALL apoc.meta.schema();"
-    async with neo4j_driver.session(database="connectiq") as session:
-        result = await session.execute_read(_read, query, {})
-        val = json.loads(result)[0].get("value")
-        return [ToolResult(content=[TextContent(type="text", text=json.dumps(val))])]
+User: Show me the schema of the graph
+Tool: get_neo4j_schema
 
-@mcp.tool(description="Run a Cypher read-only query (MATCH, RETURN, etc). Use for analysis, counts, selects.")
-async def read_neo4j_cypher(
-    query: str = Field(..., description="The Cypher read query."),
-    params: Optional[dict[str, Any]] = Field(None, description="Query parameters."),
-) -> list[ToolResult]:
-    """
-    Executes a read query on the Neo4j database.
-    """
-    if _is_write(query):
-        raise ToolError("Only read queries allowed.")
-    async with neo4j_driver.session(database="connectiq") as session:
-        result = await session.execute_read(_read, query, params or {})
-        return [ToolResult(content=[TextContent(type="text", text=result)])]
+Always output your reasoning, then the tool name and the Cypher query (if needed).
+"""
 
-@mcp.tool(description="Run a Cypher write query (CREATE, MERGE, DELETE, SET, etc). Use for creating, updating, or deleting data.")
-async def write_neo4j_cypher(
-    query: str = Field(..., description="The Cypher write query."),
-    params: Optional[dict[str, Any]] = Field(None, description="Query parameters."),
-) -> list[ToolResult]:
-    """
-    Executes a write query on the Neo4j database.
-    """
-    if not _is_write(query):
-        raise ToolError("Only write queries allowed.")
-    async with neo4j_driver.session(database="connectiq") as session:
-        result = await session.execute_write(_write, query, params or {})
-        return [ToolResult(content=[TextContent(type="text", text="Write query executed.")])]
+def cortex_llm(prompt: str, session_id: str) -> str:
+    headers = {
+        "Authorization": f'Snowflake Token="{API_KEY}"',
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "query": {
+            "aplctn_cd": "edagnai",
+            "app_id": "edadip",
+            "api_key": API_KEY,
+            "method": "cortex",
+            "model": MODEL,
+            "sys_msg": SYS_MSG,
+            "limit_convs": "0",
+            "prompt": {
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            "session_id": session_id
+        }
+    }
+    resp = requests.post(API_URL, headers=headers, json=payload, verify=False)
+    return resp.text.partition("end_of_stream")[0].strip()
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(mcp.run_http_async(host="0.0.0.0", port=8000, path="/mcp/"))
+def parse_llm_output(llm_output):
+    import re
+    trace = llm_output.strip()
+    tool = None
+    query = None
+    tool_match = re.search(r"Tool: ([\w_]+)", llm_output, re.I)
+    if tool_match:
+        tool = tool_match.group(1)
+    query_match = re.search(r"Query: (.+)", llm_output, re.I)
+    if query_match:
+        query = query_match.group(1).strip()
+    return tool, query, trace
+
+def select_tool_node(state: AgentState) -> dict:
+    llm_output = cortex_llm(state.question, state.session_id)
+    tool, query, trace = parse_llm_output(llm_output)
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool or "",
+        "query": query or "",
+        "trace": trace or "",
+        "answer": ""
+    }
+
+def execute_tool_node(state: AgentState) -> dict:
+    tool = state.tool
+    query = state.query
+    trace = state.trace
+    answer = ""
+    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    headers = {"Accept": "application/json"}
+    try:
+        if tool not in valid_tools:
+            answer = f"⚠️ MCP tool not recognized: {tool}"
+        elif tool == "get_neo4j_schema":
+            result = requests.post("http://localhost:8000/mcp/get_neo4j_schema", headers=headers)
+            answer = result.json() if result.ok else result.text
+        else:
+            data = {"query": query, "params": {}}
+            result = requests.post(f"http://localhost:8000/mcp/{tool}", json=data, headers=headers)
+            answer = result.json() if result.ok else result.text
+    except Exception as e:
+        answer = f"⚠️ MCP execution failed: {str(e)}"
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool,
+        "query": query,
+        "trace": trace,
+        "answer": answer
+    }
+
+def build_agent():
+    workflow = StateGraph(state_schema=AgentState)
+    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
+    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
+    workflow.set_entry_point("select_tool")
+    workflow.add_edge("select_tool", "execute_tool")
+    workflow.add_edge("execute_tool", END)
+    return workflow.compile()
