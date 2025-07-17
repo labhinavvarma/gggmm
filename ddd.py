@@ -1,181 +1,121 @@
-
-# config.py
+# run_app.py
 """
-Configuration settings for Neo4j LangGraph Supervisor Application
+Startup script for Neo4j LangGraph Supervisor Application
 """
 
+import subprocess
+import sys
+import time
 import os
-from typing import Dict, Any
+import asyncio
+from pathlib import Path
 
-# Neo4j Database Configuration
-NEO4J_CONFIG = {
-    "uri": os.getenv("NEO4J_URI", "neo4j://10.189.116.237:7687"),
-    "username": os.getenv("NEO4J_USER", "neo4j"),
-    "password": os.getenv("NEO4J_PASSWORD", "Vkg5d$F!pLq2@9vRwE="),
-    "database": os.getenv("NEO4J_DATABASE", "connectiq"),
-    "max_connection_lifetime": 3600,
-    "max_connection_pool_size": 50,
-    "connection_acquisition_timeout": 60
-}
-
-# Cortex LLM Configuration
-CORTEX_CONFIG = {
-    "url": os.getenv("CORTEX_URL", "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"),
-    "api_key": os.getenv("CORTEX_API_KEY", "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"),
-    "app_id": os.getenv("CORTEX_APP_ID", "edadip"),
-    "application_code": os.getenv("CORTEX_APLCTN_CD", "edagnai"),
-    "model": os.getenv("CORTEX_MODEL", "llama3.1-70b"),
-    "timeout": 30,
-    "max_retries": 3
-}
-
-# MCP Server Configuration
-MCP_CONFIG = {
-    "host": os.getenv("MCP_HOST", "0.0.0.0"),
-    "port": int(os.getenv("MCP_PORT", "8000")),
-    "path": os.getenv("MCP_PATH", "/messages/"),
-    "url": f"http://localhost:{os.getenv('MCP_PORT', '8000')}/messages/"
-}
-
-# Streamlit Configuration
-STREAMLIT_CONFIG = {
-    "host": os.getenv("STREAMLIT_HOST", "localhost"),
-    "port": int(os.getenv("STREAMLIT_PORT", "8501")),
-    "title": "Neo4j LangGraph Supervisor",
-    "icon": "🧠"
-}
-
-# LangGraph Configuration
-LANGGRAPH_CONFIG = {
-    "max_iterations": 10,
-    "timeout": 300,  # 5 minutes
-    "enable_debugging": True
-}
-
-# Logging Configuration
-LOGGING_CONFIG = {
-    "level": os.getenv("LOG_LEVEL", "INFO"),
-    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "file": os.getenv("LOG_FILE", "app.log")
-}
-
-# Agent Prompts Configuration
-AGENT_PROMPTS = {
-    "supervisor_system": """You are a Supervisor Agent coordinating Neo4j database operations.
-Your team consists of specialized agents for different tasks.""",
+def check_requirements():
+    """Check if all required packages are installed"""
+    print("🔍 Checking requirements...")
     
-    "cypher_generator_system": """You are an Expert Cypher Query Generator for Neo4j ConnectIQ database.
-Focus on creating efficient, optimized queries.""",
+    try:
+        import streamlit
+        import langgraph
+        import langchain_core
+        import neo4j
+        import mcp
+        import fastmcp
+        import pydantic
+        import requests
+        print("✅ All required packages are installed")
+        return True
+    except ImportError as e:
+        print(f"❌ Missing package: {e}")
+        print("📦 Please install requirements: pip install -r requirements.txt")
+        return False
+
+def check_files():
+    """Check if all required files exist"""
+    print("📁 Checking required files...")
     
-    "query_executor_system": """You are a Query Execution Agent responsible for running queries safely and efficiently.""",
-    
-    "result_interpreter_system": """You are a Result Interpretation Agent that analyzes data and provides business insights."""
-}
-
-# Database Schema Information (for context)
-CONNECTIQ_SCHEMA = {
-    "nodes": [
-        "Apps", "Devices", "Users", "Categories", 
-        "Versions", "Reviews", "Developers"
-    ],
-    "relationships": [
-        "COMPATIBLE_WITH", "BELONGS_TO", "HAS_VERSION", 
-        "REVIEWED_BY", "DEVELOPED_BY", "INSTALLED_ON"
-    ],
-    "common_properties": [
-        "name", "version", "rating", "install_count", 
-        "category", "device_type", "release_date", "description"
-    ]
-}
-
-# Security Configuration
-SECURITY_CONFIG = {
-    "allowed_operations": {
-        "read": ["MATCH", "RETURN", "WITH", "WHERE", "ORDER BY", "LIMIT", "SKIP"],
-        "write": ["CREATE", "MERGE", "SET", "DELETE", "REMOVE"]
-    },
-    "blocked_operations": [
-        "CALL dbms.", "CALL db.", "LOAD CSV", "USING PERIODIC COMMIT"
-    ],
-    "max_query_length": 5000,
-    "max_result_size": 1000
-}
-
-def get_config(section: str) -> Dict[str, Any]:
-    """Get configuration for a specific section"""
-    configs = {
-        "neo4j": NEO4J_CONFIG,
-        "cortex": CORTEX_CONFIG,
-        "mcp": MCP_CONFIG,
-        "streamlit": STREAMLIT_CONFIG,
-        "langgraph": LANGGRAPH_CONFIG,
-        "logging": LOGGING_CONFIG,
-        "prompts": AGENT_PROMPTS,
-        "schema": CONNECTIQ_SCHEMA,
-        "security": SECURITY_CONFIG
-    }
-    return configs.get(section, {})
-
-def validate_config() -> bool:
-    """Validate all configuration settings"""
-    required_settings = [
-        (NEO4J_CONFIG, "uri"),
-        (NEO4J_CONFIG, "username"),
-        (NEO4J_CONFIG, "password"),
-        (CORTEX_CONFIG, "url"),
-        (CORTEX_CONFIG, "api_key")
+    required_files = [
+        "langgraph_supervisor.py",
+        "mcpserver.py",
+        "requirements.txt"
     ]
     
-    for config_dict, key in required_settings:
-        if not config_dict.get(key):
-            print(f"❌ Missing required configuration: {key}")
-            return False
+    missing_files = []
+    for file in required_files:
+        if not Path(file).exists():
+            missing_files.append(file)
     
+    if missing_files:
+        print(f"❌ Missing files: {missing_files}")
+        return False
+    
+    print("✅ All required files found")
     return True
 
-# Environment file template
-ENV_TEMPLATE = """
-# Neo4j Configuration
-NEO4J_URI=neo4j://10.189.116.237:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=Vkg5d$F!pLq2@9vRwE=
-NEO4J_DATABASE=connectiq
+def install_requirements():
+    """Install requirements if needed"""
+    print("📦 Installing requirements...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        print("✅ Requirements installed successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to install requirements: {e}")
+        return False
 
-# Cortex LLM Configuration
-CORTEX_URL=https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete
-CORTEX_API_KEY=78a799ea-a0f6-11ef-a0ce-15a449f7a8b0
-CORTEX_APP_ID=edadip
-CORTEX_APLCTN_CD=edagnai
-CORTEX_MODEL=llama3.1-70b
+def run_application():
+    """Run the main Streamlit application"""
+    print("🚀 Starting Neo4j LangGraph Supervisor Application...")
+    print("🌐 The application will open in your browser automatically")
+    print("🛑 Press Ctrl+C to stop the application")
+    
+    try:
+        # Run Streamlit app
+        subprocess.run([
+            sys.executable, "-m", "streamlit", "run", 
+            "langgraph_supervisor.py",
+            "--server.port", "8501",
+            "--server.address", "localhost",
+            "--server.headless", "false"
+        ])
+    except KeyboardInterrupt:
+        print("\n👋 Application stopped by user")
+    except Exception as e:
+        print(f"❌ Error running application: {e}")
 
-# MCP Server Configuration
-MCP_HOST=0.0.0.0
-MCP_PORT=8000
-MCP_PATH=/messages/
-
-# Streamlit Configuration
-STREAMLIT_HOST=localhost
-STREAMLIT_PORT=8501
-
-# Logging Configuration
-LOG_LEVEL=INFO
-LOG_FILE=app.log
-"""
-
-def create_env_file():
-    """Create a .env file template"""
-    if not os.path.exists('.env'):
-        with open('.env', 'w') as f:
-            f.write(ENV_TEMPLATE)
-        print("✅ Created .env file template")
-    else:
-        print("ℹ️  .env file already exists")
+def main():
+    """Main startup function"""
+    print("=" * 60)
+    print("🧠 Neo4j LangGraph Supervisor Application")
+    print("=" * 60)
+    
+    # Check if files exist
+    if not check_files():
+        print("\n❌ Setup incomplete. Please ensure all files are in the current directory.")
+        return
+    
+    # Check requirements
+    if not check_requirements():
+        user_input = input("\n📦 Install requirements now? (y/n): ").lower().strip()
+        if user_input == 'y':
+            if not install_requirements():
+                return
+            print("✅ Requirements installed. Please restart the script.")
+            return
+        else:
+            print("❌ Cannot proceed without required packages.")
+            return
+    
+    print("\n🎯 System Status:")
+    print("  ✅ Requirements: OK")
+    print("  ✅ Files: OK")
+    print("  🚀 Ready to launch!")
+    
+    # Small delay for user to read
+    time.sleep(2)
+    
+    # Run the application
+    run_application()
 
 if __name__ == "__main__":
-    print("🔧 Configuration validation:")
-    if validate_config():
-        print("✅ All configurations are valid")
-    else:
-        print("❌ Configuration validation failed")
-    
-    create_env_file()
+    main()
