@@ -70,14 +70,6 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     
-    .query-example {
-        background-color: #f0f2f6;
-        padding: 0.5rem;
-        border-radius: 0.3rem;
-        margin: 0.2rem 0;
-        border-left: 3px solid #1f77b4;
-    }
-    
     .success-message {
         background-color: #d4edda;
         border: 1px solid #c3e6cb;
@@ -96,21 +88,6 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     
-    .loading-spinner {
-        display: inline-block;
-        width: 20px;
-        height: 20px;
-        border: 3px solid #f3f3f3;
-        border-top: 3px solid #3498db;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-    }
-    
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    
     .stButton > button {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         color: white;
@@ -124,10 +101,6 @@ st.markdown("""
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-    }
-    
-    .sidebar .stSelectbox {
-        background-color: #f8f9fa;
     }
     
     .highlight {
@@ -331,253 +304,249 @@ def send_query(question: str) -> Dict[str, Any]:
             "answer": f"❌ Unexpected error: {str(e)}"
         }
 
-def main():
-    # Header
-    st.markdown("""
-    <div style="text-align: center; padding: 2rem 0;">
-        <h1 style="color: #667eea; margin-bottom: 0.5rem;">🧠 Neo4j AI Assistant</h1>
-        <p style="color: #666; font-size: 1.1rem;">Natural Language Interface for Graph Database Queries</p>
-    </div>
-    """, unsafe_allow_html=True)
+# Header
+st.markdown("""
+<div style="text-align: center; padding: 2rem 0;">
+    <h1 style="color: #667eea; margin-bottom: 0.5rem;">🧠 Neo4j AI Assistant</h1>
+    <p style="color: #666; font-size: 1.1rem;">Natural Language Interface for Graph Database Queries</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Sidebar
+with st.sidebar:
+    st.markdown("## 🎛️ Control Panel")
     
-    # Sidebar
-    with st.sidebar:
-        st.markdown("## 🎛️ Control Panel")
-        
-        # Service Status
-        st.markdown("### 🔧 Service Status")
-        services = check_service_health()
-        
-        for service, status in services.items():
-            st.markdown(f"**{service}:** {status}")
-        
-        # System Stats
-        st.markdown("### 📊 System Statistics")
-        stats = get_system_stats()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total Queries", st.session_state.query_count)
-        with col2:
-            st.metric("Successful", st.session_state.successful_queries)
-        
-        if st.session_state.query_count > 0:
-            success_rate = (st.session_state.successful_queries / st.session_state.query_count) * 100
-            st.metric("Success Rate", f"{success_rate:.1f}%")
-        
-        if st.session_state.last_query_time:
-            st.metric("Last Response Time", f"{st.session_state.last_query_time:.2f}s")
-        
-        # Query Examples
-        st.markdown("### 💡 Quick Examples")
-        
-        example_queries = [
-            "How many nodes are in the graph?",
-            "Show me the database schema",
-            "List all Person nodes",
-            "Find nodes with most relationships",
-            "Count all relationships",
-            "What node types exist?",
-            "Show me recent activity",
-            "Create a test node",
-            "Delete temporary data"
-        ]
-        
-        selected_example = st.selectbox(
-            "Choose an example query:",
-            ["Select an example..."] + example_queries
+    # Service Status
+    st.markdown("### 🔧 Service Status")
+    services = check_service_health()
+    
+    for service, status in services.items():
+        st.markdown(f"**{service}:** {status}")
+    
+    # System Stats
+    st.markdown("### 📊 System Statistics")
+    stats = get_system_stats()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Total Queries", st.session_state.query_count)
+    with col2:
+        st.metric("Successful", st.session_state.successful_queries)
+    
+    if st.session_state.query_count > 0:
+        success_rate = (st.session_state.successful_queries / st.session_state.query_count) * 100
+        st.metric("Success Rate", f"{success_rate:.1f}%")
+    
+    if st.session_state.last_query_time:
+        st.metric("Last Response Time", f"{st.session_state.last_query_time:.2f}s")
+    
+    # Query Examples
+    st.markdown("### 💡 Quick Examples")
+    
+    example_queries = [
+        "How many nodes are in the graph?",
+        "Show me the database schema",
+        "List all Person nodes",
+        "Find nodes with most relationships",
+        "Count all relationships",
+        "What node types exist?",
+        "Show me recent activity",
+        "Create a test node",
+        "Delete temporary data"
+    ]
+    
+    selected_example = st.selectbox(
+        "Choose an example query:",
+        ["Select an example..."] + example_queries
+    )
+    
+    if selected_example != "Select an example...":
+        if st.button("🚀 Run Example", key="run_example"):
+            st.session_state.selected_query = selected_example
+            st.rerun()
+    
+    # Export Options
+    st.markdown("### 📥 Export Options")
+    
+    if st.button("📊 Export Chat History"):
+        if st.session_state.messages:
+            export_data = {
+                "session_id": st.session_state.session_id,
+                "timestamp": datetime.now().isoformat(),
+                "messages": st.session_state.messages,
+                "statistics": {
+                    "query_count": st.session_state.query_count,
+                    "successful_queries": st.session_state.successful_queries,
+                    "query_history": st.session_state.query_history
+                }
+            }
+            
+            st.download_button(
+                label="💾 Download JSON",
+                data=json.dumps(export_data, indent=2),
+                file_name=f"neo4j_chat_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
+        else:
+            st.warning("No chat history to export")
+    
+    if st.button("🔄 Clear Chat History"):
+        st.session_state.messages = []
+        st.session_state.query_history = []
+        st.session_state.query_count = 0
+        st.session_state.successful_queries = 0
+        st.rerun()
+
+# Main content area
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    # Chat Interface
+    st.markdown("### 💬 Chat Interface")
+    
+    # Chat input
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_input(
+            "Ask me anything about your Neo4j database:",
+            placeholder="e.g., How many nodes are in the graph?",
+            key="user_input"
         )
         
-        if selected_example != "Select an example...":
-            if st.button("🚀 Run Example", key="run_example"):
-                st.session_state.selected_query = selected_example
-                st.experimental_rerun()
+        col_submit, col_voice = st.columns([3, 1])
         
-        # Export Options
-        st.markdown("### 📥 Export Options")
+        with col_submit:
+            submitted = st.form_submit_button("🚀 Send Query", use_container_width=True)
         
-        if st.button("📊 Export Chat History"):
-            if st.session_state.messages:
-                export_data = {
-                    "session_id": st.session_state.session_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "messages": st.session_state.messages,
-                    "statistics": {
-                        "query_count": st.session_state.query_count,
-                        "successful_queries": st.session_state.successful_queries,
-                        "query_history": st.session_state.query_history
-                    }
-                }
-                
-                st.download_button(
-                    label="💾 Download JSON",
-                    data=json.dumps(export_data, indent=2),
-                    file_name=f"neo4j_chat_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-            else:
-                st.warning("No chat history to export")
-        
-        if st.button("🔄 Clear Chat History"):
-            st.session_state.messages = []
-            st.session_state.query_history = []
-            st.session_state.query_count = 0
-            st.session_state.successful_queries = 0
-            st.experimental_rerun()
+        with col_voice:
+            voice_input = st.form_submit_button("🎤 Voice", use_container_width=True)
     
-    # Main content area
-    col1, col2 = st.columns([2, 1])
+    # Handle form submission or example selection
+    query_to_process = None
     
-    with col1:
-        # Chat Interface
-        st.markdown("### 💬 Chat Interface")
+    if submitted and user_input:
+        query_to_process = user_input
+    elif hasattr(st.session_state, 'selected_query'):
+        query_to_process = st.session_state.selected_query
+        delattr(st.session_state, 'selected_query')
+    
+    if query_to_process:
+        # Add user message
+        st.session_state.messages.append({
+            "role": "user",
+            "content": query_to_process,
+            "timestamp": datetime.now().isoformat()
+        })
         
-        # Chat input
-        with st.form("chat_form", clear_on_submit=True):
-            user_input = st.text_input(
-                "Ask me anything about your Neo4j database:",
-                placeholder="e.g., How many nodes are in the graph?",
-                key="user_input"
-            )
-            
-            col_submit, col_voice = st.columns([3, 1])
-            
-            with col_submit:
-                submitted = st.form_submit_button("🚀 Send Query", use_container_width=True)
-            
-            with col_voice:
-                voice_input = st.form_submit_button("🎤 Voice", use_container_width=True)
+        # Show loading spinner
+        with st.spinner("🤔 Processing your query..."):
+            result = send_query(query_to_process)
         
-        # Handle form submission or example selection
-        query_to_process = None
+        # Add bot response
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": result,
+            "timestamp": datetime.now().isoformat()
+        })
         
-        if submitted and user_input:
-            query_to_process = user_input
-        elif hasattr(st.session_state, 'selected_query'):
-            query_to_process = st.session_state.selected_query
-            delattr(st.session_state, 'selected_query')
-        
-        if query_to_process:
-            # Add user message
-            st.session_state.messages.append({
-                "role": "user",
-                "content": query_to_process,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Show loading spinner
-            with st.spinner("🤔 Processing your query..."):
-                result = send_query(query_to_process)
-            
-            # Add bot response
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": result,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Show success or error message
-            if result.get("success", True):
-                st.success(f"✅ Query processed successfully in {result.get('response_time', 0):.2f}s")
-            else:
-                st.error(f"❌ Query failed: {result.get('error', 'Unknown error')}")
-        
-        # Chat Messages Display
-        st.markdown("### 📝 Conversation History")
-        
-        if st.session_state.messages:
-            for i, message in enumerate(reversed(st.session_state.messages)):
-                if message["role"] == "user":
-                    st.markdown(f"""
-                    <div class="chat-message user-message">
-                        <strong>🧑 You:</strong><br>
-                        {message["content"]}
-                        <br><small style="opacity: 0.7;">⏰ {message.get("timestamp", "")}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    result = message["content"]
-                    formatted_answer = format_query_result(result)
-                    
-                    st.markdown(f"""
-                    <div class="chat-message bot-message">
-                        <strong>🤖 AI Assistant:</strong><br>
-                        {formatted_answer}
-                        <br><small style="opacity: 0.7;">⏰ {message.get("timestamp", "")}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Show technical details in expandable section
-                    if result.get("tool") or result.get("query"):
-                        with st.expander("🔍 Technical Details"):
-                            if result.get("tool"):
-                                st.markdown(f"**Tool Used:** `{result['tool']}`")
-                            if result.get("query"):
-                                st.markdown(f"**Cypher Query:**")
-                                st.code(result["query"], language="cypher")
-                            if result.get("trace"):
-                                st.markdown(f"**Trace:**")
-                                st.text(result["trace"])
+        # Show success or error message
+        if result.get("success", True):
+            st.success(f"✅ Query processed successfully in {result.get('response_time', 0):.2f}s")
         else:
-            st.info("👋 Welcome! Start by asking a question about your Neo4j database.")
+            st.error(f"❌ Query failed: {result.get('error', 'Unknown error')}")
     
-    with col2:
-        # Analytics and Visualizations
-        st.markdown("### 📈 Analytics")
-        
-        # Query distribution chart
-        chart = create_query_stats_chart()
-        if chart:
-            st.plotly_chart(chart, use_container_width=True)
-        else:
-            st.info("📊 Query statistics will appear here after you make some queries.")
-        
-        # Response time chart
-        time_chart = create_response_time_chart()
-        if time_chart:
-            st.plotly_chart(time_chart, use_container_width=True)
-        
-        # Recent Activity
-        st.markdown("### ⚡ Recent Activity")
-        
-        if st.session_state.query_history:
-            recent_queries = st.session_state.query_history[-5:]  # Last 5 queries
-            
-            for query in reversed(recent_queries):
-                status_icon = "✅" if query.get("success", True) else "❌"
+    # Chat Messages Display
+    st.markdown("### 📝 Conversation History")
+    
+    if st.session_state.messages:
+        for i, message in enumerate(reversed(st.session_state.messages)):
+            if message["role"] == "user":
                 st.markdown(f"""
-                <div class="status-card">
-                    {status_icon} <strong>{query.get('tool', 'Unknown')}</strong><br>
-                    <small>{query.get('question', 'No question')[:50]}...</small><br>
-                    <small>⏱️ {query.get('response_time', 0):.2f}s</small>
+                <div class="chat-message user-message">
+                    <strong>🧑 You:</strong><br>
+                    {message["content"]}
+                    <br><small style="opacity: 0.7;">⏰ {message.get("timestamp", "")}</small>
                 </div>
                 """, unsafe_allow_html=True)
-        else:
-            st.info("🔄 Recent activity will appear here.")
-        
-        # Quick Actions
-        st.markdown("### ⚡ Quick Actions")
-        
-        if st.button("🔍 Check Database Health", use_container_width=True):
-            st.session_state.selected_query = "How many nodes are in the graph?"
-            st.experimental_rerun()
-        
-        if st.button("📊 Show Schema", use_container_width=True):
-            st.session_state.selected_query = "Show me the database schema"
-            st.experimental_rerun()
-        
-        if st.button("🔢 Count Relationships", use_container_width=True):
-            st.session_state.selected_query = "Count all relationships"
-            st.experimental_rerun()
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; padding: 1rem;">
-        <p>🧠 <strong>Neo4j AI Assistant</strong> | Powered by LangGraph + Snowflake Cortex</p>
-        <p>Session ID: <code>{}</code></p>
-    </div>
-    """.format(st.session_state.session_id), unsafe_allow_html=True)
+            else:
+                result = message["content"]
+                formatted_answer = format_query_result(result)
+                
+                st.markdown(f"""
+                <div class="chat-message bot-message">
+                    <strong>🤖 AI Assistant:</strong><br>
+                    {formatted_answer}
+                    <br><small style="opacity: 0.7;">⏰ {message.get("timestamp", "")}</small>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Show technical details in expandable section
+                if result.get("tool") or result.get("query"):
+                    with st.expander("🔍 Technical Details"):
+                        if result.get("tool"):
+                            st.markdown(f"**Tool Used:** `{result['tool']}`")
+                        if result.get("query"):
+                            st.markdown(f"**Cypher Query:**")
+                            st.code(result["query"], language="cypher")
+                        if result.get("trace"):
+                            st.markdown(f"**Trace:**")
+                            st.text(result["trace"])
+    else:
+        st.info("👋 Welcome! Start by asking a question about your Neo4j database.")
 
-if __name__ == "__main__":
-    main()
+with col2:
+    # Analytics and Visualizations
+    st.markdown("### 📈 Analytics")
+    
+    # Query distribution chart
+    chart = create_query_stats_chart()
+    if chart:
+        st.plotly_chart(chart, use_container_width=True)
+    else:
+        st.info("📊 Query statistics will appear here after you make some queries.")
+    
+    # Response time chart
+    time_chart = create_response_time_chart()
+    if time_chart:
+        st.plotly_chart(time_chart, use_container_width=True)
+    
+    # Recent Activity
+    st.markdown("### ⚡ Recent Activity")
+    
+    if st.session_state.query_history:
+        recent_queries = st.session_state.query_history[-5:]  # Last 5 queries
+        
+        for query in reversed(recent_queries):
+            status_icon = "✅" if query.get("success", True) else "❌"
+            st.markdown(f"""
+            <div class="status-card">
+                {status_icon} <strong>{query.get('tool', 'Unknown')}</strong><br>
+                <small>{query.get('question', 'No question')[:50]}...</small><br>
+                <small>⏱️ {query.get('response_time', 0):.2f}s</small>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("🔄 Recent activity will appear here.")
+    
+    # Quick Actions
+    st.markdown("### ⚡ Quick Actions")
+    
+    if st.button("🔍 Check Database Health", use_container_width=True):
+        st.session_state.selected_query = "How many nodes are in the graph?"
+        st.rerun()
+    
+    if st.button("📊 Show Schema", use_container_width=True):
+        st.session_state.selected_query = "Show me the database schema"
+        st.rerun()
+    
+    if st.button("🔢 Count Relationships", use_container_width=True):
+        st.session_state.selected_query = "Count all relationships"
+        st.rerun()
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: #666; padding: 1rem;">
+    <p>🧠 <strong>Neo4j AI Assistant</strong> | Powered by LangGraph + Snowflake Cortex</p>
+    <p>Session ID: <code>{}</code></p>
+</div>
+""".format(st.session_state.session_id), unsafe_allow_html=True)
