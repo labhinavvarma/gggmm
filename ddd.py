@@ -1,15 +1,17 @@
 """
-Simple FastMCP Server with @mcp.tool decorators and FastAPI endpoints
+Pure FastAPI Server with Neo4j Tools - No FastMCP dependency
 Run this on port 8000
 """
 
 import asyncio
 import json
 import logging
-from typing import Dict, Any, List
-from fastmcp import FastMCP
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase, AsyncDriver
+import uvicorn
 
 # ============================================
 # 🔧 CONFIGURATION - CHANGE THESE VALUES
@@ -29,9 +31,9 @@ SERVER_HOST = "0.0.0.0"
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("fastmcp_server")
+logger = logging.getLogger("fastapi_server")
 
-print(f"🔧 FastMCP Server Configuration:")
+print(f"🔧 FastAPI Server Configuration:")
 print(f"   Neo4j URI: {NEO4J_URI}")
 print(f"   Neo4j User: {NEO4J_USER}")
 print(f"   Neo4j Database: {NEO4J_DATABASE}")
@@ -51,8 +53,21 @@ except Exception as e:
     print(f"❌ Failed to initialize Neo4j driver: {e}")
     driver = None
 
-# Initialize FastMCP
-mcp = FastMCP("Neo4j FastMCP Server")
+# Initialize FastAPI
+app = FastAPI(
+    title="Neo4j FastAPI Server",
+    description="Simple FastAPI server with Neo4j tool endpoints",
+    version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ============================================
 # PYDANTIC MODELS
@@ -62,18 +77,29 @@ class CypherRequest(BaseModel):
     query: str
     params: dict = {}
 
+class CypherResponse(BaseModel):
+    success: bool
+    data: Optional[Any] = None
+    error: Optional[str] = None
+
 class HealthResponse(BaseModel):
     status: str
     neo4j: Dict[str, Any]
     server: Dict[str, Any]
     tools: List[str]
 
+class ToolResponse(BaseModel):
+    tool_name: str
+    description: str
+    success: bool
+    result: Optional[Any] = None
+    error: Optional[str] = None
+
 # ============================================
-# MCP TOOLS WITH @mcp.tool DECORATORS
+# TOOL FUNCTIONS
 # ============================================
 
-@mcp.tool()
-async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any]]:
+async def read_neo4j_cypher_tool(query: str, params: dict = {}) -> List[Dict[str, Any]]:
     """
     Execute read-only Cypher queries against Neo4j database.
     
@@ -101,8 +127,7 @@ async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any
         logger.error(f"Read query failed: {e}")
         raise Exception(f"Query failed: {str(e)}")
 
-@mcp.tool()
-async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
+async def write_neo4j_cypher_tool(query: str, params: dict = {}) -> Dict[str, Any]:
     """
     Execute write Cypher queries against Neo4j database.
     
@@ -144,8 +169,7 @@ async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
         logger.error(f"Write query failed: {e}")
         raise Exception(f"Query failed: {str(e)}")
 
-@mcp.tool()
-async def get_neo4j_schema() -> Dict[str, Any]:
+async def get_neo4j_schema_tool() -> Dict[str, Any]:
     """
     Get the schema of the Neo4j database including labels, relationship types, and properties.
     
@@ -204,16 +228,13 @@ async def get_neo4j_schema() -> Dict[str, Any]:
         }
 
 # ============================================
-# FASTAPI ENDPOINTS
+# STARTUP/SHUTDOWN EVENTS
 # ============================================
-
-# Get the FastAPI app from FastMCP
-app = mcp.get_app()
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize on startup"""
-    print("🚀 Starting FastMCP Neo4j Server...")
+    print("🚀 Starting FastAPI Neo4j Server...")
     print("=" * 50)
     
     if NEO4J_PASSWORD == "your_neo4j_password":
@@ -252,31 +273,66 @@ async def startup_event():
         print(f"   Error: {e}")
     
     print("=" * 50)
-    print(f"🌐 FastMCP server ready on http://localhost:{SERVER_PORT}")
+    print(f"🌐 FastAPI server ready on http://localhost:{SERVER_PORT}")
     print("📋 Available endpoints:")
     print("   • GET  /health - Health check")
     print("   • POST /read_neo4j_cypher - Execute read queries")
     print("   • POST /write_neo4j_cypher - Execute write queries")
     print("   • POST /get_neo4j_schema - Get database schema")
-    print("   • MCP tools available via FastMCP protocol")
+    print("   • GET  /tools - List available tools")
+    print("   • GET  /test/count-nodes - Quick node count")
+    print("   • GET  /test/node-labels - Quick labels test")
+    print("   • GET  /docs - API documentation")
     print("=" * 50)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Close connections on shutdown"""
-    print("🛑 Shutting down FastMCP Neo4j Server...")
+    print("🛑 Shutting down FastAPI Neo4j Server...")
     if driver:
         await driver.close()
         print("✅ Neo4j driver closed")
 
-@app.get("/health", response_model=HealthResponse)
+# ============================================
+# API ENDPOINTS
+# ============================================
+
+@app.get("/", summary="Root endpoint")
+async def root():
+    """Root endpoint with server information"""
+    return {
+        "service": "FastAPI Neo4j Server",
+        "version": "1.0.0",
+        "description": "Simple FastAPI server with Neo4j tool endpoints",
+        "architecture": "FastAPI + Neo4j",
+        "endpoints": {
+            "health": "/health - Health check",
+            "read_cypher": "/read_neo4j_cypher - Execute read queries",
+            "write_cypher": "/write_neo4j_cypher - Execute write queries",
+            "schema": "/get_neo4j_schema - Get database schema",
+            "tools": "/tools - List available tools",
+            "docs": "/docs - API documentation"
+        },
+        "tools": {
+            "read_neo4j_cypher": "Execute read-only Cypher queries",
+            "write_neo4j_cypher": "Execute write Cypher queries", 
+            "get_neo4j_schema": "Get database schema"
+        },
+        "neo4j": {
+            "uri": NEO4J_URI,
+            "database": NEO4J_DATABASE,
+            "user": NEO4J_USER
+        }
+    }
+
+@app.get("/health", response_model=HealthResponse, summary="Health check")
 async def health_check():
     """Health check endpoint"""
     if driver is None:
         return HealthResponse(
             status="unhealthy",
             neo4j={"status": "driver_not_initialized"},
-            server={"port": SERVER_PORT, "type": "FastMCP"},
+            server={"port": SERVER_PORT, "type": "FastAPI"},
             tools=[]
         )
     
@@ -298,7 +354,7 @@ async def health_check():
             server={
                 "port": SERVER_PORT,
                 "host": SERVER_HOST,
-                "type": "FastMCP"
+                "type": "FastAPI"
             },
             tools=["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"]
         )
@@ -311,83 +367,177 @@ async def health_check():
                 "status": "disconnected",
                 "error": str(e)
             },
-            server={"port": SERVER_PORT, "type": "FastMCP"},
+            server={"port": SERVER_PORT, "type": "FastAPI"},
             tools=[]
         )
 
-@app.get("/")
-async def root():
-    """Root endpoint"""
+@app.get("/tools", summary="List available tools")
+async def list_tools():
+    """List all available tools"""
     return {
-        "service": "FastMCP Neo4j Server",
-        "version": "2.0.0",
-        "description": "FastMCP server with @mcp.tool decorators and FastAPI endpoints",
-        "architecture": "FastMCP + Neo4j",
-        "endpoints": {
-            "health": "/health - Health check",
-            "read_cypher": "/read_neo4j_cypher - Execute read queries",
-            "write_cypher": "/write_neo4j_cypher - Execute write queries",
-            "schema": "/get_neo4j_schema - Get database schema",
-            "docs": "/docs - FastAPI documentation"
-        },
-        "mcp_tools": {
-            "read_neo4j_cypher": "Execute read-only Cypher queries",
-            "write_neo4j_cypher": "Execute write Cypher queries", 
-            "get_neo4j_schema": "Get database schema"
-        },
-        "neo4j": {
-            "uri": NEO4J_URI,
-            "database": NEO4J_DATABASE,
-            "user": NEO4J_USER
-        }
+        "tools": [
+            {
+                "name": "read_neo4j_cypher",
+                "description": "Execute read-only Cypher queries against Neo4j database",
+                "endpoint": "/read_neo4j_cypher",
+                "method": "POST",
+                "parameters": {
+                    "query": "string - The Cypher query to execute",
+                    "params": "object - Optional parameters for the query"
+                }
+            },
+            {
+                "name": "write_neo4j_cypher",
+                "description": "Execute write Cypher queries against Neo4j database",
+                "endpoint": "/write_neo4j_cypher",
+                "method": "POST",
+                "parameters": {
+                    "query": "string - The Cypher query to execute",
+                    "params": "object - Optional parameters for the query"
+                }
+            },
+            {
+                "name": "get_neo4j_schema",
+                "description": "Get the schema of the Neo4j database",
+                "endpoint": "/get_neo4j_schema",
+                "method": "POST",
+                "parameters": {}
+            }
+        ]
     }
 
-# FastAPI endpoints that use the MCP tools directly
-@app.post("/read_neo4j_cypher")
+@app.post("/read_neo4j_cypher", response_model=CypherResponse, summary="Execute read query")
 async def read_cypher_endpoint(request: CypherRequest):
-    """FastAPI endpoint for read operations"""
+    """Execute read-only Cypher queries"""
     try:
-        result = await read_neo4j_cypher(request.query, request.params)
-        return {"success": True, "data": result}
+        result = await read_neo4j_cypher_tool(request.query, request.params)
+        return CypherResponse(success=True, data=result)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error(f"Read cypher endpoint error: {e}")
+        return CypherResponse(success=False, error=str(e))
 
-@app.post("/write_neo4j_cypher")
+@app.post("/write_neo4j_cypher", response_model=CypherResponse, summary="Execute write query")
 async def write_cypher_endpoint(request: CypherRequest):
-    """FastAPI endpoint for write operations"""
+    """Execute write Cypher queries"""
     try:
-        result = await write_neo4j_cypher(request.query, request.params)
-        return {"success": True, "data": result}
+        result = await write_neo4j_cypher_tool(request.query, request.params)
+        return CypherResponse(success=True, data=result)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error(f"Write cypher endpoint error: {e}")
+        return CypherResponse(success=False, error=str(e))
 
-@app.post("/get_neo4j_schema")
+@app.post("/get_neo4j_schema", response_model=CypherResponse, summary="Get database schema")
 async def get_schema_endpoint():
-    """FastAPI endpoint for schema operations"""
+    """Get database schema information"""
     try:
-        result = await get_neo4j_schema()
-        return {"success": True, "data": result}
+        result = await get_neo4j_schema_tool()
+        return CypherResponse(success=True, data=result)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.error(f"Get schema endpoint error: {e}")
+        return CypherResponse(success=False, error=str(e))
 
-# Quick test endpoints
-@app.get("/test/count-nodes")
+# ============================================
+# TOOL ENDPOINTS WITH DETAILED RESPONSES
+# ============================================
+
+@app.post("/tool/read_cypher", response_model=ToolResponse, summary="Tool: Read Cypher")
+async def tool_read_cypher(request: CypherRequest):
+    """Tool-style endpoint for read operations with detailed response"""
+    try:
+        result = await read_neo4j_cypher_tool(request.query, request.params)
+        return ToolResponse(
+            tool_name="read_neo4j_cypher",
+            description="Executed read-only Cypher query",
+            success=True,
+            result=result
+        )
+    except Exception as e:
+        return ToolResponse(
+            tool_name="read_neo4j_cypher",
+            description="Failed to execute read-only Cypher query",
+            success=False,
+            error=str(e)
+        )
+
+@app.post("/tool/write_cypher", response_model=ToolResponse, summary="Tool: Write Cypher")
+async def tool_write_cypher(request: CypherRequest):
+    """Tool-style endpoint for write operations with detailed response"""
+    try:
+        result = await write_neo4j_cypher_tool(request.query, request.params)
+        return ToolResponse(
+            tool_name="write_neo4j_cypher",
+            description="Executed write Cypher query",
+            success=True,
+            result=result
+        )
+    except Exception as e:
+        return ToolResponse(
+            tool_name="write_neo4j_cypher",
+            description="Failed to execute write Cypher query",
+            success=False,
+            error=str(e)
+        )
+
+@app.post("/tool/get_schema", response_model=ToolResponse, summary="Tool: Get Schema")
+async def tool_get_schema():
+    """Tool-style endpoint for schema operations with detailed response"""
+    try:
+        result = await get_neo4j_schema_tool()
+        return ToolResponse(
+            tool_name="get_neo4j_schema",
+            description="Retrieved Neo4j database schema",
+            success=True,
+            result=result
+        )
+    except Exception as e:
+        return ToolResponse(
+            tool_name="get_neo4j_schema",
+            description="Failed to retrieve Neo4j database schema",
+            success=False,
+            error=str(e)
+        )
+
+# ============================================
+# QUICK TEST ENDPOINTS
+# ============================================
+
+@app.get("/test/count-nodes", summary="Quick test: Count nodes")
 async def test_count_nodes():
     """Quick test endpoint to count nodes"""
     try:
-        result = await read_neo4j_cypher("MATCH (n) RETURN count(n) as node_count", {})
+        result = await read_neo4j_cypher_tool("MATCH (n) RETURN count(n) as node_count", {})
         count = result[0]["node_count"] if result and len(result) > 0 else 0
-        return {"success": True, "node_count": count}
+        return {"success": True, "node_count": count, "query": "MATCH (n) RETURN count(n)"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@app.get("/test/node-labels")
+@app.get("/test/node-labels", summary="Quick test: Get node labels")
 async def test_node_labels():
     """Quick test endpoint to get node labels"""
     try:
-        result = await get_neo4j_schema()
+        result = await get_neo4j_schema_tool()
         labels = result.get("labels", [])
         return {"success": True, "labels": labels, "count": len(labels)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/test/create-test-node", summary="Quick test: Create test node")
+async def test_create_node():
+    """Quick test endpoint to create a test node"""
+    try:
+        query = "CREATE (t:TestNode {name: 'FastAPI Test', created: datetime()}) RETURN t"
+        result = await write_neo4j_cypher_tool(query, {})
+        return {"success": True, "result": result, "query": query}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/test/delete-test-nodes", summary="Quick test: Delete test nodes")
+async def test_delete_nodes():
+    """Quick test endpoint to delete test nodes"""
+    try:
+        query = "MATCH (t:TestNode) DELETE t"
+        result = await write_neo4j_cypher_tool(query, {})
+        return {"success": True, "result": result, "query": query}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -396,11 +546,11 @@ async def test_node_labels():
 # ============================================
 
 def main():
-    """Main function to run the FastMCP server"""
+    """Main function to run the FastAPI server"""
     print("=" * 60)
-    print("🧠 FASTMCP NEO4J SERVER")
+    print("🌐 FASTAPI NEO4J SERVER")
     print("=" * 60)
-    print("🏗️  Architecture: FastMCP + Neo4j")
+    print("🏗️  Architecture: Pure FastAPI + Neo4j")
     print("🔧 Configuration:")
     print(f"   📍 Neo4j URI: {NEO4J_URI}")
     print(f"   👤 Neo4j User: {NEO4J_USER}")
@@ -417,15 +567,15 @@ def main():
         print("❌ Cannot start server - Neo4j driver failed to initialize")
         return
     
-    print("🚀 Starting FastMCP server...")
+    print("🚀 Starting FastAPI server...")
     print("📋 This server provides:")
-    print("   • @mcp.tool decorators for clean tool definitions")
-    print("   • FastAPI endpoints for HTTP access")
-    print("   • Direct function calls (no HTTP between tools)")
+    print("   • RESTful API endpoints for Neo4j operations")
+    print("   • Tool-style endpoints with detailed responses")
+    print("   • Quick test endpoints for debugging")
     print("   • Built-in documentation at /docs")
+    print("   • Health checks and monitoring")
     
     try:
-        import uvicorn
         uvicorn.run(
             app,
             host=SERVER_HOST,
