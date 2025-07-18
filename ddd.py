@@ -1,3 +1,5 @@
-
-deidentified_medical: Dict[str, Any] = None,
-                               deidentified_pharmacy: Dict[str, Any] = None) -> Dict[str, Any]:
+- Analyze the SPECIFIC ICD-10 codes provided: {icd10_codes}
+- Use your medical knowledge to understand what each code means
+- Use your medical knowledge to understand what each medication treats
+- Cross-reference medications with ICD-10 codes
+- Include the actual ICD-10 codes in your evidence
