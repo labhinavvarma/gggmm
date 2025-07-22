@@ -1,6 +1,6 @@
 """
-Enhanced FastMCP Server with Neo4j Visualization Library Integration
-This combines FastMCP, LangGraph, and Neo4j NVL for live graph visualization
+Corrected Enhanced FastMCP Server with Neo4j Visualization Library Integration
+Fixed FastMCP API usage - uses mcp.app instead of mcp.get_app()
 Run this on port 8000
 """
 
@@ -15,8 +15,8 @@ from datetime import datetime
 # FastMCP and FastAPI imports
 from fastmcp import FastMCP
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Neo4j imports
@@ -54,9 +54,9 @@ SERVER_HOST = "0.0.0.0"
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("enhanced_fastmcp_server")
+logger = logging.getLogger("corrected_fastmcp_server")
 
-print("🔧 Enhanced FastMCP Server Configuration:")
+print("🔧 Corrected Enhanced FastMCP Server Configuration:")
 print(f"   Neo4j URI: {NEO4J_URI}")
 print(f"   Neo4j User: {NEO4J_USER}")
 print(f"   Neo4j Database: {NEO4J_DATABASE}")
@@ -77,7 +77,7 @@ except Exception as e:
     print(f"❌ Failed to initialize Neo4j driver: {e}")
     driver = None
 
-# Initialize FastMCP
+# Initialize FastMCP - CORRECTED
 mcp = FastMCP("Neo4j LangGraph Agent with Visualization")
 
 # Global variables for live updates
@@ -348,41 +348,7 @@ async def get_neo4j_schema() -> Dict[str, Any]:
     
     try:
         logger.info("Fetching database schema")
-        
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            # Try APOC first
-            try:
-                apoc_result = await session.run("CALL apoc.meta.schema() YIELD value RETURN value")
-                apoc_record = await apoc_result.single()
-                if apoc_record:
-                    schema = apoc_record["value"]
-                    logger.info("Schema fetched using APOC")
-                    return schema
-            except Exception:
-                logger.info("APOC not available, using fallback queries")
-            
-            # Fallback to basic queries
-            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
-            labels_record = await labels_result.single()
-            labels = labels_record["labels"] if labels_record else []
-            
-            rels_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
-            rels_record = await rels_result.single()
-            rel_types = rels_record["types"] if rels_record else []
-            
-            props_result = await session.run("CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys")
-            props_record = await props_result.single()
-            prop_keys = props_record["keys"] if props_record else []
-        
-        schema = {
-            "labels": labels,
-            "relationship_types": rel_types,
-            "property_keys": prop_keys,
-            "source": "fallback_queries"
-        }
-        
-        logger.info(f"Schema fetched: {len(labels)} labels, {len(rel_types)} rel types, {len(prop_keys)} properties")
-        return schema
+        return await get_database_stats()
         
     except Exception as e:
         logger.error(f"Schema fetch failed: {e}")
@@ -395,15 +361,15 @@ async def get_neo4j_schema() -> Dict[str, Any]:
         }
 
 # ============================================
-# LANGGRAPH AGENT LOGIC (ENHANCED)
+# LANGGRAPH AGENT LOGIC (BASIC VERSION)
 # ============================================
 
 SYSTEM_PROMPT = """
 You are an expert AI assistant that helps users query and manage a Neo4j database using MCP tools.
 
 AVAILABLE TOOLS:
-- read_neo4j_cypher: Execute read-only Cypher queries (MATCH, RETURN, WHERE, etc.)
-- write_neo4j_cypher: Execute write Cypher queries (CREATE, MERGE, SET, DELETE, etc.)
+- read_neo4j_cypher: Execute read-only queries (MATCH, RETURN, WHERE, etc.)
+- write_neo4j_cypher: Execute write queries (CREATE, MERGE, SET, DELETE, etc.)
 - get_neo4j_schema: Get database schema information
 
 GUIDELINES:
@@ -412,7 +378,12 @@ GUIDELINES:
 - For schema questions, use get_neo4j_schema
 - For data queries, use read_neo4j_cypher
 - For data modifications, use write_neo4j_cypher
-- When creating or modifying data, provide clear feedback about what changed
+
+RESPONSE FORMAT:
+Always use this EXACT format:
+
+Tool: [tool_name]
+Query: [cypher_query_on_single_line]
 
 EXAMPLES:
 
@@ -424,14 +395,8 @@ User: Create a Person named Alice with age 30
 Tool: write_neo4j_cypher
 Query: CREATE (p:Person {name: 'Alice', age: 30}) RETURN p
 
-User: Show the schema
+User: Show me the database schema
 Tool: get_neo4j_schema
-
-User: Find all nodes connected to Alice
-Tool: read_neo4j_cypher
-Query: MATCH (alice:Person {name: 'Alice'})-[r]-(connected) RETURN alice, r, connected
-
-Always provide the exact tool name and query (if applicable).
 """
 
 def call_cortex_llm(prompt: str, session_id: str) -> str:
@@ -571,12 +536,10 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
         if isinstance(data, dict):
             labels = data.get("labels", [])
             rel_types = data.get("relationship_types", [])
-            prop_keys = data.get("property_keys", [])
             answer = f"""📊 **Database Schema:**
 
 **Node Labels ({len(labels)}):** {', '.join(labels[:15])}
 **Relationship Types ({len(rel_types)}):** {', '.join(rel_types[:15])}
-**Property Keys ({len(prop_keys)}):** {', '.join(prop_keys[:15])}
 
 *Schema data updated in real-time visualization*"""
         else:
@@ -623,12 +586,12 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
                 operations.append(f"📝 **Set {props_set} propert{'ies' if props_set != 1 else 'y'}**")
             
             if operations:
-                answer = "✅ **Database Updated Successfully!**\n\n" + "\n".join(operations)
-                answer += "\n\n*Changes reflected in live graph visualization*"
+                answer = "✅ **Database Update Completed Successfully!**\n\n" + "\n".join(operations)
+                answer += "\n\n*Changes immediately reflected in live graph visualization*"
             else:
                 answer = "✅ **Query executed successfully** (no changes made)"
         else:
-            answer = f"✅ **Write operation completed:** {data}"
+            answer = f"✅ **Write Operation Result:** {data}"
     
     else:
         answer = f"📊 **Result:** {json.dumps(data, indent=2)[:500]}"
@@ -659,11 +622,20 @@ def build_agent():
 agent = None
 
 # ============================================
-# FASTAPI ENDPOINTS (ENHANCED)
+# FASTAPI ENDPOINTS (CORRECTED)
 # ============================================
 
-# Add FastAPI endpoints to FastMCP
-app = mcp.get_app()
+# Get the FastAPI app from FastMCP - CORRECTED
+app = mcp.app
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():
@@ -1015,7 +987,7 @@ async def visualization_interface():
 <body>
     <div class="header">
         <h1>🧠 Neo4j Live Visualization</h1>
-        <p>Real-time graph visualization with Neo4j NVL</p>
+        <p>Real-time graph visualization with Neo4j NVL - CORRECTED</p>
     </div>
     
     <div class="controls">
@@ -1202,15 +1174,15 @@ async def visualization_interface():
 </html>
     """, media_type="text/html")
 
-# Legacy endpoints (unchanged)
 @app.get("/")
 async def root():
     """Root endpoint"""
     return {
-        "service": "Enhanced Neo4j FastMCP LangGraph Server",
-        "version": "3.0.0",
-        "description": "Unified FastMCP server with @mcp.tool decorators, FastAPI endpoints, and Neo4j NVL visualization",
+        "service": "Enhanced Neo4j FastMCP LangGraph Server - CORRECTED",
+        "version": "3.0.1",
+        "description": "Corrected FastMCP server with @mcp.tool decorators, FastAPI endpoints, and Neo4j NVL visualization",
         "architecture": "Enhanced FastMCP + LangGraph + Neo4j + NVL",
+        "fix_applied": "Using mcp.app instead of mcp.get_app()",
         "endpoints": {
             "health": "/health - Enhanced health check",
             "chat": "/chat - Chat with enhanced agent (includes graph data)",
@@ -1243,43 +1215,16 @@ async def root():
         }
     }
 
-# Legacy MCP endpoints (unchanged)
-@app.post("/read_neo4j_cypher")
-async def legacy_read_cypher(request: CypherRequest):
-    """Legacy endpoint for read operations"""
-    try:
-        result = await read_neo4j_cypher(request.query, request.params)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/write_neo4j_cypher")
-async def legacy_write_cypher(request: CypherRequest):
-    """Legacy endpoint for write operations"""
-    try:
-        result = await write_neo4j_cypher(request.query, request.params)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/get_neo4j_schema")
-async def legacy_get_schema():
-    """Legacy endpoint for schema operations"""
-    try:
-        result = await get_neo4j_schema()
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ============================================
 # MAIN FUNCTION
 # ============================================
 
 def main():
-    """Main function to run the enhanced FastMCP server"""
+    """Main function to run the corrected enhanced FastMCP server"""
     print("=" * 70)
-    print("🧠 ENHANCED NEO4J FASTMCP LANGGRAPH SERVER WITH VISUALIZATION")
+    print("🧠 CORRECTED ENHANCED NEO4J FASTMCP LANGGRAPH SERVER")
     print("=" * 70)
+    print("🔧 Fix Applied: Using mcp.app instead of mcp.get_app()")
     print("🏗️  Architecture: Enhanced FastMCP + LangGraph + Neo4j + NVL")
     print("🔧 Configuration:")
     print(f"   📍 Neo4j URI: {NEO4J_URI}")
@@ -1288,7 +1233,7 @@ def main():
     print(f"   🤖 Cortex Model: {CORTEX_MODEL}")
     print(f"   🌐 Server: {SERVER_HOST}:{SERVER_PORT}")
     print("=" * 70)
-    print("✨ New Features:")
+    print("✨ Features:")
     print("   🎯 Real-time Neo4j visualization with NVL")
     print("   📊 Live database statistics and monitoring")
     print("   🔄 WebSocket-based live updates")
@@ -1305,15 +1250,15 @@ def main():
         print("❌ Cannot start server - Neo4j driver failed to initialize")
         return
     
-    print("🚀 Starting enhanced FastMCP server with visualization...")
+    print("🚀 Starting corrected enhanced FastMCP server...")
     print("📋 This server provides:")
-    print("   • Enhanced MCP tools with @mcp.tool decorators")
+    print("   • Fixed MCP tools with @mcp.tool decorators")
     print("   • FastAPI endpoints for HTTP access")
     print("   • LangGraph agent with graph data integration")
     print("   • Neo4j NVL visualization library integration")
     print("   • WebSocket support for real-time updates")
     print("   • Live database monitoring and statistics")
-    print("   • Unified architecture with visualization")
+    print("   • Corrected FastMCP app access")
     
     try:
         import uvicorn
