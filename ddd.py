@@ -1,916 +1,1190 @@
-# ============================================
-# integrate.py - Final Integration Script
-# ============================================
-
 """
-Complete integration script for Neo4j Enhanced Agent with NVL
-This script combines all components into a single, production-ready application
+Working FastAPI Server with MCP-style Tools and Neo4j NVL Integration
+This version uses pure FastAPI without FastMCP dependency issues
+Run this on port 8000
 """
 
 import asyncio
+import json
 import logging
-import sys
+import uuid
 import time
-import signal
-from pathlib import Path
-from typing import Dict, Any, List, Optional
-import uvicorn
-from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional, List
+from datetime import datetime
 
-# Import all our components
-from config import config
-from enhanced_fastmcp_server import mcp, app
-from performance.optimizer import EnhancedPerformanceIntegration
-from monitoring.health_monitor import HealthMonitor
-from fixed_langgraph_agent import build_agent
+# FastAPI imports (no FastMCP dependency)
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+
+# Neo4j imports
+from neo4j import AsyncGraphDatabase, AsyncDriver
+
+# LangGraph imports
+import requests
+import urllib3
+import re
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableLambda
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ============================================
+# 🔧 CONFIGURATION - CHANGE THESE VALUES
+# ============================================
+
+# Neo4j Configuration
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "your_neo4j_password"  # ⚠️ CHANGE THIS!
+NEO4J_DATABASE = "neo4j"
+
+# Cortex API Configuration
+CORTEX_API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+CORTEX_API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"  # ⚠️ CHANGE THIS!
+CORTEX_MODEL = "claude-4-sonnet"
+
+# Server Configuration
+SERVER_PORT = 8000
+SERVER_HOST = "0.0.0.0"
+
+# ============================================
 
 # Setup logging
-logging.basicConfig(level=getattr(logging, config.server.log_level))
-logger = logging.getLogger("integration")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("working_fastapi_server")
 
-# Global instances
-performance_system: Optional[EnhancedPerformanceIntegration] = None
-health_monitor: Optional[HealthMonitor] = None
+print("🔧 Working FastAPI Server Configuration:")
+print(f"   Neo4j URI: {NEO4J_URI}")
+print(f"   Neo4j User: {NEO4J_USER}")
+print(f"   Neo4j Database: {NEO4J_DATABASE}")
+print(f"   Cortex API: {CORTEX_API_URL}")
+print(f"   Server Port: {SERVER_PORT}")
+
+# Initialize Neo4j driver
+try:
+    driver = AsyncGraphDatabase.driver(
+        NEO4J_URI,
+        auth=(NEO4J_USER, NEO4J_PASSWORD),
+        connection_timeout=10,
+        max_connection_lifetime=3600,
+        max_connection_pool_size=50
+    )
+    print("✅ Neo4j driver initialized")
+except Exception as e:
+    print(f"❌ Failed to initialize Neo4j driver: {e}")
+    driver = None
+
+# Initialize FastAPI directly (no FastMCP)
+app = FastAPI(
+    title="Neo4j Enhanced Agent with NVL",
+    description="FastAPI server with LangGraph agent and Neo4j NVL visualization",
+    version="3.1.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global variables for live updates
+active_websockets = set()
+database_stats = {"nodes": 0, "relationships": 0, "labels": [], "relationship_types": []}
+
+# ============================================
+# PYDANTIC MODELS
+# ============================================
+
+class CypherRequest(BaseModel):
+    query: str
+    params: dict = {}
+
+class ChatRequest(BaseModel):
+    question: str
+    session_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    trace: str
+    tool: str
+    query: str
+    answer: str
+    session_id: str
+    success: bool = True
+    error: Optional[str] = None
+    graph_data: Optional[Dict[str, Any]] = None
+    operation_summary: Optional[Dict[str, Any]] = None
+
+class AgentState(BaseModel):
+    question: str
+    session_id: str
+    tool: str = ""
+    query: str = ""
+    trace: str = ""
+    answer: str = ""
+    error_count: int = 0
+    last_error: str = ""
+
+class GraphData(BaseModel):
+    nodes: List[Dict[str, Any]]
+    relationships: List[Dict[str, Any]]
+    summary: Dict[str, Any]
+
+# ============================================
+# MCP-STYLE TOOL FUNCTIONS (Pure Python Functions)
+# ============================================
+
+async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any]]:
+    """
+    Execute read-only Cypher queries against Neo4j database.
+    
+    Args:
+        query: The Cypher query to execute (MATCH, RETURN, WHERE, etc.)
+        params: Optional parameters for the query
+        
+    Returns:
+        List of records returned by the query
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info(f"Executing READ query: {query}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(query, params)
+            records = await result.data()
+            
+        logger.info(f"Query returned {len(records)} records")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Read query failed: {e}")
+        raise Exception(f"Query failed: {str(e)}")
+
+async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
+    """
+    Execute write Cypher queries against Neo4j database.
+    
+    Args:
+        query: The Cypher query to execute (CREATE, MERGE, SET, DELETE, etc.)
+        params: Optional parameters for the query
+        
+    Returns:
+        Summary of changes made to the database
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info(f"Executing WRITE query: {query}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(query, params)
+            summary = await result.consume()
+            
+        # Get counters
+        counters = summary.counters
+        
+        response = {
+            "success": True,
+            "nodes_created": counters.nodes_created,
+            "nodes_deleted": counters.nodes_deleted,
+            "relationships_created": counters.relationships_created,
+            "relationships_deleted": counters.relationships_deleted,
+            "properties_set": counters.properties_set,
+            "labels_added": counters.labels_added,
+            "labels_removed": counters.labels_removed,
+            "total_changes": (counters.nodes_created + counters.nodes_deleted + 
+                            counters.relationships_created + counters.relationships_deleted + 
+                            counters.properties_set)
+        }
+        
+        # Broadcast update to connected clients
+        asyncio.create_task(broadcast_database_update())
+        
+        logger.info(f"Write query completed: {response}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Write query failed: {e}")
+        raise Exception(f"Query failed: {str(e)}")
+
+async def get_neo4j_schema() -> Dict[str, Any]:
+    """
+    Get the schema of the Neo4j database including labels, relationship types, and properties.
+    
+    Returns:
+        Dictionary containing database schema information
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info("Fetching database schema")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Get labels
+            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
+            labels_record = await labels_result.single()
+            labels = labels_record["labels"] if labels_record else []
+            
+            # Get relationship types
+            rels_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
+            rels_record = await rels_result.single()
+            rel_types = rels_record["types"] if rels_record else []
+            
+            # Get property keys
+            props_result = await session.run("CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys")
+            props_record = await props_result.single()
+            prop_keys = props_record["keys"] if props_record else []
+        
+        schema = {
+            "labels": labels,
+            "relationship_types": rel_types,
+            "property_keys": prop_keys,
+            "source": "database_queries",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        logger.info(f"Schema fetched: {len(labels)} labels, {len(rel_types)} rel types, {len(prop_keys)} properties")
+        return schema
+        
+    except Exception as e:
+        logger.error(f"Schema fetch failed: {e}")
+        return {
+            "labels": [],
+            "relationship_types": [],
+            "property_keys": [],
+            "error": f"Schema fetch failed: {str(e)}",
+            "source": "error"
+        }
+
+# ============================================
+# DATABASE MONITORING FUNCTIONS
+# ============================================
+
+async def get_database_stats():
+    """Get comprehensive database statistics"""
+    if driver is None:
+        return {"error": "Driver not initialized"}
+    
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Get node count
+            node_result = await session.run("MATCH (n) RETURN count(n) as node_count")
+            node_record = await node_result.single()
+            node_count = node_record["node_count"] if node_record else 0
+            
+            # Get relationship count
+            rel_result = await session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
+            rel_record = await rel_result.single()
+            rel_count = rel_record["rel_count"] if rel_record else 0
+            
+            # Get labels
+            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
+            labels_record = await labels_result.single()
+            labels = labels_record["labels"] if labels_record else []
+            
+            # Get relationship types
+            types_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
+            types_record = await types_result.single()
+            rel_types = types_record["types"] if types_record else []
+            
+            return {
+                "nodes": node_count,
+                "relationships": rel_count,
+                "labels": labels,
+                "relationship_types": rel_types,
+                "timestamp": datetime.now().isoformat()
+            }
+    except Exception as e:
+        logger.error(f"Failed to get database stats: {e}")
+        return {"error": str(e)}
+
+async def get_graph_data(limit: int = 100) -> GraphData:
+    """Get graph data for visualization"""
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Get nodes with their properties
+            nodes_result = await session.run(f"""
+                MATCH (n)
+                RETURN id(n) as id, labels(n) as labels, properties(n) as properties
+                LIMIT {limit}
+            """)
+            nodes_data = await nodes_result.data()
+            
+            # Get relationships
+            rels_result = await session.run(f"""
+                MATCH (n)-[r]->(m)
+                RETURN id(n) as source, id(m) as target, id(r) as id, 
+                       type(r) as type, properties(r) as properties
+                LIMIT {limit}
+            """)
+            rels_data = await rels_result.data()
+            
+            # Format nodes for NVL
+            nodes = []
+            for node in nodes_data:
+                node_id = str(node["id"])
+                labels = node["labels"]
+                properties = node["properties"]
+                
+                # Determine display name
+                display_name = properties.get("name") or properties.get("title") or f"Node {node_id}"
+                
+                nodes.append({
+                    "id": node_id,
+                    "labels": labels,
+                    "properties": properties,
+                    "caption": display_name
+                })
+            
+            # Format relationships for NVL
+            relationships = []
+            for rel in rels_data:
+                relationships.append({
+                    "id": str(rel["id"]),
+                    "source": str(rel["source"]),
+                    "target": str(rel["target"]),
+                    "type": rel["type"],
+                    "properties": rel["properties"]
+                })
+            
+            # Get summary
+            summary = await get_database_stats()
+            
+            return GraphData(
+                nodes=nodes,
+                relationships=relationships,
+                summary=summary
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to get graph data: {e}")
+        raise Exception(f"Graph data fetch failed: {str(e)}")
+
+async def broadcast_database_update():
+    """Broadcast database updates to all connected WebSockets"""
+    if not active_websockets:
+        return
+    
+    try:
+        stats = await get_database_stats()
+        message = {
+            "type": "database_update",
+            "data": stats
+        }
+        
+        # Send to all connected clients
+        disconnected = set()
+        for websocket in active_websockets:
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                disconnected.add(websocket)
+        
+        # Remove disconnected clients
+        active_websockets -= disconnected
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast update: {e}")
+
+# ============================================
+# LANGGRAPH AGENT LOGIC
+# ============================================
+
+SYSTEM_PROMPT = """
+You are an expert AI assistant that helps users query and manage a Neo4j database using specialized tools.
+
+AVAILABLE TOOLS:
+- read_neo4j_cypher: Execute read-only queries (MATCH, RETURN, WHERE, etc.)
+- write_neo4j_cypher: Execute write queries (CREATE, MERGE, SET, DELETE, etc.)
+- get_neo4j_schema: Get database schema information
+
+GUIDELINES:
+- Always explain your reasoning before selecting a tool
+- Choose the appropriate tool based on the user's intent
+- For schema questions, use get_neo4j_schema
+- For data queries, use read_neo4j_cypher
+- For data modifications, use write_neo4j_cypher
+
+RESPONSE FORMAT:
+Always use this EXACT format:
+
+Tool: [tool_name]
+Query: [cypher_query_on_single_line]
+
+EXAMPLES:
+
+User: How many nodes are in the graph?
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN count(n) as total_nodes
+
+User: Create a Person named Alice with age 30
+Tool: write_neo4j_cypher
+Query: CREATE (p:Person {name: 'Alice', age: 30}) RETURN p
+
+User: Show me the database schema
+Tool: get_neo4j_schema
+"""
+
+def call_cortex_llm(prompt: str, session_id: str) -> str:
+    """Call Cortex LLM with error handling"""
+    try:
+        headers = {
+            "Authorization": f'Snowflake Token="{CORTEX_API_KEY}"',
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "query": {
+                "aplctn_cd": "edagnai",
+                "app_id": "edadip", 
+                "api_key": CORTEX_API_KEY,
+                "method": "cortex",
+                "model": CORTEX_MODEL,
+                "sys_msg": SYSTEM_PROMPT,
+                "limit_convs": "0",
+                "prompt": {
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                "session_id": session_id
+            }
+        }
+        
+        logger.info("Calling Cortex LLM...")
+        response = requests.post(CORTEX_API_URL, headers=headers, json=payload, verify=False, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.text.partition("end_of_stream")[0].strip()
+            logger.info(f"LLM response received: {len(result)} characters")
+            return result
+        else:
+            logger.error(f"Cortex API error: {response.status_code}")
+            return f"Error: Cortex API returned {response.status_code}"
+            
+    except Exception as e:
+        logger.error(f"Cortex LLM call failed: {e}")
+        return f"Error: Failed to call LLM - {str(e)}"
+
+def parse_llm_response(llm_output: str) -> tuple[str, str, str]:
+    """Parse LLM response to extract tool and query"""
+    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    
+    tool = None
+    query = None
+    trace = llm_output.strip()
+    
+    # Extract tool
+    tool_match = re.search(r"Tool:\s*(\w+)", llm_output, re.I)
+    if tool_match:
+        extracted_tool = tool_match.group(1).strip()
+        if extracted_tool in valid_tools:
+            tool = extracted_tool
+    
+    # Extract query
+    query_match = re.search(r"Query:\s*(.+?)(?=\n|$)", llm_output, re.I | re.MULTILINE)
+    if query_match:
+        query = query_match.group(1).strip()
+        # Clean query
+        query = re.sub(r'```[a-zA-Z]*', '', query)
+        query = re.sub(r'```', '', query)
+        query = re.sub(r'\s+', ' ', query).strip()
+    
+    return tool, query, trace
+
+async def execute_tool_function(tool: str, query: str = None) -> Dict[str, Any]:
+    """Execute tool function directly"""
+    try:
+        if tool == "get_neo4j_schema":
+            result = await get_neo4j_schema()
+            return {"success": True, "data": result, "type": "schema"}
+        
+        elif tool == "read_neo4j_cypher":
+            if not query:
+                return {"error": "No query provided for read operation"}
+            result = await read_neo4j_cypher(query, {})
+            return {"success": True, "data": result, "type": "read", "query": query}
+        
+        elif tool == "write_neo4j_cypher":
+            if not query:
+                return {"error": "No query provided for write operation"}
+            result = await write_neo4j_cypher(query, {})
+            return {"success": True, "data": result, "type": "write", "query": query}
+        
+        else:
+            return {"error": f"Unknown tool: {tool}"}
+            
+    except Exception as e:
+        logger.error(f"Tool execution failed: {e}")
+        return {"error": str(e)}
+
+def select_tool_node(state: AgentState) -> Dict[str, Any]:
+    """Node 1: Select tool and generate query"""
+    logger.info(f"Processing question: {state.question}")
+    
+    llm_output = call_cortex_llm(state.question, state.session_id)
+    tool, query, trace = parse_llm_response(llm_output)
+    
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool or "",
+        "query": query or "",
+        "trace": trace,
+        "answer": "",
+        "error_count": state.error_count,
+        "last_error": state.last_error
+    }
+
+async def execute_tool_node(state: AgentState) -> Dict[str, Any]:
+    """Node 2: Execute the selected tool"""
+    logger.info(f"Executing tool: {state.tool}")
+    
+    if not state.tool:
+        answer = "⚠️ No valid tool selected. Please rephrase your question."
+        return {**state.dict(), "answer": answer}
+    
+    # Execute tool function
+    result = await execute_tool_function(state.tool, state.query)
+    
+    if "error" in result:
+        answer = f"❌ **Error:** {result['error']}"
+        return {
+            **state.dict(),
+            "answer": answer,
+            "error_count": state.error_count + 1,
+            "last_error": result['error']
+        }
+    
+    # Format successful result
+    data = result.get("data", {})
+    result_type = result.get("type", "unknown")
+    
+    if result_type == "schema":
+        if isinstance(data, dict):
+            labels = data.get("labels", [])
+            rel_types = data.get("relationship_types", [])
+            prop_keys = data.get("property_keys", [])
+            answer = f"""📊 **Database Schema:**
+
+**Node Labels ({len(labels)}):** {', '.join(labels[:15])}
+**Relationship Types ({len(rel_types)}):** {', '.join(rel_types[:15])}
+**Property Keys ({len(prop_keys)}):** {', '.join(prop_keys[:15])}
+
+*Schema data updated in real-time visualization*"""
+        else:
+            answer = f"📊 **Schema:** {json.dumps(data, indent=2)[:500]}..."
+    
+    elif result_type == "read":
+        if isinstance(data, list):
+            count = len(data)
+            if count == 0:
+                answer = "📊 **Query Result:** No data found"
+            elif count == 1 and isinstance(data[0], dict) and len(data[0]) == 1:
+                # Single value result (like count)
+                key, value = list(data[0].items())[0]
+                answer = f"📊 **Query Result:** {key} = **{value:,}**"
+            else:
+                answer = f"📊 **Query Result:** Found **{count:,}** records\n\n"
+                # Show sample data
+                for i, record in enumerate(data[:3]):
+                    answer += f"**Record {i+1}:** {json.dumps(record, indent=2)}\n\n"
+                if count > 3:
+                    answer += f"... and **{count - 3:,}** more records"
+                answer += "\n\n*Full results shown in graph visualization*"
+        else:
+            answer = f"📊 **Query Result:** {json.dumps(data, indent=2)[:500]}"
+    
+    elif result_type == "write":
+        if isinstance(data, dict):
+            nodes_created = data.get("nodes_created", 0)
+            nodes_deleted = data.get("nodes_deleted", 0)
+            rels_created = data.get("relationships_created", 0)
+            rels_deleted = data.get("relationships_deleted", 0)
+            props_set = data.get("properties_set", 0)
+            total_changes = data.get("total_changes", 0)
+            
+            operations = []
+            if nodes_created > 0:
+                operations.append(f"🟢 **Created {nodes_created:,} node{'s' if nodes_created != 1 else ''}**")
+            if nodes_deleted > 0:
+                operations.append(f"🗑️ **Deleted {nodes_deleted:,} node{'s' if nodes_deleted != 1 else ''}**")
+            if rels_created > 0:
+                operations.append(f"🔗 **Created {rels_created:,} relationship{'s' if rels_created != 1 else ''}**")
+            if rels_deleted > 0:
+                operations.append(f"❌ **Deleted {rels_deleted:,} relationship{'s' if rels_deleted != 1 else ''}**")
+            if props_set > 0:
+                operations.append(f"📝 **Set {props_set:,} propert{'ies' if props_set != 1 else 'y'}**")
+            
+            if operations:
+                answer = "✅ **Database Update Completed Successfully!**\n\n" + "\n".join(operations)
+                if total_changes > 0:
+                    answer += f"\n\n**Total Changes:** {total_changes:,}"
+                answer += "\n\n*Changes immediately reflected in live graph visualization*"
+            else:
+                answer = "✅ **Query executed successfully** (no structural changes made)"
+        else:
+            answer = f"✅ **Write Operation Result:** {data}"
+    
+    else:
+        answer = f"📊 **Result:** {json.dumps(data, indent=2)[:500]}"
+    
+    return {**state.dict(), "answer": answer}
+
+def build_agent():
+    """Build the LangGraph agent"""
+    logger.info("Building LangGraph agent...")
+    
+    workflow = StateGraph(state_schema=AgentState)
+    
+    # Add nodes
+    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
+    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
+    
+    # Set entry point and edges
+    workflow.set_entry_point("select_tool")
+    workflow.add_edge("select_tool", "execute_tool")
+    workflow.add_edge("execute_tool", END)
+    
+    agent = workflow.compile()
+    logger.info("✅ LangGraph agent built successfully")
+    
+    return agent
+
+# Initialize agent
 agent = None
 
 # ============================================
-# APPLICATION LIFECYCLE MANAGEMENT
+# STARTUP AND SHUTDOWN EVENTS
 # ============================================
 
-@asynccontextmanager
-async def lifespan(app):
-    """Application lifespan management"""
-    # Startup
-    logger.info("🚀 Starting Neo4j Enhanced Agent with NVL Integration")
-    logger.info("=" * 70)
+@app.on_event("startup")
+async def startup_event():
+    """Initialize everything on startup"""
+    global agent, database_stats
     
-    await startup_sequence()
+    print("🚀 Starting Working FastAPI Neo4j Server with NVL...")
+    print("=" * 60)
     
-    yield
+    if NEO4J_PASSWORD == "your_neo4j_password":
+        print("⚠️  WARNING: Using default password!")
+        print("⚠️  Please change NEO4J_PASSWORD in the configuration section")
     
-    # Shutdown
-    logger.info("🛑 Shutting down Neo4j Enhanced Agent")
-    await shutdown_sequence()
-    logger.info("✅ Shutdown complete")
-
-async def startup_sequence():
-    """Complete application startup sequence"""
-    global performance_system, health_monitor, agent
+    if driver is None:
+        print("❌ Neo4j driver initialization failed")
+        return
     
+    # Test Neo4j connection
     try:
-        # 1. Configuration validation
-        logger.info("🔧 Validating configuration...")
-        is_valid, errors = config.validate_configuration()
-        if not is_valid:
-            logger.error("❌ Configuration validation failed:")
-            for error in errors:
-                logger.error(f"   • {error}")
-            if config.is_production:
-                sys.exit(1)
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run("RETURN 1 as test")
+            record = await result.single()
+            
+        if record and record["test"] == 1:
+            print("✅ Neo4j connection successful!")
+            
+            # Get initial database statistics
+            print("📊 Getting initial database state...")
+            database_stats = await get_database_stats()
+            
+            if "error" not in database_stats:
+                print(f"   📈 Nodes: {database_stats['nodes']}")
+                print(f"   🔗 Relationships: {database_stats['relationships']}")
+                print(f"   🏷️  Labels: {len(database_stats['labels'])}")
+                print(f"   ➡️  Relationship Types: {len(database_stats['relationship_types'])}")
             else:
-                logger.warning("⚠️ Continuing with configuration warnings in development mode")
+                print(f"   ⚠️  Could not get database stats: {database_stats['error']}")
+            
         else:
-            logger.info("✅ Configuration validation passed")
-        
-        # 2. Performance monitoring system
-        logger.info("📊 Initializing performance monitoring...")
-        performance_system = EnhancedPerformanceIntegration()
-        redis_url = config.redis.url if config.redis.enabled else None
-        await performance_system.initialize(redis_url=redis_url)
-        
-        # Add performance monitoring endpoints to FastAPI
-        app.include_router(performance_system.get_monitoring_endpoints())
-        logger.info("✅ Performance monitoring initialized")
-        
-        # 3. Enhanced LangGraph agent
-        logger.info("🧠 Building enhanced LangGraph agent...")
-        agent = build_agent()
-        
-        # Apply performance monitoring to agent functions
-        if performance_system:
-            # This would wrap the agent execution with performance monitoring
-            # The actual implementation would depend on the agent structure
-            pass
-        
-        logger.info("✅ Enhanced LangGraph agent ready")
-        
-        # 4. Health monitoring system
-        if config.monitoring.prometheus_enabled:
-            logger.info("🏥 Starting health monitoring...")
-            health_monitor = HealthMonitor()
-            # Start health monitoring in background
-            asyncio.create_task(health_monitor.run_continuous_monitoring())
-            logger.info("✅ Health monitoring started")
-        
-        # 5. Database connection verification
-        logger.info("🔍 Verifying database connections...")
-        # This would check Neo4j connection
-        # await verify_database_connections()
-        logger.info("✅ Database connections verified")
-        
-        # 6. Sample data creation (development only)
-        if config.is_development:
-            logger.info("📝 Checking sample data...")
-            # This would optionally create sample data
-            # await ensure_sample_data()
-            logger.info("✅ Sample data ready")
-        
-        # 7. Final system status
-        config.print_summary()
-        logger.info("🌟 All systems initialized successfully!")
-        
+            print("❌ Neo4j connection test failed")
+            
     except Exception as e:
-        logger.error(f"❌ Startup failed: {e}")
-        sys.exit(1)
-
-async def shutdown_sequence():
-    """Complete application shutdown sequence"""
-    global performance_system, health_monitor
+        print("❌ Neo4j connection failed!")
+        print(f"   Error: {e}")
     
-    logger.info("🛑 Initiating shutdown sequence...")
-    
-    # Shutdown performance system
-    if performance_system:
-        try:
-            await performance_system.shutdown()
-            logger.info("✅ Performance system shutdown complete")
-        except Exception as e:
-            logger.error(f"❌ Performance system shutdown error: {e}")
-    
-    # Shutdown health monitoring
-    if health_monitor:
-        try:
-            # Health monitor would need a shutdown method
-            logger.info("✅ Health monitoring shutdown complete")
-        except Exception as e:
-            logger.error(f"❌ Health monitoring shutdown error: {e}")
-    
-    logger.info("✅ Shutdown sequence complete")
-
-# ============================================
-# ENHANCED FASTAPI APPLICATION
-# ============================================
-
-# Apply lifespan to the FastMCP app
-app.router.lifespan_context = lifespan
-
-# Add additional endpoints
-@app.get("/system/info")
-async def get_system_info():
-    """Get comprehensive system information"""
-    return {
-        "service": "Neo4j Enhanced Agent with NVL",
-        "version": "3.0.0",
-        "architecture": {
-            "components": [
-                "Enhanced FastMCP Server",
-                "Neo4j NVL Visualization",
-                "Fixed LangGraph Agent",
-                "Performance Monitoring",
-                "Health Monitoring",
-                "WebSocket Live Updates"
-            ],
-            "technologies": [
-                "FastMCP", "FastAPI", "Neo4j", "LangGraph", "NVL", "WebSocket", "Redis"
-            ]
-        },
-        "configuration": {
-            "environment": config.environment,
-            "neo4j_uri": config.neo4j.uri,
-            "server_port": config.server.port,
-            "visualization_enabled": config.visualization.nvl_enabled,
-            "monitoring_enabled": config.monitoring.prometheus_enabled,
-            "cache_enabled": config.redis.enabled
-        },
-        "features": {
-            "real_time_visualization": True,
-            "live_database_updates": True,
-            "performance_monitoring": True,
-            "query_optimization": True,
-            "automatic_caching": True,
-            "health_monitoring": True,
-            "websocket_support": True,
-            "docker_support": True
-        },
-        "endpoints": {
-            "chat": "/chat",
-            "health": "/health",
-            "visualization": "/viz",
-            "websocket": "/ws",
-            "performance": "/performance/*",
-            "api_docs": "/docs"
-        }
-    }
-
-@app.get("/system/status")
-async def get_system_status():
-    """Get real-time system status"""
-    status = {
-        "timestamp": time.time(),
-        "uptime_seconds": time.time() - getattr(app.state, 'start_time', time.time()),
-        "status": "operational",
-        "components": {}
-    }
-    
-    # Check component status
+    # Build LangGraph agent
     try:
-        # Neo4j status
-        # This would check actual Neo4j connection
-        status["components"]["neo4j"] = {"status": "connected", "response_time": "< 10ms"}
-        
-        # Agent status
-        status["components"]["agent"] = {"status": "ready", "type": "Enhanced LangGraph"}
-        
-        # Performance system status
-        if performance_system:
-            perf_metrics = performance_system.monitor.get_real_time_metrics()
-            status["components"]["performance"] = {
-                "status": "monitoring",
-                "queries_per_minute": perf_metrics.get("queries_per_minute", 0),
-                "success_rate": perf_metrics.get("success_rate", 0),
-                "cache_enabled": config.redis.enabled
-            }
-        
-        # Visualization status
-        status["components"]["visualization"] = {
-            "status": "enabled" if config.visualization.nvl_enabled else "disabled",
-            "websocket_enabled": config.visualization.websocket_enabled,
-            "max_nodes": config.visualization.max_nodes_limit
-        }
-        
+        print("🔨 Building LangGraph agent...")
+        agent = build_agent()
+        print("✅ LangGraph agent built successfully")
     except Exception as e:
-        status["status"] = "degraded"
-        status["error"] = str(e)
+        print(f"❌ Failed to build agent: {e}")
+        agent = None
     
-    return status
+    print("=" * 60)
+    print(f"🌐 Working FastAPI server ready on http://localhost:{SERVER_PORT}")
+    print("📋 Available endpoints:")
+    print("   • GET  /health - Health check")
+    print("   • POST /chat - Chat with agent")
+    print("   • GET  /graph - Get graph data")
+    print("   • GET  /stats - Live database stats")
+    print("   • WS   /ws - WebSocket for live updates")
+    print("   • GET  /viz - Neo4j visualization")
+    print("   • GET  /docs - API documentation")
+    print("=" * 60)
 
-@app.get("/system/metrics")
-async def get_system_metrics():
-    """Get comprehensive system metrics"""
-    if not performance_system:
-        return {"error": "Performance monitoring not enabled"}
-    
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close connections on shutdown"""
+    print("🛑 Shutting down Working FastAPI Server...")
+    if driver:
+        await driver.close()
+        print("✅ Neo4j driver closed")
+
+# ============================================
+# API ENDPOINTS
+# ============================================
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
     return {
-        "performance_report": performance_system.monitor.get_performance_report(),
-        "real_time_metrics": performance_system.monitor.get_real_time_metrics(),
-        "cache_stats": performance_system.cache.get_stats(),
-        "query_patterns": performance_system.analyzer.analyze_query_patterns(),
-        "recommendations": performance_system.analyzer.get_optimization_recommendations()
+        "service": "Working Neo4j FastAPI Server with NVL",
+        "version": "3.1.0",
+        "description": "Pure FastAPI server (no FastMCP) with LangGraph agent and Neo4j NVL visualization",
+        "architecture": "FastAPI + LangGraph + Neo4j + NVL",
+        "fix_applied": "Removed FastMCP dependency, using pure FastAPI",
+        "endpoints": {
+            "health": "/health - System health check",
+            "chat": "/chat - Chat with LangGraph agent",
+            "graph": "/graph - Get graph data for visualization",
+            "stats": "/stats - Live database statistics",
+            "viz": "/viz - Neo4j NVL visualization interface",
+            "ws": "/ws - WebSocket for live updates",
+            "docs": "/docs - API documentation"
+        },
+        "tools": {
+            "read_neo4j_cypher": "Execute read-only Cypher queries",
+            "write_neo4j_cypher": "Execute write Cypher queries with live updates", 
+            "get_neo4j_schema": "Get database schema"
+        },
+        "features": ["real_time_visualization", "live_updates", "websocket_support", "langgraph_agent"],
+        "neo4j": {
+            "uri": NEO4J_URI,
+            "database": NEO4J_DATABASE,
+            "user": NEO4J_USER,
+            "current_stats": database_stats
+        }
     }
 
-# ============================================
-# API DOCUMENTATION GENERATOR
-# ============================================
-
-class APIDocumentationGenerator:
-    """Generate comprehensive API documentation"""
+@app.get("/health")
+async def health_check():
+    """System health check"""
+    if driver is None:
+        return {
+            "status": "unhealthy",
+            "neo4j": {"status": "driver_not_initialized"},
+            "agent": {"status": "not_initialized" if agent is None else "ready"},
+            "server": {"port": SERVER_PORT, "type": "Working FastAPI"}
+        }
     
-    def __init__(self, app):
-        self.app = app
-        self.docs_dir = Path("docs/api")
-        self.docs_dir.mkdir(parents=True, exist_ok=True)
-    
-    def generate_openapi_spec(self):
-        """Generate OpenAPI specification"""
-        openapi_spec = self.app.openapi()
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run("RETURN 1 as test")
+            record = await result.single()
+            
+        neo4j_status = "connected" if record and record["test"] == 1 else "test_failed"
+        current_stats = await get_database_stats()
         
-        # Enhance the spec with additional information
-        openapi_spec.update({
-            "info": {
-                "title": "Neo4j Enhanced Agent with NVL API",
-                "version": "3.0.0",
-                "description": """
-# Neo4j Enhanced Agent with NVL Visualization API
-
-This is a comprehensive API for interacting with Neo4j databases using natural language queries, 
-enhanced with real-time visualization capabilities using Neo4j NVL (Neo4j Visualization Library).
-
-## Features
-
-- **Natural Language Queries**: Ask questions in plain English about your Neo4j database
-- **Real-time Visualization**: Live graph visualization with Neo4j NVL
-- **Performance Monitoring**: Built-in performance tracking and optimization
-- **WebSocket Support**: Live updates via WebSocket connections
-- **Query Optimization**: Automatic query optimization and caching
-- **Health Monitoring**: Comprehensive system health monitoring
-
-## Architecture
-
-The system combines several components:
-- **FastMCP Server**: MCP (Model Context Protocol) tools for Neo4j operations
-- **LangGraph Agent**: AI agent for natural language processing
-- **Neo4j NVL**: Advanced graph visualization library
-- **Performance System**: Query optimization and monitoring
-- **WebSocket Server**: Real-time updates and communication
-
-## Authentication
-
-Currently, the API does not require authentication in development mode. 
-For production deployment, implement proper authentication mechanisms.
-                """,
-                "contact": {
-                    "name": "Neo4j Enhanced Agent Support",
-                    "url": "https://github.com/your-repo/neo4j-enhanced-agent"
-                },
-                "license": {
-                    "name": "MIT License",
-                    "url": "https://opensource.org/licenses/MIT"
-                }
+        return {
+            "status": "healthy",
+            "neo4j": {
+                "status": neo4j_status,
+                "uri": NEO4J_URI,
+                "database": NEO4J_DATABASE,
+                "current_stats": current_stats
             },
-            "servers": [
-                {
-                    "url": f"http://localhost:{config.server.port}",
-                    "description": "Development server"
-                },
-                {
-                    "url": f"https://your-production-domain.com",
-                    "description": "Production server"
-                }
-            ],
-            "tags": [
-                {
-                    "name": "chat",
-                    "description": "Natural language chat interface"
-                },
-                {
-                    "name": "visualization", 
-                    "description": "Graph visualization endpoints"
-                },
-                {
-                    "name": "performance",
-                    "description": "Performance monitoring and metrics"
-                },
-                {
-                    "name": "system",
-                    "description": "System information and health"
-                },
-                {
-                    "name": "websocket",
-                    "description": "WebSocket communication"
-                }
-            ]
+            "agent": {
+                "status": "ready" if agent else "not_initialized",
+                "model": CORTEX_MODEL
+            },
+            "visualization": {
+                "status": "enabled",
+                "active_connections": len(active_websockets)
+            },
+            "server": {
+                "port": SERVER_PORT,
+                "type": "Working FastAPI with NVL",
+                "tools": ["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"]
+            }
+        }
+            
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy", 
+            "neo4j": {"status": "disconnected", "error": str(e)},
+            "agent": {"status": "not_initialized" if agent is None else "ready"},
+            "server": {"port": SERVER_PORT}
+        }
+
+@app.get("/stats")
+async def get_live_stats():
+    """Get live database statistics"""
+    return await get_database_stats()
+
+@app.get("/graph")
+async def get_graph_data_endpoint(limit: int = 100):
+    """Get graph data for visualization"""
+    try:
+        graph_data = await get_graph_data(limit)
+        return graph_data.dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """Chat endpoint using LangGraph agent"""
+    if agent is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="Agent not initialized. Check server logs for errors."
+        )
+    
+    try:
+        session_id = request.session_id or str(uuid.uuid4())
+        logger.info(f"Processing question: {request.question}")
+        
+        # Create agent state
+        state = AgentState(
+            question=request.question,
+            session_id=session_id
+        )
+        
+        # Run the agent
+        start_time = time.time()
+        result = await agent.ainvoke(state)
+        processing_time = time.time() - start_time
+        
+        # Get graph data if available
+        graph_data = None
+        operation_summary = None
+        
+        if result.get("tool") and result.get("query"):
+            try:
+                graph_data_obj = await get_graph_data(50)
+                graph_data = graph_data_obj.dict()
+                operation_summary = await get_database_stats()
+            except Exception as e:
+                logger.warning(f"Could not get graph data: {e}")
+        
+        logger.info(f"Agent completed in {processing_time:.2f}s - Tool: {result.get('tool')}")
+        
+        return ChatResponse(
+            trace=result.get("trace", ""),
+            tool=result.get("tool", ""),
+            query=result.get("query", ""),
+            answer=result.get("answer", "No answer generated"),
+            session_id=session_id,
+            success=True,
+            graph_data=graph_data,
+            operation_summary=operation_summary
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat endpoint error: {e}")
+        return ChatResponse(
+            trace=f"Error: {str(e)}",
+            tool="",
+            query="",
+            answer=f"⚠️ Error processing request: {str(e)}",
+            session_id=request.session_id or str(uuid.uuid4()),
+            success=False,
+            error=str(e)
+        )
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for live database updates"""
+    await websocket.accept()
+    active_websockets.add(websocket)
+    
+    try:
+        # Send initial database state
+        initial_stats = await get_database_stats()
+        await websocket.send_json({
+            "type": "initial_state",
+            "data": initial_stats
         })
         
-        # Save OpenAPI spec
-        spec_file = self.docs_dir / "openapi.json"
-        with open(spec_file, 'w') as f:
-            import json
-            json.dump(openapi_spec, f, indent=2)
+        # Keep connection alive and handle messages
+        while True:
+            try:
+                data = await websocket.receive_json()
+                
+                if data.get("type") == "request_update":
+                    current_stats = await get_database_stats()
+                    await websocket.send_json({
+                        "type": "database_update", 
+                        "data": current_stats
+                    })
+                    
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                break
+                
+    finally:
+        active_websockets.discard(websocket)
+
+@app.get("/viz", response_class=HTMLResponse)
+async def visualization_interface():
+    """Neo4j visualization interface using NVL"""
+    return HTMLResponse(content="""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo4j Live Visualization - Working Version</title>
+    <script src="https://unpkg.com/neo4j-nvl@latest/dist/index.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0; padding: 0; background: #f5f5f5;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .controls {
+            background: white; padding: 1rem 2rem;
+            border-bottom: 1px solid #eee;
+            display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+        }
+        .btn {
+            background: #667eea; color: white; border: none;
+            padding: 0.5rem 1rem; border-radius: 4px;
+            cursor: pointer; font-size: 14px; transition: background 0.2s;
+        }
+        .btn:hover { background: #5a6fd8; }
+        .stats {
+            display: flex; gap: 2rem; align-items: center; font-size: 14px;
+        }
+        .stat {
+            background: #f8f9fa; padding: 0.5rem 1rem; border-radius: 4px;
+            border-left: 3px solid #667eea;
+        }
+        #nvl-container {
+            height: calc(100vh - 200px); background: white;
+            border-top: 1px solid #eee;
+        }
+        .status { display: inline-block; padding: 0.25rem 0.5rem;
+            border-radius: 3px; font-size: 12px; font-weight: bold; }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🧠 Neo4j Live Visualization - Working Version</h1>
+        <p>Real-time graph visualization with Neo4j NVL (No FastMCP dependency)</p>
+    </div>
+    
+    <div class="controls">
+        <button class="btn" onclick="refreshGraph()">🔄 Refresh Graph</button>
+        <button class="btn" onclick="loadAllNodes()">📊 Load All Nodes</button>
+        <button class="btn" onclick="clearGraph()">🧹 Clear</button>
         
-        logger.info(f"📝 OpenAPI specification saved to {spec_file}")
-        return openapi_spec
+        <div class="stats">
+            <div class="stat"><strong>Nodes:</strong> <span id="node-count">0</span></div>
+            <div class="stat"><strong>Relationships:</strong> <span id="rel-count">0</span></div>
+            <div class="stat"><strong>Status:</strong> <span id="connection-status" class="status disconnected">Connecting...</span></div>
+        </div>
+    </div>
     
-    def generate_markdown_docs(self):
-        """Generate Markdown documentation"""
-        docs_content = """
-# Neo4j Enhanced Agent API Documentation
+    <div id="nvl-container"></div>
 
-## Overview
-
-The Neo4j Enhanced Agent provides a comprehensive API for interacting with Neo4j databases using natural language queries, enhanced with real-time visualization capabilities.
-
-## Quick Start
-
-### 1. Start the Server
-
-```bash
-python integrate.py
-```
-
-### 2. Test the Connection
-
-```bash
-curl http://localhost:8000/health
-```
-
-### 3. Send Your First Query
-
-```bash
-curl -X POST http://localhost:8000/chat \\
-  -H "Content-Type: application/json" \\
-  -d '{"question": "How many nodes are in the graph?", "session_id": "test"}'
-```
-
-## Core Endpoints
-
-### Chat Interface
-
-#### POST /chat
-Send natural language queries to interact with your Neo4j database.
-
-**Request:**
-```json
-{
-  "question": "Create a Person named Alice with age 30",
-  "session_id": "optional_session_id"
-}
-```
-
-**Response:**
-```json
-{
-  "trace": "LLM reasoning trace",
-  "tool": "write_neo4j_cypher",
-  "query": "CREATE (p:Person {name: 'Alice', age: 30}) RETURN p",
-  "answer": "✅ Database Updated Successfully! Created 1 node",
-  "session_id": "session_123",
-  "success": true,
-  "graph_data": {...},
-  "operation_summary": {...}
-}
-```
-
-### Health and Status
-
-#### GET /health
-Check system health and component status.
-
-#### GET /system/status  
-Get real-time system status with detailed component information.
-
-#### GET /system/info
-Get comprehensive system information including architecture and features.
-
-### Visualization
-
-#### GET /viz
-Access the Neo4j NVL visualization interface (returns HTML page).
-
-#### GET /graph
-Get graph data for visualization.
-
-**Parameters:**
-- `limit` (optional): Maximum number of nodes to return (default: 50)
-
-#### WebSocket /ws
-Real-time updates via WebSocket connection.
-
-**Message Types:**
-- `initial_state`: Initial database state
-- `database_update`: Live database updates
-- `request_update`: Request current state
-
-### Performance Monitoring
-
-#### GET /performance/report
-Get comprehensive performance report.
-
-#### GET /performance/realtime
-Get real-time performance metrics.
-
-#### GET /performance/cache-stats
-Get query cache statistics.
-
-#### GET /performance/query-patterns
-Analyze query performance patterns.
-
-#### GET /performance/recommendations
-Get optimization recommendations.
-
-## Error Handling
-
-All endpoints return consistent error responses:
-
-```json
-{
-  "success": false,
-  "error": "Error description",
-  "details": "Additional error details"
-}
-```
-
-## WebSocket Communication
-
-Connect to `/ws` for real-time updates:
-
-```javascript
-const ws = new WebSocket('ws://localhost:8000/ws');
-
-ws.onmessage = function(event) {
-  const data = JSON.parse(event.data);
-  
-  if (data.type === 'database_update') {
-    console.log('Database updated:', data.data);
-    // Update your visualization
-  }
-};
-
-// Request current state
-ws.send(JSON.stringify({type: 'request_update'}));
-```
-
-## Example Queries
-
-### Basic Queries
-- "How many nodes are in the graph?"
-- "Show me the database schema"
-- "List all Person nodes"
-
-### Create Operations
-- "Create a Person named John with age 25"
-- "Create a Company called TechCorp"
-- "Connect Alice to TechCorp as an employee"
-
-### Analysis Queries
-- "Find nodes with the most connections"
-- "Show me all relationships of type WORKS_FOR"
-- "Analyze the network structure"
-
-### Delete Operations
-- "Delete all TestNode nodes"
-- "Remove the person named John"
-- "Clear all temporary data"
-
-## Integration Examples
-
-### Python Client
-
-```python
-import requests
-
-class Neo4jAgentClient:
-    def __init__(self, base_url="http://localhost:8000"):
-        self.base_url = base_url
-        self.session = requests.Session()
-    
-    def chat(self, question, session_id=None):
-        response = self.session.post(
-            f"{self.base_url}/chat",
-            json={"question": question, "session_id": session_id}
-        )
-        return response.json()
-    
-    def get_graph_data(self, limit=50):
-        response = self.session.get(
-            f"{self.base_url}/graph",
-            params={"limit": limit}
-        )
-        return response.json()
-
-# Usage
-client = Neo4jAgentClient()
-result = client.chat("How many nodes are in the graph?")
-print(result["answer"])
-```
-
-### JavaScript Client
-
-```javascript
-class Neo4jAgentClient {
-    constructor(baseUrl = 'http://localhost:8000') {
-        this.baseUrl = baseUrl;
-    }
-    
-    async chat(question, sessionId = null) {
-        const response = await fetch(`${this.baseUrl}/chat`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({question, session_id: sessionId})
+    <script>
+        let nvl; let websocket;
+        
+        async function initNVL() {
+            try {
+                const response = await fetch('/graph?limit=50');
+                const graphData = await response.json();
+                
+                nvl = new NVL('nvl-container', graphData.nodes, graphData.relationships, {
+                    instanceId: 'working-neo4j-viz',
+                    initialZoom: 1.5,
+                    allowDynamicMinZoom: true,
+                    showPropertiesOnHover: true,
+                    nodeColorScheme: 'category10',
+                    relationshipColorScheme: 'dark',
+                    layout: { algorithm: 'forceDirected', incrementalLayout: true }
+                });
+                
+                updateStats(graphData.summary);
+                console.log('✅ NVL initialized successfully');
+                
+            } catch (error) {
+                console.error('❌ Failed to initialize NVL:', error);
+                document.getElementById('connection-status').textContent = 'Error';
+                document.getElementById('connection-status').className = 'status disconnected';
+            }
+        }
+        
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            websocket = new WebSocket(wsUrl);
+            
+            websocket.onopen = function(event) {
+                console.log('✅ WebSocket connected');
+                document.getElementById('connection-status').textContent = 'Connected';
+                document.getElementById('connection-status').className = 'status connected';
+            };
+            
+            websocket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                if (message.type === 'database_update' || message.type === 'initial_state') {
+                    updateStats(message.data);
+                    refreshGraph();
+                }
+            };
+            
+            websocket.onclose = function(event) {
+                console.log('❌ WebSocket disconnected');
+                document.getElementById('connection-status').textContent = 'Disconnected';
+                document.getElementById('connection-status').className = 'status disconnected';
+                setTimeout(initWebSocket, 5000);
+            };
+        }
+        
+        function updateStats(stats) {
+            if (stats) {
+                document.getElementById('node-count').textContent = stats.nodes || 0;
+                document.getElementById('rel-count').textContent = stats.relationships || 0;
+            }
+        }
+        
+        async function refreshGraph() {
+            try {
+                const response = await fetch('/graph?limit=100');
+                const graphData = await response.json();
+                if (nvl) {
+                    nvl.updateGraph(graphData.nodes, graphData.relationships);
+                    updateStats(graphData.summary);
+                }
+            } catch (error) {
+                console.error('Failed to refresh graph:', error);
+            }
+        }
+        
+        async function loadAllNodes() {
+            try {
+                const response = await fetch('/graph?limit=500');
+                const graphData = await response.json();
+                if (nvl) {
+                    nvl.updateGraph(graphData.nodes, graphData.relationships);
+                    updateStats(graphData.summary);
+                }
+            } catch (error) {
+                console.error('Failed to load all nodes:', error);
+            }
+        }
+        
+        function clearGraph() {
+            if (nvl) {
+                nvl.clearGraph();
+                updateStats({nodes: 0, relationships: 0});
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            initNVL();
+            initWebSocket();
         });
-        return await response.json();
-    }
-    
-    async getGraphData(limit = 50) {
-        const response = await fetch(`${this.baseUrl}/graph?limit=${limit}`);
-        return await response.json();
-    }
-}
+    </script>
+</body>
+</html>
+    """, media_type="text/html")
 
-// Usage
-const client = new Neo4jAgentClient();
-client.chat("Show me all Person nodes").then(result => {
-    console.log(result.answer);
-});
-```
+# Legacy endpoints for compatibility
+@app.post("/read_neo4j_cypher")
+async def legacy_read_cypher(request: CypherRequest):
+    """Legacy endpoint for read operations"""
+    try:
+        result = await read_neo4j_cypher(request.query, request.params)
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-## Best Practices
+@app.post("/write_neo4j_cypher")
+async def legacy_write_cypher(request: CypherRequest):
+    """Legacy endpoint for write operations"""
+    try:
+        result = await write_neo4j_cypher(request.query, request.params)
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-### Performance
-- Use session IDs for related queries to improve caching
-- Limit large result sets with appropriate constraints
-- Monitor performance via `/performance/report`
-
-### Visualization
-- Use reasonable node limits (< 500) for optimal visualization performance
-- Leverage WebSocket updates for real-time synchronization
-- Consider user experience when displaying large graphs
-
-### Error Handling
-- Always check the `success` field in responses
-- Implement proper retry logic for transient errors
-- Monitor system health via `/health` endpoint
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Connection Refused**
-   - Ensure Neo4j database is running
-   - Check Neo4j connection settings in configuration
-
-2. **Slow Query Performance**
-   - Review performance recommendations
-   - Check database indexes
-   - Monitor query patterns
-
-3. **WebSocket Connection Issues**
-   - Verify WebSocket support in client
-   - Check firewall settings
-   - Monitor active connections
-
-### Debug Mode
-
-Enable debug logging for detailed troubleshooting:
-
-```python
-import logging
-logging.getLogger("integration").setLevel(logging.DEBUG)
-```
-
-## Support
-
-For support and additional documentation:
-- Check the `/system/info` endpoint for system details
-- Monitor `/system/status` for operational status  
-- Review performance metrics at `/performance/report`
-- Consult the OpenAPI specification at `/docs`
-        """
-        
-        docs_file = self.docs_dir / "README.md"
-        with open(docs_file, 'w') as f:
-            f.write(docs_content)
-        
-        logger.info(f"📝 Markdown documentation saved to {docs_file}")
-        return docs_content
+@app.post("/get_neo4j_schema")
+async def legacy_get_schema():
+    """Legacy endpoint for schema operations"""
+    try:
+        result = await get_neo4j_schema()
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================
-# MAIN APPLICATION ENTRY POINT
+# MAIN FUNCTION
 # ============================================
-
-def handle_signal(signum, frame):
-    """Handle shutdown signals"""
-    logger.info(f"🛑 Received signal {signum}, initiating shutdown...")
-    sys.exit(0)
 
 def main():
-    """Main application entry point"""
-    # Register signal handlers
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+    """Main function to run the working FastAPI server"""
+    print("=" * 70)
+    print("🧠 WORKING NEO4J FASTAPI SERVER WITH NVL")
+    print("=" * 70)
+    print("🔧 Fix Applied: Removed FastMCP dependency, using pure FastAPI")
+    print("🏗️  Architecture: FastAPI + LangGraph + Neo4j + NVL")
+    print("🔧 Configuration:")
+    print(f"   📍 Neo4j URI: {NEO4J_URI}")
+    print(f"   👤 Neo4j User: {NEO4J_USER}")
+    print(f"   🗄️  Neo4j Database: {NEO4J_DATABASE}")
+    print(f"   🤖 Cortex Model: {CORTEX_MODEL}")
+    print(f"   🌐 Server: {SERVER_HOST}:{SERVER_PORT}")
+    print("=" * 70)
+    print("✨ Features:")
+    print("   🎯 Neo4j visualization with NVL")
+    print("   📊 Live database statistics")
+    print("   🔄 WebSocket live updates")
+    print("   📈 LangGraph AI agent")
+    print("   🖥️  Visualization interface at /viz")
+    print("   📚 API documentation at /docs")
+    print("=" * 70)
     
-    # Generate API documentation
-    doc_generator = APIDocumentationGenerator(app)
-    doc_generator.generate_openapi_spec()
-    doc_generator.generate_markdown_docs()
+    if NEO4J_PASSWORD == "your_neo4j_password":
+        print("⚠️  WARNING: Change NEO4J_PASSWORD before using!")
     
-    # Set startup time
-    app.state.start_time = time.time()
+    if driver is None:
+        print("❌ Cannot start - Neo4j driver failed to initialize")
+        return
     
-    # Configure uvicorn
-    uvicorn_config = {
-        "app": "integrate:app",
-        "host": config.server.host,
-        "port": config.server.port,
-        "log_level": config.server.log_level.lower(),
-        "reload": config.server.reload and config.is_development,
-        "workers": config.server.workers if config.is_production else 1,
-        "access_log": True,
-        "use_colors": True,
-        "server_header": False,
-        "date_header": False
-    }
-    
-    logger.info("🚀 Starting Neo4j Enhanced Agent with NVL Integration")
-    logger.info("=" * 70)
-    logger.info(f"🌐 Server will be available at: http://{config.server.host}:{config.server.port}")
-    logger.info(f"📊 NVL Visualization at: http://{config.server.host}:{config.server.port}/viz")
-    logger.info(f"📚 API Documentation at: http://{config.server.host}:{config.server.port}/docs")
-    logger.info("=" * 70)
+    print("🚀 Starting working FastAPI server...")
     
     try:
-        uvicorn.run(**uvicorn_config)
-    except KeyboardInterrupt:
-        logger.info("🛑 Shutdown requested by user")
+        import uvicorn
+        uvicorn.run(
+            app,
+            host=SERVER_HOST,
+            port=SERVER_PORT,
+            log_level="info",
+            reload=False
+        )
     except Exception as e:
-        logger.error(f"❌ Application error: {e}")
-        sys.exit(1)
+        print(f"❌ Failed to start server: {e}")
 
 if __name__ == "__main__":
     main()
-
-# ============================================
-# launch.py - Alternative Launch Script  
-# ============================================
-
-"""
-Alternative launch script with additional options
-"""
-
-import argparse
-import sys
-from pathlib import Path
-
-def create_launch_script():
-    """Create launch.py with additional options"""
-    
-    launch_content = '''#!/usr/bin/env python3
-"""
-Neo4j Enhanced Agent Launch Script
-Provides various launch options and utilities
-"""
-
-import argparse
-import sys
-import subprocess
-import time
-from pathlib import Path
-
-def check_dependencies():
-    """Check if all required dependencies are installed"""
-    required_packages = [
-        "fastmcp", "fastapi", "uvicorn", "neo4j", "langgraph", 
-        "streamlit", "plotly", "networkx", "pandas", "pydantic"
-    ]
-    
-    missing_packages = []
-    
-    for package in required_packages:
-        try:
-            __import__(package.replace("-", "_"))
-        except ImportError:
-            missing_packages.append(package)
-    
-    if missing_packages:
-        print(f"❌ Missing packages: {', '.join(missing_packages)}")
-        print("Install with: pip install -r requirements.txt")
-        return False
-    
-    print("✅ All dependencies satisfied")
-    return True
-
-def launch_server(dev_mode=False, port=8000, host="0.0.0.0"):
-    """Launch the integrated server"""
-    cmd = ["python", "integrate.py"]
-    
-    env = {}
-    if dev_mode:
-        env["ENVIRONMENT"] = "development"
-        env["DEBUG"] = "true"
-        env["LOG_LEVEL"] = "DEBUG"
-    
-    env["SERVER_PORT"] = str(port)
-    env["SERVER_HOST"] = host
-    
-    print(f"🚀 Launching server on {host}:{port}")
-    print(f"📊 Mode: {'Development' if dev_mode else 'Production'}")
-    
-    try:
-        subprocess.run(cmd, env={**os.environ, **env})
-    except KeyboardInterrupt:
-        print("🛑 Server stopped by user")
-
-def launch_ui(port=8501):
-    """Launch Streamlit UI"""
-    cmd = [
-        "streamlit", "run", "enhanced_streamlit_ui.py",
-        "--server.port", str(port),
-        "--server.address", "0.0.0.0",
-        "--server.headless", "true"
-    ]
-    
-    print(f"🎨 Launching Streamlit UI on port {port}")
-    
-    try:
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        print("🛑 UI stopped by user")
-
-def run_tests(test_type="all"):
-    """Run test suite"""
-    test_commands = {
-        "unit": ["python", "-m", "pytest", "tests/", "-m", "unit"],
-        "integration": ["python", "-m", "pytest", "tests/", "-m", "integration"], 
-        "e2e": ["python", "-m", "pytest", "tests/", "-m", "e2e"],
-        "performance": ["python", "-m", "pytest", "tests/", "-m", "performance"],
-        "all": ["python", "-m", "pytest", "tests/", "-v"]
-    }
-    
-    cmd = test_commands.get(test_type, test_commands["all"])
-    
-    print(f"🧪 Running {test_type} tests...")
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        print(result.stdout)
-        if result.stderr:
-            print(result.stderr)
-        return result.returncode == 0
-    except Exception as e:
-        print(f"❌ Test execution failed: {e}")
-        return False
-
-def setup_environment():
-    """Run environment setup"""
-    print("🔧 Setting up environment...")
-    
-    try:
-        subprocess.run(["python", "setup.py"], check=True)
-        print("✅ Environment setup complete")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Environment setup failed: {e}")
-        return False
-
-def deploy_production():
-    """Deploy to production"""
-    print("🚀 Starting production deployment...")
-    
-    try:
-        subprocess.run(["python", "deploy.py"], check=True)
-        print("✅ Production deployment complete")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Deployment failed: {e}")
-        return False
-
-def main():
-    parser = argparse.ArgumentParser(description="Neo4j Enhanced Agent Launcher")
-    
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
-    # Server command
-    server_parser = subparsers.add_parser("server", help="Launch the integrated server")
-    server_parser.add_argument("--dev", action="store_true", help="Run in development mode")
-    server_parser.add_argument("--port", type=int, default=8000, help="Server port")
-    server_parser.add_argument("--host", default="0.0.0.0", help="Server host")
-    
-    # UI command
-    ui_parser = subparsers.add_parser("ui", help="Launch Streamlit UI")
-    ui_parser.add_argument("--port", type=int, default=8501, help="UI port")
-    
-    # Test command
-    test_parser = subparsers.add_parser("test", help="Run tests")
-    test_parser.add_argument("type", choices=["unit", "integration", "e2e", "performance", "all"], 
-                           default="all", nargs="?", help="Type of tests to run")
-    
-    # Setup command
-    subparsers.add_parser("setup", help="Setup development environment")
-    
-    # Deploy command
-    subparsers.add_parser("deploy", help="Deploy to production")
-    
-    # Check command
-    subparsers.add_parser("check", help="Check dependencies and configuration")
-    
-    args = parser.parse_args()
-    
-    if args.command == "server":
-        if not check_dependencies():
-            sys.exit(1)
-        launch_server(dev_mode=args.dev, port=args.port, host=args.host)
-    
-    elif args.command == "ui":
-        if not check_dependencies():
-            sys.exit(1)
-        launch_ui(port=args.port)
-    
-    elif args.command == "test":
-        if not run_tests(args.type):
-            sys.exit(1)
-    
-    elif args.command == "setup":
-        if not setup_environment():
-            sys.exit(1)
-    
-    elif args.command == "deploy":
-        if not deploy_production():
-            sys.exit(1)
-    
-    elif args.command == "check":
-        if not check_dependencies():
-            sys.exit(1)
-        print("✅ System check passed")
-    
-    else:
-        parser.print_help()
-
-if __name__ == "__main__":
-    main()
-'''
-    
-    with open("launch.py", "w") as f:
-        f.write(launch_content)
-    
-    # Make executable
-    Path("launch.py").chmod(0o755)
-    
-    print("✅ Launch script created: launch.py")
-    print("Usage examples:")
-    print("  python launch.py server --dev")
-    print("  python launch.py ui") 
-    print("  python launch.py test unit")
-    print("  python launch.py setup")
-    print("  python launch.py deploy")
-
-if __name__ == "__main__":
-    create_launch_script()
