@@ -1,759 +1,1331 @@
 """
-Fixed LangGraph Agent with Enhanced Neo4j Operations and Visualization Support
-This agent properly handles CREATE/DELETE counts and integrates with the visualization system
+Enhanced FastMCP Server with Neo4j Visualization Library Integration
+This combines FastMCP, LangGraph, and Neo4j NVL for live graph visualization
+Run this on port 8000
 """
 
-import requests
-import urllib3
+import asyncio
 import json
 import logging
-import re
+import uuid
 import time
-import asyncio
 from typing import Dict, Any, Optional, List
+from datetime import datetime
+
+# FastMCP and FastAPI imports
+from fastmcp import FastMCP
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+# Neo4j imports
+from neo4j import AsyncGraphDatabase, AsyncDriver
+
+# LangGraph imports
+import requests
+import urllib3
+import re
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableLambda
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("fixed_langgraph_agent")
-
 # ============================================
 # 🔧 CONFIGURATION - CHANGE THESE VALUES
 # ============================================
+
+# Neo4j Configuration
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "your_neo4j_password"  # ⚠️ CHANGE THIS!
+NEO4J_DATABASE = "neo4j"
 
 # Cortex API Configuration
 CORTEX_API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
 CORTEX_API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"  # ⚠️ CHANGE THIS!
 CORTEX_MODEL = "claude-4-sonnet"
 
-# FastAPI Server Configuration
-FASTAPI_BASE_URL = "http://localhost:8000"
+# Server Configuration
+SERVER_PORT = 8000
+SERVER_HOST = "0.0.0.0"
 
 # ============================================
 
-print("🔧 Fixed LangGraph Agent Configuration:")
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("enhanced_fastmcp_server")
+
+print("🔧 Enhanced FastMCP Server Configuration:")
+print(f"   Neo4j URI: {NEO4J_URI}")
+print(f"   Neo4j User: {NEO4J_USER}")
+print(f"   Neo4j Database: {NEO4J_DATABASE}")
 print(f"   Cortex API: {CORTEX_API_URL}")
-print(f"   API Key Length: {len(CORTEX_API_KEY)} characters")
-print(f"   Model: {CORTEX_MODEL}")
-print(f"   FastAPI Server: {FASTAPI_BASE_URL}")
+print(f"   Server Port: {SERVER_PORT}")
+
+# Initialize Neo4j driver
+try:
+    driver = AsyncGraphDatabase.driver(
+        NEO4J_URI,
+        auth=(NEO4J_USER, NEO4J_PASSWORD),
+        connection_timeout=10,
+        max_connection_lifetime=3600,
+        max_connection_pool_size=50
+    )
+    print("✅ Neo4j driver initialized")
+except Exception as e:
+    print(f"❌ Failed to initialize Neo4j driver: {e}")
+    driver = None
+
+# Initialize FastMCP
+mcp = FastMCP("Neo4j LangGraph Agent with Visualization")
+
+# Global variables for live updates
+active_websockets = set()
+database_stats = {"nodes": 0, "relationships": 0, "labels": [], "relationship_types": []}
+
+# ============================================
+# PYDANTIC MODELS
+# ============================================
+
+class CypherRequest(BaseModel):
+    query: str
+    params: dict = {}
+
+class ChatRequest(BaseModel):
+    question: str
+    session_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    trace: str
+    tool: str
+    query: str
+    answer: str
+    session_id: str
+    success: bool = True
+    error: Optional[str] = None
+    # New fields for visualization
+    graph_data: Optional[Dict[str, Any]] = None
+    operation_summary: Optional[Dict[str, Any]] = None
 
 class AgentState(BaseModel):
     question: str
     session_id: str
-    intent: str = ""
     tool: str = ""
     query: str = ""
-    raw_response: Dict[str, Any] = {}
-    formatted_answer: str = ""
     trace: str = ""
-    debug_info: str = ""
+    answer: str = ""
     error_count: int = 0
     last_error: str = ""
-    # New fields for enhanced visualization support
-    operation_type: str = ""  # create, read, update, delete, schema
-    affected_nodes: int = 0
-    affected_relationships: int = 0
-    graph_changes: Dict[str, Any] = {}
+
+class GraphData(BaseModel):
+    nodes: List[Dict[str, Any]]
+    relationships: List[Dict[str, Any]]
+    summary: Dict[str, Any]
 
 # ============================================
-# ENHANCED SYSTEM PROMPT WITH VISUALIZATION AWARENESS
+# DATABASE MONITORING FUNCTIONS
+# ============================================
+
+async def get_database_stats():
+    """Get comprehensive database statistics"""
+    if driver is None:
+        return {"error": "Driver not initialized"}
+    
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Get node count
+            node_result = await session.run("MATCH (n) RETURN count(n) as node_count")
+            node_record = await node_result.single()
+            node_count = node_record["node_count"] if node_record else 0
+            
+            # Get relationship count
+            rel_result = await session.run("MATCH ()-[r]->() RETURN count(r) as rel_count")
+            rel_record = await rel_result.single()
+            rel_count = rel_record["rel_count"] if rel_record else 0
+            
+            # Get labels
+            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
+            labels_record = await labels_result.single()
+            labels = labels_record["labels"] if labels_record else []
+            
+            # Get relationship types
+            types_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
+            types_record = await types_result.single()
+            rel_types = types_record["types"] if types_record else []
+            
+            return {
+                "nodes": node_count,
+                "relationships": rel_count,
+                "labels": labels,
+                "relationship_types": rel_types,
+                "timestamp": datetime.now().isoformat()
+            }
+    except Exception as e:
+        logger.error(f"Failed to get database stats: {e}")
+        return {"error": str(e)}
+
+async def get_graph_data(limit: int = 100) -> GraphData:
+    """Get graph data for visualization"""
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Get nodes with their properties
+            nodes_result = await session.run(f"""
+                MATCH (n)
+                RETURN id(n) as id, labels(n) as labels, properties(n) as properties
+                LIMIT {limit}
+            """)
+            nodes_data = await nodes_result.data()
+            
+            # Get relationships
+            rels_result = await session.run(f"""
+                MATCH (n)-[r]->(m)
+                RETURN id(n) as source, id(m) as target, id(r) as id, 
+                       type(r) as type, properties(r) as properties
+                LIMIT {limit}
+            """)
+            rels_data = await rels_result.data()
+            
+            # Format nodes for NVL
+            nodes = []
+            for node in nodes_data:
+                node_id = str(node["id"])
+                labels = node["labels"]
+                properties = node["properties"]
+                
+                # Determine display name
+                display_name = properties.get("name") or properties.get("title") or f"Node {node_id}"
+                
+                nodes.append({
+                    "id": node_id,
+                    "labels": labels,
+                    "properties": properties,
+                    "caption": display_name
+                })
+            
+            # Format relationships for NVL
+            relationships = []
+            for rel in rels_data:
+                relationships.append({
+                    "id": str(rel["id"]),
+                    "source": str(rel["source"]),
+                    "target": str(rel["target"]),
+                    "type": rel["type"],
+                    "properties": rel["properties"]
+                })
+            
+            # Get summary
+            summary = await get_database_stats()
+            
+            return GraphData(
+                nodes=nodes,
+                relationships=relationships,
+                summary=summary
+            )
+            
+    except Exception as e:
+        logger.error(f"Failed to get graph data: {e}")
+        raise Exception(f"Graph data fetch failed: {str(e)}")
+
+async def broadcast_database_update():
+    """Broadcast database updates to all connected WebSockets"""
+    if not active_websockets:
+        return
+    
+    try:
+        stats = await get_database_stats()
+        message = {
+            "type": "database_update",
+            "data": stats
+        }
+        
+        # Send to all connected clients
+        disconnected = set()
+        for websocket in active_websockets:
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                disconnected.add(websocket)
+        
+        # Remove disconnected clients
+        active_websockets -= disconnected
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast update: {e}")
+
+# ============================================
+# MCP TOOLS WITH ENHANCED VISUALIZATION
+# ============================================
+
+@mcp.tool()
+async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any]]:
+    """
+    Execute read-only Cypher queries against Neo4j database.
+    
+    Args:
+        query: The Cypher query to execute (MATCH, RETURN, WHERE, etc.)
+        params: Optional parameters for the query
+        
+    Returns:
+        List of records returned by the query
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info(f"Executing READ query: {query}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(query, params)
+            records = await result.data()
+            
+        logger.info(f"Query returned {len(records)} records")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Read query failed: {e}")
+        raise Exception(f"Query failed: {str(e)}")
+
+@mcp.tool()
+async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
+    """
+    Execute write Cypher queries against Neo4j database.
+    
+    Args:
+        query: The Cypher query to execute (CREATE, MERGE, SET, DELETE, etc.)
+        params: Optional parameters for the query
+        
+    Returns:
+        Summary of changes made to the database
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info(f"Executing WRITE query: {query}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(query, params)
+            summary = await result.consume()
+            
+        # Get counters
+        counters = summary.counters
+        
+        response = {
+            "success": True,
+            "nodes_created": counters.nodes_created,
+            "nodes_deleted": counters.nodes_deleted,
+            "relationships_created": counters.relationships_created,
+            "relationships_deleted": counters.relationships_deleted,
+            "properties_set": counters.properties_set,
+            "labels_added": counters.labels_added,
+            "labels_removed": counters.labels_removed
+        }
+        
+        # Broadcast update to connected clients
+        asyncio.create_task(broadcast_database_update())
+        
+        logger.info(f"Write query completed: {response}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Write query failed: {e}")
+        raise Exception(f"Query failed: {str(e)}")
+
+@mcp.tool()
+async def get_neo4j_schema() -> Dict[str, Any]:
+    """
+    Get the schema of the Neo4j database including labels, relationship types, and properties.
+    
+    Returns:
+        Dictionary containing database schema information
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info("Fetching database schema")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Try APOC first
+            try:
+                apoc_result = await session.run("CALL apoc.meta.schema() YIELD value RETURN value")
+                apoc_record = await apoc_result.single()
+                if apoc_record:
+                    schema = apoc_record["value"]
+                    logger.info("Schema fetched using APOC")
+                    return schema
+            except Exception:
+                logger.info("APOC not available, using fallback queries")
+            
+            # Fallback to basic queries
+            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
+            labels_record = await labels_result.single()
+            labels = labels_record["labels"] if labels_record else []
+            
+            rels_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
+            rels_record = await rels_result.single()
+            rel_types = rels_record["types"] if rels_record else []
+            
+            props_result = await session.run("CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys")
+            props_record = await props_result.single()
+            prop_keys = props_record["keys"] if props_record else []
+        
+        schema = {
+            "labels": labels,
+            "relationship_types": rel_types,
+            "property_keys": prop_keys,
+            "source": "fallback_queries"
+        }
+        
+        logger.info(f"Schema fetched: {len(labels)} labels, {len(rel_types)} rel types, {len(prop_keys)} properties")
+        return schema
+        
+    except Exception as e:
+        logger.error(f"Schema fetch failed: {e}")
+        return {
+            "labels": [],
+            "relationship_types": [],
+            "property_keys": [],
+            "error": f"Schema fetch failed: {str(e)}",
+            "source": "error"
+        }
+
+# ============================================
+# LANGGRAPH AGENT LOGIC (ENHANCED)
 # ============================================
 
 SYSTEM_PROMPT = """
-You are an expert AI assistant that helps users query and manage a Neo4j database with real-time visualization support. Your responses will be used to update live graph visualizations, so be precise and comprehensive.
+You are an expert AI assistant that helps users query and manage a Neo4j database using MCP tools.
 
 AVAILABLE TOOLS:
-- read_neo4j_cypher: Execute read-only queries (MATCH, RETURN, WHERE, OPTIONAL MATCH, etc.)
-  * Use for data exploration, analysis, counting, reporting
-  * Results will be displayed in both text and graph visualization
-  * NEVER use for CREATE, UPDATE, DELETE operations
+- read_neo4j_cypher: Execute read-only Cypher queries (MATCH, RETURN, WHERE, etc.)
+- write_neo4j_cypher: Execute write Cypher queries (CREATE, MERGE, SET, DELETE, etc.)
+- get_neo4j_schema: Get database schema information
 
-- write_neo4j_cypher: Execute write operations (CREATE, MERGE, SET, DELETE, REMOVE, etc.)
-  * Use for data modification, node/relationship creation/deletion
-  * Changes will be reflected immediately in the live visualization
-  * Returns detailed operation counts for visualization updates
+GUIDELINES:
+- Always explain your reasoning before selecting a tool
+- Choose the appropriate tool based on the user's intent
+- For schema questions, use get_neo4j_schema
+- For data queries, use read_neo4j_cypher
+- For data modifications, use write_neo4j_cypher
+- When creating or modifying data, provide clear feedback about what changed
 
-- get_neo4j_schema: Get database structure information
-  * Use when users ask about schema, labels, relationship types, properties
-  * Results help users understand the graph structure for visualization
-
-RESPONSE FORMAT REQUIREMENTS:
-Always use this EXACT format:
-
-Tool: [exact_tool_name]
-Query: [complete_cypher_query_on_single_line]
-
-IMPORTANT RULES:
-1. Put the ENTIRE Cypher query on ONE line after "Query:"
-2. Do NOT use code blocks, markdown, or multi-line formatting
-3. Use exact tool names: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema
-4. For write operations, use DETACH DELETE for node deletions
-5. Always provide complete, executable queries
-6. Consider visualization impact - queries should return meaningful graph data
-
-ENHANCED EXAMPLES FOR VISUALIZATION:
+EXAMPLES:
 
 User: How many nodes are in the graph?
 Tool: read_neo4j_cypher
 Query: MATCH (n) RETURN count(n) as total_nodes
 
-User: Show me all Person nodes with their connections
-Tool: read_neo4j_cypher
-Query: MATCH (p:Person)-[r]-(connected) RETURN p, r, connected LIMIT 20
-
-User: Create a Person named Alice who works at TechCorp
+User: Create a Person named Alice with age 30
 Tool: write_neo4j_cypher
-Query: CREATE (alice:Person {name: 'Alice', created: datetime()}), (company:Company {name: 'TechCorp'}) CREATE (alice)-[:WORKS_FOR {since: date()}]->(company) RETURN alice, company
+Query: CREATE (p:Person {name: 'Alice', age: 30}) RETURN p
 
-User: Delete all nodes with no relationships
-Tool: write_neo4j_cypher
-Query: MATCH (n) WHERE NOT (n)--() DETACH DELETE n
-
-User: What's the database structure?
+User: Show the schema
 Tool: get_neo4j_schema
 
-User: Find the most connected nodes for visualization
+User: Find all nodes connected to Alice
 Tool: read_neo4j_cypher
-Query: MATCH (n) WITH n, size((n)--()) as connections WHERE connections > 0 RETURN n, connections ORDER BY connections DESC LIMIT 10
+Query: MATCH (alice:Person {name: 'Alice'})-[r]-(connected) RETURN alice, r, connected
 
-User: Create a social network example
-Tool: write_neo4j_cypher
-Query: CREATE (alice:Person {name: 'Alice', age: 30}), (bob:Person {name: 'Bob', age: 25}), (charlie:Person {name: 'Charlie', age: 35}) CREATE (alice)-[:FRIENDS_WITH {since: '2020'}]->(bob), (bob)-[:FRIENDS_WITH {since: '2021'}]->(charlie), (charlie)-[:FRIENDS_WITH {since: '2019'}]->(alice) RETURN alice, bob, charlie
-
-VISUALIZATION CONSIDERATIONS:
-- For read queries, return nodes and relationships when possible for graph display
-- For write operations, return created/modified elements to show in visualization
-- Consider query performance for visualization (use LIMIT for large result sets)
-- Structure queries to provide meaningful graph data for the NVL interface
-
-ERROR HANDLING:
-- If query syntax is unclear, ask for clarification
-- For ambiguous requests, suggest the most visualization-friendly interpretation
-- Always validate Cypher syntax before responding
+Always provide the exact tool name and query (if applicable).
 """
 
-# ============================================
-# ENHANCED LLM COMMUNICATION
-# ============================================
-
 def call_cortex_llm(prompt: str, session_id: str) -> str:
-    """Call Cortex LLM with enhanced error handling and retry logic"""
-    max_retries = 3
-    retry_delay = 1
-    
-    for attempt in range(max_retries):
-        try:
-            headers = {
-                "Authorization": f'Snowflake Token="{CORTEX_API_KEY}"',
-                "Content-Type": "application/json"
+    """Call Cortex LLM with error handling"""
+    try:
+        headers = {
+            "Authorization": f'Snowflake Token="{CORTEX_API_KEY}"',
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "query": {
+                "aplctn_cd": "edagnai",
+                "app_id": "edadip", 
+                "api_key": CORTEX_API_KEY,
+                "method": "cortex",
+                "model": CORTEX_MODEL,
+                "sys_msg": SYSTEM_PROMPT,
+                "limit_convs": "0",
+                "prompt": {
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                "session_id": session_id
             }
+        }
+        
+        logger.info("Calling Cortex LLM...")
+        response = requests.post(CORTEX_API_URL, headers=headers, json=payload, verify=False, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.text.partition("end_of_stream")[0].strip()
+            logger.info(f"LLM response received: {len(result)} characters")
+            return result
+        else:
+            logger.error(f"Cortex API error: {response.status_code}")
+            return f"Error: Cortex API returned {response.status_code}"
             
-            payload = {
-                "query": {
-                    "aplctn_cd": "edagnai",
-                    "app_id": "edadip",
-                    "api_key": CORTEX_API_KEY,
-                    "method": "cortex",
-                    "model": CORTEX_MODEL,
-                    "sys_msg": SYSTEM_PROMPT,
-                    "limit_convs": "0",
-                    "prompt": {
-                        "messages": [{"role": "user", "content": prompt}]
-                    },
-                    "session_id": session_id
-                }
-            }
-            
-            logger.info(f"Calling Cortex LLM (attempt {attempt + 1}): {prompt[:100]}...")
-            response = requests.post(CORTEX_API_URL, headers=headers, json=payload, verify=False, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.text.partition("end_of_stream")[0].strip()
-                logger.info(f"LLM response received: {len(result)} characters")
-                return result
-            else:
-                logger.error(f"Cortex API error: {response.status_code}")
-                if attempt == max_retries - 1:
-                    return f"Error: Cortex API returned {response.status_code}"
-                    
-        except Exception as e:
-            logger.error(f"Cortex LLM call failed (attempt {attempt + 1}): {e}")
-            if attempt == max_retries - 1:
-                return f"Error: Failed to call LLM after {max_retries} attempts - {str(e)}"
-            
-        # Wait before retry
-        time.sleep(retry_delay * (attempt + 1))
-    
-    return "Error: Maximum retry attempts exceeded"
+    except Exception as e:
+        logger.error(f"Cortex LLM call failed: {e}")
+        return f"Error: Failed to call LLM - {str(e)}"
 
-# ============================================
-# ENHANCED TOOL SELECTION AND PARSING
-# ============================================
-
-def determine_intent_and_operation_type(question: str) -> tuple[str, str]:
-    """Determine user intent and operation type for visualization"""
-    q_lower = question.lower()
-    
-    # Schema operations
-    if any(word in q_lower for word in ['schema', 'structure', 'labels', 'relationships', 'types', 'properties']):
-        return "schema", "schema"
-    
-    # Write operations
-    elif any(word in q_lower for word in ['create', 'add', 'insert', 'new', 'make']):
-        return "create", "create"
-    elif any(word in q_lower for word in ['delete', 'remove', 'drop', 'clear']):
-        return "delete", "delete"
-    elif any(word in q_lower for word in ['update', 'set', 'change', 'modify', 'edit']):
-        return "update", "update"
-    elif any(word in q_lower for word in ['merge', 'upsert']):
-        return "upsert", "create"
-    
-    # Read operations
-    elif any(word in q_lower for word in ['how many', 'count', 'number of']):
-        return "count", "read"
-    elif any(word in q_lower for word in ['show', 'list', 'find', 'get', 'select', 'display']):
-        return "retrieve", "read"
-    elif any(word in q_lower for word in ['analyze', 'analysis', 'report']):
-        return "analyze", "read"
-    
-    # Default to read
-    else:
-        return "explore", "read"
-
-def parse_llm_response_enhanced(llm_output: str, question: str) -> tuple[str, str, str, Dict[str, Any]]:
-    """Enhanced LLM response parsing with better error handling and visualization support"""
+def parse_llm_response(llm_output: str) -> tuple[str, str, str]:
+    """Parse LLM response to extract tool and query"""
     valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    
-    debug_info = {
-        "raw_output": llm_output[:300],
-        "question": question,
-        "parsing_steps": []
-    }
     
     tool = None
     query = None
     trace = llm_output.strip()
     
-    # Strategy 1: Look for exact "Tool: xxx" pattern
-    tool_pattern = r"Tool:\s*([a-zA-Z_]+)"
-    tool_match = re.search(tool_pattern, llm_output, re.I)
+    # Extract tool
+    tool_match = re.search(r"Tool:\s*(\w+)", llm_output, re.I)
     if tool_match:
         extracted_tool = tool_match.group(1).strip()
         if extracted_tool in valid_tools:
             tool = extracted_tool
-            debug_info["parsing_steps"].append(f"Found tool via pattern: {tool}")
     
-    # Strategy 2: Look for tool names in text
-    if not tool:
-        for valid_tool in valid_tools:
-            if valid_tool.lower() in llm_output.lower():
-                tool = valid_tool
-                debug_info["parsing_steps"].append(f"Found tool in text: {tool}")
-                break
+    # Extract query
+    query_match = re.search(r"Query:\s*(.+?)(?=\n|$)", llm_output, re.I | re.MULTILINE)
+    if query_match:
+        query = query_match.group(1).strip()
+        # Clean query
+        query = re.sub(r'```[a-zA-Z]*', '', query)
+        query = re.sub(r'```', '', query)
+        query = re.sub(r'\s+', ' ', query).strip()
     
-    # Strategy 3: Infer from question content
-    if not tool:
-        intent, operation_type = determine_intent_and_operation_type(question)
-        
-        if operation_type == "schema":
-            tool = "get_neo4j_schema"
-        elif operation_type in ["create", "delete", "update"]:
-            tool = "write_neo4j_cypher"
-        else:
-            tool = "read_neo4j_cypher"
-            
-        debug_info["parsing_steps"].append(f"Inferred tool from question: {tool} (intent: {intent})")
-    
-    # Strategy 4: Extract query
-    query_patterns = [
-        r"Query:\s*(.+?)(?=\n|$)",
-        r"query:\s*(.+?)(?=\n|$)",
-        r"Cypher:\s*(.+?)(?=\n|$)",
-        r"`([^`]+)`",
-        r"```\s*cypher\s*([^```]+)\s*```",
-        r"```([^```]+)```"
-    ]
-    
-    for pattern in query_patterns:
-        match = re.search(pattern, llm_output, re.I | re.MULTILINE | re.DOTALL)
-        if match:
-            extracted_query = match.group(1).strip()
-            # Clean the query
-            extracted_query = re.sub(r'```[a-zA-Z]*', '', extracted_query)
-            extracted_query = re.sub(r'```', '', extracted_query)
-            extracted_query = re.sub(r'\s+', ' ', extracted_query).strip()
-            
-            if len(extracted_query) > 5 and any(keyword in extracted_query.upper() for keyword in ['MATCH', 'CREATE', 'DELETE', 'MERGE', 'SET', 'RETURN']):
-                query = extracted_query
-                debug_info["parsing_steps"].append(f"Extracted query via pattern: {pattern}")
-                break
-    
-    # Strategy 5: Generate fallback query if needed
-    if tool and not query and tool != "get_neo4j_schema":
-        intent, operation_type = determine_intent_and_operation_type(question)
-        
-        if tool == "read_neo4j_cypher":
-            if "count" in intent:
-                query = "MATCH (n) RETURN count(n) as total_nodes"
-            else:
-                query = "MATCH (n) RETURN n LIMIT 10"
-        elif tool == "write_neo4j_cypher":
-            if operation_type == "create":
-                query = "CREATE (n:TestNode {name: 'test', created: datetime()}) RETURN n"
-            elif operation_type == "delete":
-                query = "MATCH (n:TestNode) DETACH DELETE n"
-            else:
-                query = "MATCH (n) SET n.updated = datetime() RETURN count(n) as updated"
-        
-        debug_info["parsing_steps"].append(f"Generated fallback query: {query}")
-    
-    # Final validation
-    if not tool:
-        tool = "read_neo4j_cypher"
-        query = "MATCH (n) RETURN count(n) as total"
-        debug_info["parsing_steps"].append("Used final fallback: read operation")
-    
-    debug_info["final_result"] = {"tool": tool, "query": query}
-    
-    return tool, query, trace, debug_info
+    return tool, query, trace
 
-# ============================================
-# ENHANCED FASTAPI SERVER COMMUNICATION
-# ============================================
-
-async def call_fastapi_server_enhanced(tool: str, query: str = None) -> Dict[str, Any]:
-    """Enhanced FastAPI server communication with better error handling and response parsing"""
+async def execute_mcp_tool_enhanced(tool: str, query: str = None) -> Dict[str, Any]:
+    """Execute MCP tool with enhanced response including graph data"""
     try:
-        headers = {"Content-Type": "application/json"}
-        
-        logger.info(f"Calling FastAPI server - Tool: {tool}, Query: {query}")
-        
         if tool == "get_neo4j_schema":
-            response = requests.post(f"{FASTAPI_BASE_URL}/get_neo4j_schema", headers=headers, timeout=30)
-            
+            result = await get_neo4j_schema()
+            return {"success": True, "data": result, "type": "schema"}
+        
         elif tool == "read_neo4j_cypher":
             if not query:
-                return {"success": False, "error": "No query provided for read operation"}
-            
-            data = {"query": query, "params": {}}
-            response = requests.post(f"{FASTAPI_BASE_URL}/read_neo4j_cypher", json=data, headers=headers, timeout=30)
-            
+                return {"error": "No query provided for read operation"}
+            result = await read_neo4j_cypher(query, {})
+            return {"success": True, "data": result, "type": "read", "query": query}
+        
         elif tool == "write_neo4j_cypher":
             if not query:
-                return {"success": False, "error": "No query provided for write operation"}
-                
-            data = {"query": query, "params": {}}
-            response = requests.post(f"{FASTAPI_BASE_URL}/write_neo4j_cypher", json=data, headers=headers, timeout=30)
-            
-        else:
-            return {"success": False, "error": f"Unknown tool: {tool}"}
+                return {"error": "No query provided for write operation"}
+            result = await write_neo4j_cypher(query, {})
+            return {"success": True, "data": result, "type": "write", "query": query}
         
-        if response.status_code == 200:
-            result = response.json()
-            logger.info(f"FastAPI server response successful: {type(result)}")
-            
-            # Ensure the response has the expected structure
-            if isinstance(result, list):
-                # For read operations that return lists
-                return {
-                    "success": True,
-                    "data": result,
-                    "count": len(result),
-                    "type": "list_result"
-                }
-            elif isinstance(result, dict):
-                # For write operations and schema
-                return {
-                    "success": True,
-                    "data": result,
-                    "type": "dict_result",
-                    **result  # Merge any additional fields
-                }
-            else:
-                return {"success": True, "data": result, "type": "other"}
-                
         else:
-            logger.error(f"FastAPI server error: {response.status_code} - {response.text}")
-            return {
-                "success": False, 
-                "error": f"FastAPI server error: {response.status_code}",
-                "details": response.text
-            }
+            return {"error": f"Unknown tool: {tool}"}
             
-    except requests.exceptions.ConnectionError:
-        logger.error(f"Cannot connect to FastAPI server at {FASTAPI_BASE_URL}")
-        return {
-            "success": False, 
-            "error": f"Cannot connect to FastAPI server. Is it running on port 8000?",
-            "connection_failed": True
-        }
     except Exception as e:
-        logger.error(f"FastAPI server call failed: {e}")
-        return {"success": False, "error": f"FastAPI server failed: {str(e)}"}
+        logger.error(f"Tool execution failed: {e}")
+        return {"error": str(e)}
 
-# ============================================
-# ENHANCED RESPONSE FORMATTING WITH VISUALIZATION SUPPORT
-# ============================================
-
-def format_response_with_visualization(tool: str, query: str, response: Dict[str, Any], debug_info: Dict[str, Any] = None) -> tuple[str, Dict[str, Any]]:
-    """Enhanced response formatting with visualization metadata"""
+def select_tool_node(state: AgentState) -> Dict[str, Any]:
+    """Node 1: Select tool and generate query"""
+    logger.info(f"Processing question: {state.question}")
     
-    visualization_metadata = {
-        "tool_used": tool,
-        "query_executed": query,
-        "operation_type": "unknown",
-        "nodes_affected": 0,
-        "relationships_affected": 0,
-        "visualization_update_needed": False
+    llm_output = call_cortex_llm(state.question, state.session_id)
+    tool, query, trace = parse_llm_response(llm_output)
+    
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool or "",
+        "query": query or "",
+        "trace": trace,
+        "answer": "",
+        "error_count": state.error_count,
+        "last_error": state.last_error
     }
+
+async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
+    """Node 2: Execute the selected tool with enhanced formatting"""
+    logger.info(f"Executing tool: {state.tool}")
     
-    if not response.get("success", False):
-        error = response.get("error", "Unknown error")
-        formatted_response = f"❌ **Operation Failed**\n\n**Error:** {error}"
-        
-        if debug_info:
-            formatted_response += f"\n\n**Debug Information:**\n"
-            for step in debug_info.get("parsing_steps", []):
-                formatted_response += f"• {step}\n"
-        
-        return formatted_response, visualization_metadata
+    if not state.tool:
+        answer = "⚠️ No valid tool selected. Please rephrase your question."
+        return {**state.dict(), "answer": answer}
     
-    data = response.get("data", {})
+    # Execute MCP tool
+    result = await execute_mcp_tool_enhanced(state.tool, state.query)
     
-    # Handle schema operations
-    if tool == "get_neo4j_schema":
-        visualization_metadata["operation_type"] = "schema"
-        
+    if "error" in result:
+        answer = f"❌ **Error:** {result['error']}"
+        return {
+            **state.dict(),
+            "answer": answer,
+            "error_count": state.error_count + 1,
+            "last_error": result['error']
+        }
+    
+    # Format successful result with enhanced display
+    data = result.get("data", {})
+    result_type = result.get("type", "unknown")
+    
+    if result_type == "schema":
         if isinstance(data, dict):
             labels = data.get("labels", [])
             rel_types = data.get("relationship_types", [])
             prop_keys = data.get("property_keys", [])
-            
-            formatted_response = f"""📊 **Database Schema Retrieved**
+            answer = f"""📊 **Database Schema:**
 
-**Node Labels ({len(labels)}):**
-{', '.join(labels[:20])}
+**Node Labels ({len(labels)}):** {', '.join(labels[:15])}
+**Relationship Types ({len(rel_types)}):** {', '.join(rel_types[:15])}
+**Property Keys ({len(prop_keys)}):** {', '.join(prop_keys[:15])}
 
-**Relationship Types ({len(rel_types)}):**
-{', '.join(rel_types[:20])}
-
-**Property Keys ({len(prop_keys)}):**
-{', '.join(prop_keys[:20])}
-
-*Schema information updated for visualization interface*"""
-
+*Schema data updated in real-time visualization*"""
         else:
-            formatted_response = f"📊 **Database Schema:**\n```json\n{json.dumps(data, indent=2)[:800]}\n```"
-        
-        return formatted_response, visualization_metadata
+            answer = f"📊 **Schema:** {json.dumps(data, indent=2)[:500]}..."
     
-    # Handle read operations
-    elif tool == "read_neo4j_cypher":
-        visualization_metadata["operation_type"] = "read"
-        visualization_metadata["visualization_update_needed"] = True
-        
+    elif result_type == "read":
         if isinstance(data, list):
             count = len(data)
-            visualization_metadata["nodes_affected"] = count
-            
             if count == 0:
-                formatted_response = "📊 **Query Result:** No data found"
+                answer = "📊 **Query Result:** No data found"
             elif count == 1 and isinstance(data[0], dict) and len(data[0]) == 1:
                 # Single value result (like count)
                 key, value = list(data[0].items())[0]
-                formatted_response = f"📊 **Query Result:**\n\n**{key.replace('_', ' ').title()}:** {value:,}"
+                answer = f"📊 **Query Result:** {key} = **{value}**"
             else:
-                formatted_response = f"📊 **Query Results:** Found **{count:,}** records\n\n"
-                
-                # Show sample records
-                sample_size = min(3, count)
-                for i, record in enumerate(data[:sample_size]):
-                    formatted_response += f"**Record {i+1}:**\n"
-                    if isinstance(record, dict):
-                        for k, v in record.items():
-                            formatted_response += f"  • {k}: {v}\n"
-                    else:
-                        formatted_response += f"  {record}\n"
-                    formatted_response += "\n"
-                
-                if count > sample_size:
-                    formatted_response += f"... and **{count - sample_size:,}** more records\n\n"
-                
-                formatted_response += "*Full results available in graph visualization*"
+                answer = f"📊 **Query Result:** Found **{count}** records\n\n"
+                # Show sample data
+                for i, record in enumerate(data[:3]):
+                    answer += f"**Record {i+1}:** {json.dumps(record, indent=2)}\n\n"
+                if count > 3:
+                    answer += f"... and **{count - 3}** more records"
+                answer += "\n\n*Full results shown in graph visualization*"
         else:
-            formatted_response = f"📊 **Query Result:**\n```json\n{json.dumps(data, indent=2)[:600]}\n```"
+            answer = f"📊 **Query Result:** {json.dumps(data, indent=2)[:500]}"
     
-    # Handle write operations
-    elif tool == "write_neo4j_cypher":
-        visualization_metadata["operation_type"] = "write"
-        visualization_metadata["visualization_update_needed"] = True
-        
+    elif result_type == "write":
         if isinstance(data, dict):
-            # Extract operation counts
             nodes_created = data.get("nodes_created", 0)
             nodes_deleted = data.get("nodes_deleted", 0)
             rels_created = data.get("relationships_created", 0)
             rels_deleted = data.get("relationships_deleted", 0)
             props_set = data.get("properties_set", 0)
-            labels_added = data.get("labels_added", 0)
-            labels_removed = data.get("labels_removed", 0)
-            
-            visualization_metadata["nodes_affected"] = nodes_created + nodes_deleted
-            visualization_metadata["relationships_affected"] = rels_created + rels_deleted
             
             operations = []
             if nodes_created > 0:
-                operations.append(f"🟢 **Created {nodes_created:,} node{'s' if nodes_created != 1 else ''}**")
+                operations.append(f"🟢 **Created {nodes_created} node{'s' if nodes_created != 1 else ''}**")
             if nodes_deleted > 0:
-                operations.append(f"🗑️ **Deleted {nodes_deleted:,} node{'s' if nodes_deleted != 1 else ''}**")
+                operations.append(f"🗑️ **Deleted {nodes_deleted} node{'s' if nodes_deleted != 1 else ''}**")
             if rels_created > 0:
-                operations.append(f"🔗 **Created {rels_created:,} relationship{'s' if rels_created != 1 else ''}**")
+                operations.append(f"🔗 **Created {rels_created} relationship{'s' if rels_created != 1 else ''}**")
             if rels_deleted > 0:
-                operations.append(f"❌ **Deleted {rels_deleted:,} relationship{'s' if rels_deleted != 1 else ''}**")
+                operations.append(f"❌ **Deleted {rels_deleted} relationship{'s' if rels_deleted != 1 else ''}**")
             if props_set > 0:
-                operations.append(f"📝 **Set {props_set:,} propert{'ies' if props_set != 1 else 'y'}**")
-            if labels_added > 0:
-                operations.append(f"🏷️ **Added {labels_added:,} label{'s' if labels_added != 1 else ''}**")
-            if labels_removed > 0:
-                operations.append(f"🏷️ **Removed {labels_removed:,} label{'s' if labels_removed != 1 else ''}**")
+                operations.append(f"📝 **Set {props_set} propert{'ies' if props_set != 1 else 'y'}**")
             
             if operations:
-                formatted_response = "✅ **Database Update Completed Successfully!**\n\n"
-                formatted_response += "\n".join(operations)
-                formatted_response += "\n\n*Changes immediately reflected in live graph visualization*"
-                
-                # Add performance info if available
-                total_changes = sum([nodes_created, nodes_deleted, rels_created, rels_deleted, props_set])
-                if total_changes > 0:
-                    formatted_response += f"\n\n**Total Changes:** {total_changes:,}"
+                answer = "✅ **Database Updated Successfully!**\n\n" + "\n".join(operations)
+                answer += "\n\n*Changes reflected in live graph visualization*"
             else:
-                formatted_response = "✅ **Query executed successfully** (no structural changes made)"
+                answer = "✅ **Query executed successfully** (no changes made)"
         else:
-            formatted_response = f"✅ **Write Operation Result:**\n{json.dumps(data, indent=2)[:400]}"
+            answer = f"✅ **Write operation completed:** {data}"
     
     else:
-        formatted_response = f"📊 **Operation Result:**\n{json.dumps(data, indent=2)[:500]}"
+        answer = f"📊 **Result:** {json.dumps(data, indent=2)[:500]}"
     
-    return formatted_response, visualization_metadata
-
-# ============================================
-# ENHANCED LANGGRAPH NODES
-# ============================================
-
-def analyze_and_select_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
-    """Enhanced Node 1: Analyze question and select tool with visualization awareness"""
-    logger.info(f"Processing question with visualization support: {state.question}")
-    
-    # Determine intent and operation type
-    intent, operation_type = determine_intent_and_operation_type(state.question)
-    
-    # Call LLM
-    llm_output = call_cortex_llm(state.question, state.session_id)
-    
-    # Parse with enhanced parsing
-    tool, query, trace, debug_info = parse_llm_response_enhanced(llm_output, state.question)
-    
-    logger.info(f"Selected tool: {tool}, query: {query}, intent: {intent}")
-    
-    return {
-        "question": state.question,
-        "session_id": state.session_id,
-        "intent": intent,
-        "tool": tool,
-        "query": query,
-        "trace": trace,
-        "debug_info": json.dumps(debug_info, indent=2),
-        "raw_response": {},
-        "formatted_answer": "",
-        "error_count": state.error_count,
-        "last_error": state.last_error,
-        "operation_type": operation_type,
-        "affected_nodes": 0,
-        "affected_relationships": 0,
-        "graph_changes": {}
-    }
-
-async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
-    """Enhanced Node 2: Execute tool with visualization metadata"""
-    logger.info(f"Executing tool with visualization support: {state.tool}")
-    
-    if not state.tool:
-        formatted_answer = f"⚠️ **No valid tool selected.**\n\n**Debug Info:**\n{state.debug_info}"
-        return {**state.dict(), "formatted_answer": formatted_answer}
-    
-    # Call FastAPI server
-    raw_response = await call_fastapi_server_enhanced(state.tool, state.query)
-    
-    # Parse debug info
-    try:
-        debug_info = json.loads(state.debug_info) if state.debug_info else {}
-    except:
-        debug_info = {}
-    
-    # Format response with visualization metadata
-    formatted_answer, viz_metadata = format_response_with_visualization(
-        state.tool, state.query, raw_response, debug_info
-    )
-    
-    # Update state with visualization metadata
-    return {
-        **state.dict(),
-        "raw_response": raw_response,
-        "formatted_answer": formatted_answer,
-        "affected_nodes": viz_metadata.get("nodes_affected", 0),
-        "affected_relationships": viz_metadata.get("relationships_affected", 0),
-        "graph_changes": viz_metadata
-    }
-
-# ============================================
-# BUILD ENHANCED AGENT
-# ============================================
+    return {**state.dict(), "answer": answer}
 
 def build_agent():
-    """Build the enhanced LangGraph agent with visualization support"""
-    logger.info("Building enhanced LangGraph agent with visualization support...")
+    """Build the enhanced LangGraph agent"""
+    logger.info("Building enhanced LangGraph agent...")
     
     workflow = StateGraph(state_schema=AgentState)
     
     # Add nodes
-    workflow.add_node("analyze_and_select", RunnableLambda(analyze_and_select_tool_node_enhanced))
+    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
     workflow.add_node("execute_tool", RunnableLambda(execute_tool_node_enhanced))
     
     # Set entry point and edges
-    workflow.set_entry_point("analyze_and_select")
-    workflow.add_edge("analyze_and_select", "execute_tool")
+    workflow.set_entry_point("select_tool")
+    workflow.add_edge("select_tool", "execute_tool")
     workflow.add_edge("execute_tool", END)
     
     agent = workflow.compile()
-    logger.info("✅ Enhanced LangGraph agent with visualization support built successfully")
+    logger.info("✅ Enhanced LangGraph agent built successfully")
     
     return agent
 
-# ============================================
-# TESTING AND VALIDATION
-# ============================================
-
-def test_enhanced_agent():
-    """Test the enhanced agent with various scenarios"""
-    test_cases = [
-        {
-            "question": "How many nodes are in the graph?",
-            "expected_tool": "read_neo4j_cypher",
-            "expected_operation": "read"
-        },
-        {
-            "question": "Create a Person named Alice with age 30",
-            "expected_tool": "write_neo4j_cypher",
-            "expected_operation": "create"
-        },
-        {
-            "question": "Show me the database schema",
-            "expected_tool": "get_neo4j_schema",
-            "expected_operation": "schema"
-        },
-        {
-            "question": "Delete all TestNode nodes",
-            "expected_tool": "write_neo4j_cypher",
-            "expected_operation": "delete"
-        },
-        {
-            "question": "Find all Person nodes with their relationships",
-            "expected_tool": "read_neo4j_cypher",
-            "expected_operation": "read"
-        }
-    ]
-    
-    print("🧪 Testing Enhanced LangGraph Agent with Visualization Support")
-    print("=" * 70)
-    
-    for i, test_case in enumerate(test_cases, 1):
-        print(f"\n{i}. Testing: {test_case['question']}")
-        
-        # Test parsing without LLM call
-        tool, query, trace, debug_info = parse_llm_response_enhanced("", test_case['question'])
-        
-        print(f"   Expected Tool: {test_case['expected_tool']}")
-        print(f"   Actual Tool: {tool}")
-        print(f"   Expected Operation: {test_case['expected_operation']}")
-        print(f"   Generated Query: {query}")
-        print(f"   Match: {'✅' if tool == test_case['expected_tool'] else '❌'}")
-
-async def test_complete_agent():
-    """Test the complete agent with FastAPI integration"""
-    agent = build_agent()
-    
-    test_question = "How many nodes are in the graph?"
-    print(f"\n🧪 Testing complete enhanced agent with: {test_question}")
-    
-    try:
-        state = AgentState(
-            question=test_question,
-            session_id="test_session_enhanced"
-        )
-        
-        result = await agent.ainvoke(state)
-        
-        print(f"Tool: {result.get('tool', 'N/A')}")
-        print(f"Query: {result.get('query', 'N/A')}")
-        print(f"Operation Type: {result.get('operation_type', 'N/A')}")
-        print(f"Affected Nodes: {result.get('affected_nodes', 0)}")
-        print(f"Answer: {result.get('formatted_answer', 'N/A')[:200]}...")
-        print(f"Visualization Metadata: {result.get('graph_changes', {})}")
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
+# Initialize agent
+agent = None
 
 # ============================================
-# UTILITY FUNCTIONS
+# FASTAPI ENDPOINTS (ENHANCED)
 # ============================================
 
-def validate_cypher_query(query: str) -> tuple[bool, str]:
-    """Basic Cypher query validation"""
-    if not query or not query.strip():
-        return False, "Empty query"
-    
-    query_upper = query.upper().strip()
-    
-    # Check for basic Cypher keywords
-    valid_starters = ['MATCH', 'CREATE', 'MERGE', 'DELETE', 'SET', 'REMOVE', 'RETURN', 'CALL', 'WITH']
-    if not any(query_upper.startswith(starter) for starter in valid_starters):
-        return False, "Query doesn't start with valid Cypher keyword"
-    
-    # Check for potential injection patterns
-    dangerous_patterns = ['DROP', 'ALTER', 'TRUNCATE']
-    if any(pattern in query_upper for pattern in dangerous_patterns):
-        return False, f"Query contains potentially dangerous operations"
-    
-    return True, "Valid"
+# Add FastAPI endpoints to FastMCP
+app = mcp.get_app()
 
-def get_query_complexity_estimate(query: str) -> str:
-    """Estimate query complexity for performance considerations"""
-    if not query:
-        return "unknown"
+@app.on_event("startup")
+async def startup_event():
+    """Initialize everything on startup and show initial database state"""
+    global agent, database_stats
     
-    query_upper = query.upper()
-    
-    # Simple heuristics
-    if 'LIMIT' in query_upper:
-        return "low"
-    elif any(pattern in query_upper for pattern in ['JOIN', 'COLLECT', 'UNWIND']):
-        return "medium"
-    elif any(pattern in query_upper for pattern in ['ALL', 'EXISTS', 'SHORTEST']):
-        return "high"
-    else:
-        return "medium"
-
-if __name__ == "__main__":
-    print("🚀 Enhanced LangGraph Agent with Visualization Support")
+    print("🚀 Starting Enhanced FastMCP Neo4j LangGraph Server with Visualization...")
     print("=" * 60)
     
-    # Run tests
-    test_enhanced_agent()
+    if NEO4J_PASSWORD == "your_neo4j_password":
+        print("⚠️  WARNING: Using default password!")
+        print("⚠️  Please change NEO4J_PASSWORD in the configuration section")
     
-    # Test complete agent (requires FastAPI server)
-    print("\n" + "=" * 60)
-    asyncio.run(test_complete_agent())
+    if driver is None:
+        print("❌ Neo4j driver initialization failed")
+        return
+    
+    # Test Neo4j connection
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run("RETURN 1 as test")
+            record = await result.single()
+            
+        if record and record["test"] == 1:
+            print("✅ Neo4j connection successful!")
+            
+            # Get initial database statistics
+            print("📊 Getting initial database state...")
+            database_stats = await get_database_stats()
+            
+            if "error" not in database_stats:
+                print(f"   📈 Nodes: {database_stats['nodes']}")
+                print(f"   🔗 Relationships: {database_stats['relationships']}")
+                print(f"   🏷️  Labels: {len(database_stats['labels'])}")
+                print(f"   ➡️  Relationship Types: {len(database_stats['relationship_types'])}")
+                
+                if database_stats['nodes'] > 0:
+                    print("   🎯 Database contains data - visualization will show live graph")
+                else:
+                    print("   📝 Empty database - create some nodes to see visualization")
+                    
+            else:
+                print(f"   ⚠️  Could not get database stats: {database_stats['error']}")
+            
+        else:
+            print("❌ Neo4j connection test failed")
+            
+    except Exception as e:
+        print("❌ Neo4j connection failed!")
+        print(f"   Error: {e}")
+    
+    # Build LangGraph agent
+    try:
+        print("🔨 Building enhanced LangGraph agent...")
+        agent = build_agent()
+        print("✅ Enhanced LangGraph agent built successfully")
+    except Exception as e:
+        print(f"❌ Failed to build agent: {e}")
+        agent = None
+    
+    print("=" * 60)
+    print(f"🌐 Enhanced FastMCP server ready on http://localhost:{SERVER_PORT}")
+    print("📋 Available endpoints:")
+    print("   • GET  /health - Health check")
+    print("   • POST /chat - Chat with enhanced agent")
+    print("   • GET  /graph - Get graph data for visualization")
+    print("   • GET  /stats - Get live database statistics")
+    print("   • WS   /ws - WebSocket for live updates")
+    print("   • GET  /viz - Neo4j visualization interface")
+    print("=" * 60)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close connections on shutdown"""
+    print("🛑 Shutting down Enhanced FastMCP Neo4j Server...")
+    if driver:
+        await driver.close()
+        print("✅ Neo4j driver closed")
+
+# Enhanced endpoints
+@app.get("/health")
+async def health_check():
+    """Enhanced health check endpoint"""
+    if driver is None:
+        return {
+            "status": "unhealthy",
+            "neo4j": {"status": "driver_not_initialized"},
+            "agent": {"status": "not_initialized" if agent is None else "ready"},
+            "visualization": {"status": "disabled"},
+            "server": {"port": SERVER_PORT, "type": "Enhanced FastMCP"}
+        }
+    
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run("RETURN 1 as test")
+            record = await result.single()
+            
+        neo4j_status = "connected" if record and record["test"] == 1 else "test_failed"
+        
+        # Get current stats
+        current_stats = await get_database_stats()
+        
+        return {
+            "status": "healthy",
+            "neo4j": {
+                "status": neo4j_status,
+                "uri": NEO4J_URI,
+                "database": NEO4J_DATABASE,
+                "user": NEO4J_USER,
+                "current_stats": current_stats
+            },
+            "agent": {
+                "status": "ready" if agent else "not_initialized",
+                "model": CORTEX_MODEL
+            },
+            "visualization": {
+                "status": "enabled",
+                "active_connections": len(active_websockets),
+                "nvl_ready": True
+            },
+            "server": {
+                "port": SERVER_PORT,
+                "host": SERVER_HOST,
+                "type": "Enhanced FastMCP with NVL",
+                "tools": ["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"],
+                "features": ["live_visualization", "real_time_updates", "websocket_support"]
+            }
+        }
+            
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy", 
+            "neo4j": {"status": "disconnected", "error": str(e)},
+            "agent": {"status": "not_initialized" if agent is None else "ready"},
+            "visualization": {"status": "disabled"},
+            "server": {"port": SERVER_PORT, "type": "Enhanced FastMCP"}
+        }
+
+@app.get("/stats")
+async def get_live_stats():
+    """Get live database statistics"""
+    stats = await get_database_stats()
+    return stats
+
+@app.get("/graph")
+async def get_graph_data_endpoint(limit: int = 100):
+    """Get graph data for visualization"""
+    try:
+        graph_data = await get_graph_data(limit)
+        return graph_data.dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_enhanced(request: ChatRequest):
+    """Enhanced chat endpoint with visualization data"""
+    if agent is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="Agent not initialized. Check server logs for errors."
+        )
+    
+    try:
+        # Generate session ID if not provided
+        session_id = request.session_id or str(uuid.uuid4())
+        
+        logger.info(f"Processing question: {request.question}")
+        
+        # Create agent state
+        state = AgentState(
+            question=request.question,
+            session_id=session_id
+        )
+        
+        # Run the agent
+        start_time = time.time()
+        result = await agent.ainvoke(state)
+        processing_time = time.time() - start_time
+        
+        # Get graph data if query was executed
+        graph_data = None
+        operation_summary = None
+        
+        if result.get("tool") and result.get("query"):
+            try:
+                # Get current graph data for visualization
+                graph_data_obj = await get_graph_data(50)
+                graph_data = graph_data_obj.dict()
+                
+                # Get operation summary
+                operation_summary = await get_database_stats()
+                
+            except Exception as e:
+                logger.warning(f"Could not get graph data: {e}")
+        
+        logger.info(f"Agent completed in {processing_time:.2f}s - Tool: {result.get('tool')}")
+        
+        return ChatResponse(
+            trace=result.get("trace", ""),
+            tool=result.get("tool", ""),
+            query=result.get("query", ""),
+            answer=result.get("answer", "No answer generated"),
+            session_id=session_id,
+            success=True,
+            graph_data=graph_data,
+            operation_summary=operation_summary
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat endpoint error: {e}")
+        return ChatResponse(
+            trace=f"Error: {str(e)}",
+            tool="",
+            query="",
+            answer=f"⚠️ Error processing request: {str(e)}",
+            session_id=request.session_id or str(uuid.uuid4()),
+            success=False,
+            error=str(e)
+        )
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for live database updates"""
+    await websocket.accept()
+    active_websockets.add(websocket)
+    
+    try:
+        # Send initial database state
+        initial_stats = await get_database_stats()
+        await websocket.send_json({
+            "type": "initial_state",
+            "data": initial_stats
+        })
+        
+        # Keep connection alive and handle messages
+        while True:
+            try:
+                # Wait for messages from client
+                data = await websocket.receive_json()
+                
+                if data.get("type") == "request_update":
+                    # Send current database state
+                    current_stats = await get_database_stats()
+                    await websocket.send_json({
+                        "type": "database_update", 
+                        "data": current_stats
+                    })
+                    
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                break
+                
+    finally:
+        active_websockets.discard(websocket)
+
+@app.get("/viz", response_class=HTMLResponse)
+async def visualization_interface():
+    """Neo4j visualization interface using NVL"""
+    return HTMLResponse(content="""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo4j Live Visualization</title>
+    <script src="https://unpkg.com/neo4j-nvl@latest/dist/index.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f5f5f5;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .controls {
+            background: white;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .btn:hover {
+            background: #5a6fd8;
+        }
+        
+        .stats {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            font-size: 14px;
+        }
+        
+        .stat {
+            background: #f8f9fa;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            border-left: 3px solid #667eea;
+        }
+        
+        #nvl-container {
+            height: calc(100vh - 200px);
+            background: white;
+            border-top: 1px solid #eee;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🧠 Neo4j Live Visualization</h1>
+        <p>Real-time graph visualization with Neo4j NVL</p>
+    </div>
+    
+    <div class="controls">
+        <button class="btn" onclick="refreshGraph()">🔄 Refresh Graph</button>
+        <button class="btn" onclick="loadAllNodes()">📊 Load All Nodes</button>
+        <button class="btn" onclick="loadSchema()">🏗️ Load Schema</button>
+        <button class="btn" onclick="clearGraph()">🧹 Clear</button>
+        
+        <div class="stats">
+            <div class="stat">
+                <strong>Nodes:</strong> <span id="node-count">0</span>
+            </div>
+            <div class="stat">
+                <strong>Relationships:</strong> <span id="rel-count">0</span>
+            </div>
+            <div class="stat">
+                <strong>Status:</strong> <span id="connection-status" class="status disconnected">Connecting...</span>
+            </div>
+        </div>
+    </div>
+    
+    <div id="nvl-container"></div>
+
+    <script>
+        // Initialize NVL
+        let nvl;
+        let websocket;
+        
+        // Initialize the visualization
+        async function initNVL() {
+            try {
+                // Get initial graph data
+                const response = await fetch('/graph?limit=50');
+                const graphData = await response.json();
+                
+                // Initialize NVL with the graph data
+                nvl = new NVL('nvl-container', graphData.nodes, graphData.relationships, {
+                    instanceId: 'neo4j-live-viz',
+                    initialZoom: 1.5,
+                    allowDynamicMinZoom: true,
+                    showPropertiesOnHover: true,
+                    nodeColorScheme: 'category10',
+                    relationshipColorScheme: 'dark',
+                    layout: {
+                        algorithm: 'forceDirected',
+                        incrementalLayout: true
+                    }
+                });
+                
+                // Update stats
+                updateStats(graphData.summary);
+                
+                console.log('NVL initialized with', graphData.nodes.length, 'nodes and', graphData.relationships.length, 'relationships');
+                
+            } catch (error) {
+                console.error('Failed to initialize NVL:', error);
+                document.getElementById('connection-status').textContent = 'Error';
+                document.getElementById('connection-status').className = 'status disconnected';
+            }
+        }
+        
+        // Initialize WebSocket connection
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            websocket = new WebSocket(wsUrl);
+            
+            websocket.onopen = function(event) {
+                console.log('WebSocket connected');
+                document.getElementById('connection-status').textContent = 'Connected';
+                document.getElementById('connection-status').className = 'status connected';
+            };
+            
+            websocket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'database_update' || message.type === 'initial_state') {
+                    updateStats(message.data);
+                    // Optionally refresh graph on updates
+                    refreshGraph();
+                }
+            };
+            
+            websocket.onclose = function(event) {
+                console.log('WebSocket disconnected');
+                document.getElementById('connection-status').textContent = 'Disconnected';
+                document.getElementById('connection-status').className = 'status disconnected';
+                
+                // Attempt to reconnect after 5 seconds
+                setTimeout(initWebSocket, 5000);
+            };
+            
+            websocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                document.getElementById('connection-status').textContent = 'Error';
+                document.getElementById('connection-status').className = 'status disconnected';
+            };
+        }
+        
+        // Update statistics display
+        function updateStats(stats) {
+            if (stats) {
+                document.getElementById('node-count').textContent = stats.nodes || 0;
+                document.getElementById('rel-count').textContent = stats.relationships || 0;
+            }
+        }
+        
+        // Refresh graph data
+        async function refreshGraph() {
+            try {
+                const response = await fetch('/graph?limit=100');
+                const graphData = await response.json();
+                
+                if (nvl) {
+                    // Update the visualization with new data
+                    nvl.updateGraph(graphData.nodes, graphData.relationships);
+                    updateStats(graphData.summary);
+                }
+                
+            } catch (error) {
+                console.error('Failed to refresh graph:', error);
+            }
+        }
+        
+        // Load all nodes
+        async function loadAllNodes() {
+            try {
+                const response = await fetch('/graph?limit=500');
+                const graphData = await response.json();
+                
+                if (nvl) {
+                    nvl.updateGraph(graphData.nodes, graphData.relationships);
+                    updateStats(graphData.summary);
+                }
+                
+            } catch (error) {
+                console.error('Failed to load all nodes:', error);
+            }
+        }
+        
+        // Load schema visualization
+        async function loadSchema() {
+            try {
+                // This would create a schema-based visualization
+                // For now, we'll just refresh with current data
+                await refreshGraph();
+                
+            } catch (error) {
+                console.error('Failed to load schema:', error);
+            }
+        }
+        
+        // Clear graph
+        function clearGraph() {
+            if (nvl) {
+                nvl.clearGraph();
+                updateStats({nodes: 0, relationships: 0});
+            }
+        }
+        
+        // Initialize everything when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initNVL();
+            initWebSocket();
+            
+            // Request initial update
+            setTimeout(() => {
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({type: 'request_update'}));
+                }
+            }, 1000);
+        });
+        
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && websocket && websocket.readyState === WebSocket.OPEN) {
+                // Request update when page becomes visible
+                websocket.send(JSON.stringify({type: 'request_update'}));
+            }
+        });
+    </script>
+</body>
+</html>
+    """, media_type="text/html")
+
+# Legacy endpoints (unchanged)
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "Enhanced Neo4j FastMCP LangGraph Server",
+        "version": "3.0.0",
+        "description": "Unified FastMCP server with @mcp.tool decorators, FastAPI endpoints, and Neo4j NVL visualization",
+        "architecture": "Enhanced FastMCP + LangGraph + Neo4j + NVL",
+        "endpoints": {
+            "health": "/health - Enhanced health check",
+            "chat": "/chat - Chat with enhanced agent (includes graph data)",
+            "graph": "/graph - Get graph data for visualization",
+            "stats": "/stats - Get live database statistics",
+            "viz": "/viz - Neo4j visualization interface",
+            "ws": "/ws - WebSocket for live updates",
+            "docs": "/docs - FastAPI documentation"
+        },
+        "mcp_tools": {
+            "read_neo4j_cypher": "Execute read-only Cypher queries",
+            "write_neo4j_cypher": "Execute write Cypher queries with live updates", 
+            "get_neo4j_schema": "Get database schema"
+        },
+        "visualization": {
+            "library": "Neo4j NVL",
+            "features": ["real_time_updates", "websocket_integration", "live_stats"],
+            "interface": "/viz"
+        },
+        "neo4j": {
+            "uri": NEO4J_URI,
+            "database": NEO4J_DATABASE,
+            "user": NEO4J_USER,
+            "current_stats": database_stats
+        },
+        "agent": {
+            "status": "ready" if agent else "not_initialized",
+            "model": CORTEX_MODEL,
+            "features": ["enhanced_responses", "graph_data_integration", "live_feedback"]
+        }
+    }
+
+# Legacy MCP endpoints (unchanged)
+@app.post("/read_neo4j_cypher")
+async def legacy_read_cypher(request: CypherRequest):
+    """Legacy endpoint for read operations"""
+    try:
+        result = await read_neo4j_cypher(request.query, request.params)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/write_neo4j_cypher")
+async def legacy_write_cypher(request: CypherRequest):
+    """Legacy endpoint for write operations"""
+    try:
+        result = await write_neo4j_cypher(request.query, request.params)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/get_neo4j_schema")
+async def legacy_get_schema():
+    """Legacy endpoint for schema operations"""
+    try:
+        result = await get_neo4j_schema()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================
+# MAIN FUNCTION
+# ============================================
+
+def main():
+    """Main function to run the enhanced FastMCP server"""
+    print("=" * 70)
+    print("🧠 ENHANCED NEO4J FASTMCP LANGGRAPH SERVER WITH VISUALIZATION")
+    print("=" * 70)
+    print("🏗️  Architecture: Enhanced FastMCP + LangGraph + Neo4j + NVL")
+    print("🔧 Configuration:")
+    print(f"   📍 Neo4j URI: {NEO4J_URI}")
+    print(f"   👤 Neo4j User: {NEO4J_USER}")
+    print(f"   🗄️  Neo4j Database: {NEO4J_DATABASE}")
+    print(f"   🤖 Cortex Model: {CORTEX_MODEL}")
+    print(f"   🌐 Server: {SERVER_HOST}:{SERVER_PORT}")
+    print("=" * 70)
+    print("✨ New Features:")
+    print("   🎯 Real-time Neo4j visualization with NVL")
+    print("   📊 Live database statistics and monitoring")
+    print("   🔄 WebSocket-based live updates")
+    print("   📈 Enhanced chat responses with graph data")
+    print("   🖥️  Dedicated visualization interface at /viz")
+    print("=" * 70)
+    
+    # Final checks
+    if NEO4J_PASSWORD == "your_neo4j_password":
+        print("⚠️  WARNING: You're using the default Neo4j password!")
+        print("⚠️  Please change NEO4J_PASSWORD at the top of this file")
+    
+    if driver is None:
+        print("❌ Cannot start server - Neo4j driver failed to initialize")
+        return
+    
+    print("🚀 Starting enhanced FastMCP server with visualization...")
+    print("📋 This server provides:")
+    print("   • Enhanced MCP tools with @mcp.tool decorators")
+    print("   • FastAPI endpoints for HTTP access")
+    print("   • LangGraph agent with graph data integration")
+    print("   • Neo4j NVL visualization library integration")
+    print("   • WebSocket support for real-time updates")
+    print("   • Live database monitoring and statistics")
+    print("   • Unified architecture with visualization")
+    
+    try:
+        import uvicorn
+        uvicorn.run(
+            app,
+            host=SERVER_HOST,
+            port=SERVER_PORT,
+            log_level="info",
+            reload=False
+        )
+    except Exception as e:
+        print(f"❌ Failed to start server: {e}")
+
+if __name__ == "__main__":
+    main()
