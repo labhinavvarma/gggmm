@@ -1,6 +1,6 @@
 """
-Corrected Enhanced FastMCP Server with Neo4j Visualization Library Integration
-Fixed FastMCP API usage - uses mcp.app instead of mcp.get_app()
+Working FastAPI Server with MCP-style Tools and Neo4j NVL Integration
+This version uses pure FastAPI without FastMCP dependency issues
 Run this on port 8000
 """
 
@@ -12,11 +12,10 @@ import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-# FastMCP and FastAPI imports
-from fastmcp import FastMCP
-from fastapi import HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+# FastAPI imports (no FastMCP dependency)
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 # Neo4j imports
@@ -54,9 +53,9 @@ SERVER_HOST = "0.0.0.0"
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("corrected_fastmcp_server")
+logger = logging.getLogger("working_fastapi_server")
 
-print("🔧 Corrected Enhanced FastMCP Server Configuration:")
+print("🔧 Working FastAPI Server Configuration:")
 print(f"   Neo4j URI: {NEO4J_URI}")
 print(f"   Neo4j User: {NEO4J_USER}")
 print(f"   Neo4j Database: {NEO4J_DATABASE}")
@@ -77,8 +76,21 @@ except Exception as e:
     print(f"❌ Failed to initialize Neo4j driver: {e}")
     driver = None
 
-# Initialize FastMCP - CORRECTED
-mcp = FastMCP("Neo4j LangGraph Agent with Visualization")
+# Initialize FastAPI directly (no FastMCP)
+app = FastAPI(
+    title="Neo4j Enhanced Agent with NVL",
+    description="FastAPI server with LangGraph agent and Neo4j NVL visualization",
+    version="3.1.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global variables for live updates
 active_websockets = set()
@@ -104,7 +116,6 @@ class ChatResponse(BaseModel):
     session_id: str
     success: bool = True
     error: Optional[str] = None
-    # New fields for visualization
     graph_data: Optional[Dict[str, Any]] = None
     operation_summary: Optional[Dict[str, Any]] = None
 
@@ -122,6 +133,136 @@ class GraphData(BaseModel):
     nodes: List[Dict[str, Any]]
     relationships: List[Dict[str, Any]]
     summary: Dict[str, Any]
+
+# ============================================
+# MCP-STYLE TOOL FUNCTIONS (Pure Python Functions)
+# ============================================
+
+async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any]]:
+    """
+    Execute read-only Cypher queries against Neo4j database.
+    
+    Args:
+        query: The Cypher query to execute (MATCH, RETURN, WHERE, etc.)
+        params: Optional parameters for the query
+        
+    Returns:
+        List of records returned by the query
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info(f"Executing READ query: {query}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(query, params)
+            records = await result.data()
+            
+        logger.info(f"Query returned {len(records)} records")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Read query failed: {e}")
+        raise Exception(f"Query failed: {str(e)}")
+
+async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
+    """
+    Execute write Cypher queries against Neo4j database.
+    
+    Args:
+        query: The Cypher query to execute (CREATE, MERGE, SET, DELETE, etc.)
+        params: Optional parameters for the query
+        
+    Returns:
+        Summary of changes made to the database
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info(f"Executing WRITE query: {query}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.run(query, params)
+            summary = await result.consume()
+            
+        # Get counters
+        counters = summary.counters
+        
+        response = {
+            "success": True,
+            "nodes_created": counters.nodes_created,
+            "nodes_deleted": counters.nodes_deleted,
+            "relationships_created": counters.relationships_created,
+            "relationships_deleted": counters.relationships_deleted,
+            "properties_set": counters.properties_set,
+            "labels_added": counters.labels_added,
+            "labels_removed": counters.labels_removed,
+            "total_changes": (counters.nodes_created + counters.nodes_deleted + 
+                            counters.relationships_created + counters.relationships_deleted + 
+                            counters.properties_set)
+        }
+        
+        # Broadcast update to connected clients
+        asyncio.create_task(broadcast_database_update())
+        
+        logger.info(f"Write query completed: {response}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Write query failed: {e}")
+        raise Exception(f"Query failed: {str(e)}")
+
+async def get_neo4j_schema() -> Dict[str, Any]:
+    """
+    Get the schema of the Neo4j database including labels, relationship types, and properties.
+    
+    Returns:
+        Dictionary containing database schema information
+    """
+    if driver is None:
+        raise Exception("Neo4j driver not initialized")
+    
+    try:
+        logger.info("Fetching database schema")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            # Get labels
+            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
+            labels_record = await labels_result.single()
+            labels = labels_record["labels"] if labels_record else []
+            
+            # Get relationship types
+            rels_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
+            rels_record = await rels_result.single()
+            rel_types = rels_record["types"] if rels_record else []
+            
+            # Get property keys
+            props_result = await session.run("CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys")
+            props_record = await props_result.single()
+            prop_keys = props_record["keys"] if props_record else []
+        
+        schema = {
+            "labels": labels,
+            "relationship_types": rel_types,
+            "property_keys": prop_keys,
+            "source": "database_queries",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        logger.info(f"Schema fetched: {len(labels)} labels, {len(rel_types)} rel types, {len(prop_keys)} properties")
+        return schema
+        
+    except Exception as e:
+        logger.error(f"Schema fetch failed: {e}")
+        return {
+            "labels": [],
+            "relationship_types": [],
+            "property_keys": [],
+            "error": f"Schema fetch failed: {str(e)}",
+            "source": "error"
+        }
 
 # ============================================
 # DATABASE MONITORING FUNCTIONS
@@ -257,115 +398,11 @@ async def broadcast_database_update():
         logger.error(f"Failed to broadcast update: {e}")
 
 # ============================================
-# MCP TOOLS WITH ENHANCED VISUALIZATION
-# ============================================
-
-@mcp.tool()
-async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any]]:
-    """
-    Execute read-only Cypher queries against Neo4j database.
-    
-    Args:
-        query: The Cypher query to execute (MATCH, RETURN, WHERE, etc.)
-        params: Optional parameters for the query
-        
-    Returns:
-        List of records returned by the query
-    """
-    if driver is None:
-        raise Exception("Neo4j driver not initialized")
-    
-    try:
-        logger.info(f"Executing READ query: {query}")
-        
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.run(query, params)
-            records = await result.data()
-            
-        logger.info(f"Query returned {len(records)} records")
-        return records
-        
-    except Exception as e:
-        logger.error(f"Read query failed: {e}")
-        raise Exception(f"Query failed: {str(e)}")
-
-@mcp.tool()
-async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
-    """
-    Execute write Cypher queries against Neo4j database.
-    
-    Args:
-        query: The Cypher query to execute (CREATE, MERGE, SET, DELETE, etc.)
-        params: Optional parameters for the query
-        
-    Returns:
-        Summary of changes made to the database
-    """
-    if driver is None:
-        raise Exception("Neo4j driver not initialized")
-    
-    try:
-        logger.info(f"Executing WRITE query: {query}")
-        
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.run(query, params)
-            summary = await result.consume()
-            
-        # Get counters
-        counters = summary.counters
-        
-        response = {
-            "success": True,
-            "nodes_created": counters.nodes_created,
-            "nodes_deleted": counters.nodes_deleted,
-            "relationships_created": counters.relationships_created,
-            "relationships_deleted": counters.relationships_deleted,
-            "properties_set": counters.properties_set,
-            "labels_added": counters.labels_added,
-            "labels_removed": counters.labels_removed
-        }
-        
-        # Broadcast update to connected clients
-        asyncio.create_task(broadcast_database_update())
-        
-        logger.info(f"Write query completed: {response}")
-        return response
-        
-    except Exception as e:
-        logger.error(f"Write query failed: {e}")
-        raise Exception(f"Query failed: {str(e)}")
-
-@mcp.tool()
-async def get_neo4j_schema() -> Dict[str, Any]:
-    """
-    Get the schema of the Neo4j database including labels, relationship types, and properties.
-    
-    Returns:
-        Dictionary containing database schema information
-    """
-    if driver is None:
-        raise Exception("Neo4j driver not initialized")
-    
-    try:
-        logger.info("Fetching database schema")
-        return await get_database_stats()
-        
-    except Exception as e:
-        logger.error(f"Schema fetch failed: {e}")
-        return {
-            "labels": [],
-            "relationship_types": [],
-            "property_keys": [],
-            "error": f"Schema fetch failed: {str(e)}",
-            "source": "error"
-        }
-
-# ============================================
-# LANGGRAPH AGENT LOGIC (BASIC VERSION)
+# LANGGRAPH AGENT LOGIC
 # ============================================
 
 SYSTEM_PROMPT = """
-You are an expert AI assistant that helps users query and manage a Neo4j database using MCP tools.
+You are an expert AI assistant that helps users query and manage a Neo4j database using specialized tools.
 
 AVAILABLE TOOLS:
 - read_neo4j_cypher: Execute read-only queries (MATCH, RETURN, WHERE, etc.)
@@ -464,8 +501,8 @@ def parse_llm_response(llm_output: str) -> tuple[str, str, str]:
     
     return tool, query, trace
 
-async def execute_mcp_tool_enhanced(tool: str, query: str = None) -> Dict[str, Any]:
-    """Execute MCP tool with enhanced response including graph data"""
+async def execute_tool_function(tool: str, query: str = None) -> Dict[str, Any]:
+    """Execute tool function directly"""
     try:
         if tool == "get_neo4j_schema":
             result = await get_neo4j_schema()
@@ -508,16 +545,16 @@ def select_tool_node(state: AgentState) -> Dict[str, Any]:
         "last_error": state.last_error
     }
 
-async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
-    """Node 2: Execute the selected tool with enhanced formatting"""
+async def execute_tool_node(state: AgentState) -> Dict[str, Any]:
+    """Node 2: Execute the selected tool"""
     logger.info(f"Executing tool: {state.tool}")
     
     if not state.tool:
         answer = "⚠️ No valid tool selected. Please rephrase your question."
         return {**state.dict(), "answer": answer}
     
-    # Execute MCP tool
-    result = await execute_mcp_tool_enhanced(state.tool, state.query)
+    # Execute tool function
+    result = await execute_tool_function(state.tool, state.query)
     
     if "error" in result:
         answer = f"❌ **Error:** {result['error']}"
@@ -528,7 +565,7 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
             "last_error": result['error']
         }
     
-    # Format successful result with enhanced display
+    # Format successful result
     data = result.get("data", {})
     result_type = result.get("type", "unknown")
     
@@ -536,10 +573,12 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
         if isinstance(data, dict):
             labels = data.get("labels", [])
             rel_types = data.get("relationship_types", [])
+            prop_keys = data.get("property_keys", [])
             answer = f"""📊 **Database Schema:**
 
 **Node Labels ({len(labels)}):** {', '.join(labels[:15])}
 **Relationship Types ({len(rel_types)}):** {', '.join(rel_types[:15])}
+**Property Keys ({len(prop_keys)}):** {', '.join(prop_keys[:15])}
 
 *Schema data updated in real-time visualization*"""
         else:
@@ -553,14 +592,14 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
             elif count == 1 and isinstance(data[0], dict) and len(data[0]) == 1:
                 # Single value result (like count)
                 key, value = list(data[0].items())[0]
-                answer = f"📊 **Query Result:** {key} = **{value}**"
+                answer = f"📊 **Query Result:** {key} = **{value:,}**"
             else:
-                answer = f"📊 **Query Result:** Found **{count}** records\n\n"
+                answer = f"📊 **Query Result:** Found **{count:,}** records\n\n"
                 # Show sample data
                 for i, record in enumerate(data[:3]):
                     answer += f"**Record {i+1}:** {json.dumps(record, indent=2)}\n\n"
                 if count > 3:
-                    answer += f"... and **{count - 3}** more records"
+                    answer += f"... and **{count - 3:,}** more records"
                 answer += "\n\n*Full results shown in graph visualization*"
         else:
             answer = f"📊 **Query Result:** {json.dumps(data, indent=2)[:500]}"
@@ -572,24 +611,27 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
             rels_created = data.get("relationships_created", 0)
             rels_deleted = data.get("relationships_deleted", 0)
             props_set = data.get("properties_set", 0)
+            total_changes = data.get("total_changes", 0)
             
             operations = []
             if nodes_created > 0:
-                operations.append(f"🟢 **Created {nodes_created} node{'s' if nodes_created != 1 else ''}**")
+                operations.append(f"🟢 **Created {nodes_created:,} node{'s' if nodes_created != 1 else ''}**")
             if nodes_deleted > 0:
-                operations.append(f"🗑️ **Deleted {nodes_deleted} node{'s' if nodes_deleted != 1 else ''}**")
+                operations.append(f"🗑️ **Deleted {nodes_deleted:,} node{'s' if nodes_deleted != 1 else ''}**")
             if rels_created > 0:
-                operations.append(f"🔗 **Created {rels_created} relationship{'s' if rels_created != 1 else ''}**")
+                operations.append(f"🔗 **Created {rels_created:,} relationship{'s' if rels_created != 1 else ''}**")
             if rels_deleted > 0:
-                operations.append(f"❌ **Deleted {rels_deleted} relationship{'s' if rels_deleted != 1 else ''}**")
+                operations.append(f"❌ **Deleted {rels_deleted:,} relationship{'s' if rels_deleted != 1 else ''}**")
             if props_set > 0:
-                operations.append(f"📝 **Set {props_set} propert{'ies' if props_set != 1 else 'y'}**")
+                operations.append(f"📝 **Set {props_set:,} propert{'ies' if props_set != 1 else 'y'}**")
             
             if operations:
                 answer = "✅ **Database Update Completed Successfully!**\n\n" + "\n".join(operations)
+                if total_changes > 0:
+                    answer += f"\n\n**Total Changes:** {total_changes:,}"
                 answer += "\n\n*Changes immediately reflected in live graph visualization*"
             else:
-                answer = "✅ **Query executed successfully** (no changes made)"
+                answer = "✅ **Query executed successfully** (no structural changes made)"
         else:
             answer = f"✅ **Write Operation Result:** {data}"
     
@@ -599,14 +641,14 @@ async def execute_tool_node_enhanced(state: AgentState) -> Dict[str, Any]:
     return {**state.dict(), "answer": answer}
 
 def build_agent():
-    """Build the enhanced LangGraph agent"""
-    logger.info("Building enhanced LangGraph agent...")
+    """Build the LangGraph agent"""
+    logger.info("Building LangGraph agent...")
     
     workflow = StateGraph(state_schema=AgentState)
     
     # Add nodes
     workflow.add_node("select_tool", RunnableLambda(select_tool_node))
-    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node_enhanced))
+    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
     
     # Set entry point and edges
     workflow.set_entry_point("select_tool")
@@ -614,7 +656,7 @@ def build_agent():
     workflow.add_edge("execute_tool", END)
     
     agent = workflow.compile()
-    logger.info("✅ Enhanced LangGraph agent built successfully")
+    logger.info("✅ LangGraph agent built successfully")
     
     return agent
 
@@ -622,27 +664,15 @@ def build_agent():
 agent = None
 
 # ============================================
-# FASTAPI ENDPOINTS (CORRECTED)
+# STARTUP AND SHUTDOWN EVENTS
 # ============================================
-
-# Get the FastAPI app from FastMCP - CORRECTED
-app = mcp.app
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize everything on startup and show initial database state"""
+    """Initialize everything on startup"""
     global agent, database_stats
     
-    print("🚀 Starting Enhanced FastMCP Neo4j LangGraph Server with Visualization...")
+    print("🚀 Starting Working FastAPI Neo4j Server with NVL...")
     print("=" * 60)
     
     if NEO4J_PASSWORD == "your_neo4j_password":
@@ -671,12 +701,6 @@ async def startup_event():
                 print(f"   🔗 Relationships: {database_stats['relationships']}")
                 print(f"   🏷️  Labels: {len(database_stats['labels'])}")
                 print(f"   ➡️  Relationship Types: {len(database_stats['relationship_types'])}")
-                
-                if database_stats['nodes'] > 0:
-                    print("   🎯 Database contains data - visualization will show live graph")
-                else:
-                    print("   📝 Empty database - create some nodes to see visualization")
-                    
             else:
                 print(f"   ⚠️  Could not get database stats: {database_stats['error']}")
             
@@ -689,43 +713,78 @@ async def startup_event():
     
     # Build LangGraph agent
     try:
-        print("🔨 Building enhanced LangGraph agent...")
+        print("🔨 Building LangGraph agent...")
         agent = build_agent()
-        print("✅ Enhanced LangGraph agent built successfully")
+        print("✅ LangGraph agent built successfully")
     except Exception as e:
         print(f"❌ Failed to build agent: {e}")
         agent = None
     
     print("=" * 60)
-    print(f"🌐 Enhanced FastMCP server ready on http://localhost:{SERVER_PORT}")
+    print(f"🌐 Working FastAPI server ready on http://localhost:{SERVER_PORT}")
     print("📋 Available endpoints:")
     print("   • GET  /health - Health check")
-    print("   • POST /chat - Chat with enhanced agent")
-    print("   • GET  /graph - Get graph data for visualization")
-    print("   • GET  /stats - Get live database statistics")
+    print("   • POST /chat - Chat with agent")
+    print("   • GET  /graph - Get graph data")
+    print("   • GET  /stats - Live database stats")
     print("   • WS   /ws - WebSocket for live updates")
-    print("   • GET  /viz - Neo4j visualization interface")
+    print("   • GET  /viz - Neo4j visualization")
+    print("   • GET  /docs - API documentation")
     print("=" * 60)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Close connections on shutdown"""
-    print("🛑 Shutting down Enhanced FastMCP Neo4j Server...")
+    print("🛑 Shutting down Working FastAPI Server...")
     if driver:
         await driver.close()
         print("✅ Neo4j driver closed")
 
-# Enhanced endpoints
+# ============================================
+# API ENDPOINTS
+# ============================================
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "Working Neo4j FastAPI Server with NVL",
+        "version": "3.1.0",
+        "description": "Pure FastAPI server (no FastMCP) with LangGraph agent and Neo4j NVL visualization",
+        "architecture": "FastAPI + LangGraph + Neo4j + NVL",
+        "fix_applied": "Removed FastMCP dependency, using pure FastAPI",
+        "endpoints": {
+            "health": "/health - System health check",
+            "chat": "/chat - Chat with LangGraph agent",
+            "graph": "/graph - Get graph data for visualization",
+            "stats": "/stats - Live database statistics",
+            "viz": "/viz - Neo4j NVL visualization interface",
+            "ws": "/ws - WebSocket for live updates",
+            "docs": "/docs - API documentation"
+        },
+        "tools": {
+            "read_neo4j_cypher": "Execute read-only Cypher queries",
+            "write_neo4j_cypher": "Execute write Cypher queries with live updates", 
+            "get_neo4j_schema": "Get database schema"
+        },
+        "features": ["real_time_visualization", "live_updates", "websocket_support", "langgraph_agent"],
+        "neo4j": {
+            "uri": NEO4J_URI,
+            "database": NEO4J_DATABASE,
+            "user": NEO4J_USER,
+            "current_stats": database_stats
+        }
+    }
+
 @app.get("/health")
 async def health_check():
-    """Enhanced health check endpoint"""
+    """System health check"""
     if driver is None:
         return {
             "status": "unhealthy",
             "neo4j": {"status": "driver_not_initialized"},
             "agent": {"status": "not_initialized" if agent is None else "ready"},
-            "visualization": {"status": "disabled"},
-            "server": {"port": SERVER_PORT, "type": "Enhanced FastMCP"}
+            "server": {"port": SERVER_PORT, "type": "Working FastAPI"}
         }
     
     try:
@@ -734,8 +793,6 @@ async def health_check():
             record = await result.single()
             
         neo4j_status = "connected" if record and record["test"] == 1 else "test_failed"
-        
-        # Get current stats
         current_stats = await get_database_stats()
         
         return {
@@ -744,7 +801,6 @@ async def health_check():
                 "status": neo4j_status,
                 "uri": NEO4J_URI,
                 "database": NEO4J_DATABASE,
-                "user": NEO4J_USER,
                 "current_stats": current_stats
             },
             "agent": {
@@ -753,15 +809,12 @@ async def health_check():
             },
             "visualization": {
                 "status": "enabled",
-                "active_connections": len(active_websockets),
-                "nvl_ready": True
+                "active_connections": len(active_websockets)
             },
             "server": {
                 "port": SERVER_PORT,
-                "host": SERVER_HOST,
-                "type": "Enhanced FastMCP with NVL",
-                "tools": ["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"],
-                "features": ["live_visualization", "real_time_updates", "websocket_support"]
+                "type": "Working FastAPI with NVL",
+                "tools": ["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"]
             }
         }
             
@@ -771,15 +824,13 @@ async def health_check():
             "status": "unhealthy", 
             "neo4j": {"status": "disconnected", "error": str(e)},
             "agent": {"status": "not_initialized" if agent is None else "ready"},
-            "visualization": {"status": "disabled"},
-            "server": {"port": SERVER_PORT, "type": "Enhanced FastMCP"}
+            "server": {"port": SERVER_PORT}
         }
 
 @app.get("/stats")
 async def get_live_stats():
     """Get live database statistics"""
-    stats = await get_database_stats()
-    return stats
+    return await get_database_stats()
 
 @app.get("/graph")
 async def get_graph_data_endpoint(limit: int = 100):
@@ -791,8 +842,8 @@ async def get_graph_data_endpoint(limit: int = 100):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_enhanced(request: ChatRequest):
-    """Enhanced chat endpoint with visualization data"""
+async def chat_endpoint(request: ChatRequest):
+    """Chat endpoint using LangGraph agent"""
     if agent is None:
         raise HTTPException(
             status_code=503, 
@@ -800,9 +851,7 @@ async def chat_enhanced(request: ChatRequest):
         )
     
     try:
-        # Generate session ID if not provided
         session_id = request.session_id or str(uuid.uuid4())
-        
         logger.info(f"Processing question: {request.question}")
         
         # Create agent state
@@ -816,19 +865,15 @@ async def chat_enhanced(request: ChatRequest):
         result = await agent.ainvoke(state)
         processing_time = time.time() - start_time
         
-        # Get graph data if query was executed
+        # Get graph data if available
         graph_data = None
         operation_summary = None
         
         if result.get("tool") and result.get("query"):
             try:
-                # Get current graph data for visualization
                 graph_data_obj = await get_graph_data(50)
                 graph_data = graph_data_obj.dict()
-                
-                # Get operation summary
                 operation_summary = await get_database_stats()
-                
             except Exception as e:
                 logger.warning(f"Could not get graph data: {e}")
         
@@ -874,11 +919,9 @@ async def websocket_endpoint(websocket: WebSocket):
         # Keep connection alive and handle messages
         while True:
             try:
-                # Wait for messages from client
                 data = await websocket.receive_json()
                 
                 if data.get("type") == "request_update":
-                    # Send current database state
                     current_stats = await get_database_stats()
                     await websocket.send_json({
                         "type": "database_update", 
@@ -903,192 +946,121 @@ async def visualization_interface():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neo4j Live Visualization</title>
+    <title>Neo4j Live Visualization - Working Version</title>
     <script src="https://unpkg.com/neo4j-nvl@latest/dist/index.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 0;
-            background: #f5f5f5;
+            margin: 0; padding: 0; background: #f5f5f5;
         }
-        
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 2rem;
+            color: white; padding: 1rem 2rem;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        
         .controls {
-            background: white;
-            padding: 1rem 2rem;
+            background: white; padding: 1rem 2rem;
             border-bottom: 1px solid #eee;
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            flex-wrap: wrap;
+            display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
         }
-        
         .btn {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 0.5rem 1rem;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: background 0.2s;
+            background: #667eea; color: white; border: none;
+            padding: 0.5rem 1rem; border-radius: 4px;
+            cursor: pointer; font-size: 14px; transition: background 0.2s;
         }
-        
-        .btn:hover {
-            background: #5a6fd8;
-        }
-        
+        .btn:hover { background: #5a6fd8; }
         .stats {
-            display: flex;
-            gap: 2rem;
-            align-items: center;
-            font-size: 14px;
+            display: flex; gap: 2rem; align-items: center; font-size: 14px;
         }
-        
         .stat {
-            background: #f8f9fa;
-            padding: 0.5rem 1rem;
-            border-radius: 4px;
+            background: #f8f9fa; padding: 0.5rem 1rem; border-radius: 4px;
             border-left: 3px solid #667eea;
         }
-        
         #nvl-container {
-            height: calc(100vh - 200px);
-            background: white;
+            height: calc(100vh - 200px); background: white;
             border-top: 1px solid #eee;
         }
-        
-        .status {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            border-radius: 3px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        
-        .status.connected {
-            background: #d4edda;
-            color: #155724;
-        }
-        
-        .status.disconnected {
-            background: #f8d7da;
-            color: #721c24;
-        }
+        .status { display: inline-block; padding: 0.25rem 0.5rem;
+            border-radius: 3px; font-size: 12px; font-weight: bold; }
+        .status.connected { background: #d4edda; color: #155724; }
+        .status.disconnected { background: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🧠 Neo4j Live Visualization</h1>
-        <p>Real-time graph visualization with Neo4j NVL - CORRECTED</p>
+        <h1>🧠 Neo4j Live Visualization - Working Version</h1>
+        <p>Real-time graph visualization with Neo4j NVL (No FastMCP dependency)</p>
     </div>
     
     <div class="controls">
         <button class="btn" onclick="refreshGraph()">🔄 Refresh Graph</button>
         <button class="btn" onclick="loadAllNodes()">📊 Load All Nodes</button>
-        <button class="btn" onclick="loadSchema()">🏗️ Load Schema</button>
         <button class="btn" onclick="clearGraph()">🧹 Clear</button>
         
         <div class="stats">
-            <div class="stat">
-                <strong>Nodes:</strong> <span id="node-count">0</span>
-            </div>
-            <div class="stat">
-                <strong>Relationships:</strong> <span id="rel-count">0</span>
-            </div>
-            <div class="stat">
-                <strong>Status:</strong> <span id="connection-status" class="status disconnected">Connecting...</span>
-            </div>
+            <div class="stat"><strong>Nodes:</strong> <span id="node-count">0</span></div>
+            <div class="stat"><strong>Relationships:</strong> <span id="rel-count">0</span></div>
+            <div class="stat"><strong>Status:</strong> <span id="connection-status" class="status disconnected">Connecting...</span></div>
         </div>
     </div>
     
     <div id="nvl-container"></div>
 
     <script>
-        // Initialize NVL
-        let nvl;
-        let websocket;
+        let nvl; let websocket;
         
-        // Initialize the visualization
         async function initNVL() {
             try {
-                // Get initial graph data
                 const response = await fetch('/graph?limit=50');
                 const graphData = await response.json();
                 
-                // Initialize NVL with the graph data
                 nvl = new NVL('nvl-container', graphData.nodes, graphData.relationships, {
-                    instanceId: 'neo4j-live-viz',
+                    instanceId: 'working-neo4j-viz',
                     initialZoom: 1.5,
                     allowDynamicMinZoom: true,
                     showPropertiesOnHover: true,
                     nodeColorScheme: 'category10',
                     relationshipColorScheme: 'dark',
-                    layout: {
-                        algorithm: 'forceDirected',
-                        incrementalLayout: true
-                    }
+                    layout: { algorithm: 'forceDirected', incrementalLayout: true }
                 });
                 
-                // Update stats
                 updateStats(graphData.summary);
-                
-                console.log('NVL initialized with', graphData.nodes.length, 'nodes and', graphData.relationships.length, 'relationships');
+                console.log('✅ NVL initialized successfully');
                 
             } catch (error) {
-                console.error('Failed to initialize NVL:', error);
+                console.error('❌ Failed to initialize NVL:', error);
                 document.getElementById('connection-status').textContent = 'Error';
                 document.getElementById('connection-status').className = 'status disconnected';
             }
         }
         
-        // Initialize WebSocket connection
         function initWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws`;
-            
             websocket = new WebSocket(wsUrl);
             
             websocket.onopen = function(event) {
-                console.log('WebSocket connected');
+                console.log('✅ WebSocket connected');
                 document.getElementById('connection-status').textContent = 'Connected';
                 document.getElementById('connection-status').className = 'status connected';
             };
             
             websocket.onmessage = function(event) {
                 const message = JSON.parse(event.data);
-                
                 if (message.type === 'database_update' || message.type === 'initial_state') {
                     updateStats(message.data);
-                    // Optionally refresh graph on updates
                     refreshGraph();
                 }
             };
             
             websocket.onclose = function(event) {
-                console.log('WebSocket disconnected');
+                console.log('❌ WebSocket disconnected');
                 document.getElementById('connection-status').textContent = 'Disconnected';
                 document.getElementById('connection-status').className = 'status disconnected';
-                
-                // Attempt to reconnect after 5 seconds
                 setTimeout(initWebSocket, 5000);
-            };
-            
-            websocket.onerror = function(error) {
-                console.error('WebSocket error:', error);
-                document.getElementById('connection-status').textContent = 'Error';
-                document.getElementById('connection-status').className = 'status disconnected';
             };
         }
         
-        // Update statistics display
         function updateStats(stats) {
             if (stats) {
                 document.getElementById('node-count').textContent = stats.nodes || 0;
@@ -1096,52 +1068,32 @@ async def visualization_interface():
             }
         }
         
-        // Refresh graph data
         async function refreshGraph() {
             try {
                 const response = await fetch('/graph?limit=100');
                 const graphData = await response.json();
-                
                 if (nvl) {
-                    // Update the visualization with new data
                     nvl.updateGraph(graphData.nodes, graphData.relationships);
                     updateStats(graphData.summary);
                 }
-                
             } catch (error) {
                 console.error('Failed to refresh graph:', error);
             }
         }
         
-        // Load all nodes
         async function loadAllNodes() {
             try {
                 const response = await fetch('/graph?limit=500');
                 const graphData = await response.json();
-                
                 if (nvl) {
                     nvl.updateGraph(graphData.nodes, graphData.relationships);
                     updateStats(graphData.summary);
                 }
-                
             } catch (error) {
                 console.error('Failed to load all nodes:', error);
             }
         }
         
-        // Load schema visualization
-        async function loadSchema() {
-            try {
-                // This would create a schema-based visualization
-                // For now, we'll just refresh with current data
-                await refreshGraph();
-                
-            } catch (error) {
-                console.error('Failed to load schema:', error);
-            }
-        }
-        
-        // Clear graph
         function clearGraph() {
             if (nvl) {
                 nvl.clearGraph();
@@ -1149,83 +1101,54 @@ async def visualization_interface():
             }
         }
         
-        // Initialize everything when page loads
         document.addEventListener('DOMContentLoaded', function() {
             initNVL();
             initWebSocket();
-            
-            // Request initial update
-            setTimeout(() => {
-                if (websocket && websocket.readyState === WebSocket.OPEN) {
-                    websocket.send(JSON.stringify({type: 'request_update'}));
-                }
-            }, 1000);
-        });
-        
-        // Handle page visibility changes
-        document.addEventListener('visibilitychange', function() {
-            if (!document.hidden && websocket && websocket.readyState === WebSocket.OPEN) {
-                // Request update when page becomes visible
-                websocket.send(JSON.stringify({type: 'request_update'}));
-            }
         });
     </script>
 </body>
 </html>
     """, media_type="text/html")
 
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "service": "Enhanced Neo4j FastMCP LangGraph Server - CORRECTED",
-        "version": "3.0.1",
-        "description": "Corrected FastMCP server with @mcp.tool decorators, FastAPI endpoints, and Neo4j NVL visualization",
-        "architecture": "Enhanced FastMCP + LangGraph + Neo4j + NVL",
-        "fix_applied": "Using mcp.app instead of mcp.get_app()",
-        "endpoints": {
-            "health": "/health - Enhanced health check",
-            "chat": "/chat - Chat with enhanced agent (includes graph data)",
-            "graph": "/graph - Get graph data for visualization",
-            "stats": "/stats - Get live database statistics",
-            "viz": "/viz - Neo4j visualization interface",
-            "ws": "/ws - WebSocket for live updates",
-            "docs": "/docs - FastAPI documentation"
-        },
-        "mcp_tools": {
-            "read_neo4j_cypher": "Execute read-only Cypher queries",
-            "write_neo4j_cypher": "Execute write Cypher queries with live updates", 
-            "get_neo4j_schema": "Get database schema"
-        },
-        "visualization": {
-            "library": "Neo4j NVL",
-            "features": ["real_time_updates", "websocket_integration", "live_stats"],
-            "interface": "/viz"
-        },
-        "neo4j": {
-            "uri": NEO4J_URI,
-            "database": NEO4J_DATABASE,
-            "user": NEO4J_USER,
-            "current_stats": database_stats
-        },
-        "agent": {
-            "status": "ready" if agent else "not_initialized",
-            "model": CORTEX_MODEL,
-            "features": ["enhanced_responses", "graph_data_integration", "live_feedback"]
-        }
-    }
+# Legacy endpoints for compatibility
+@app.post("/read_neo4j_cypher")
+async def legacy_read_cypher(request: CypherRequest):
+    """Legacy endpoint for read operations"""
+    try:
+        result = await read_neo4j_cypher(request.query, request.params)
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/write_neo4j_cypher")
+async def legacy_write_cypher(request: CypherRequest):
+    """Legacy endpoint for write operations"""
+    try:
+        result = await write_neo4j_cypher(request.query, request.params)
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/get_neo4j_schema")
+async def legacy_get_schema():
+    """Legacy endpoint for schema operations"""
+    try:
+        result = await get_neo4j_schema()
+        return {"success": True, "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================
 # MAIN FUNCTION
 # ============================================
 
 def main():
-    """Main function to run the corrected enhanced FastMCP server"""
+    """Main function to run the working FastAPI server"""
     print("=" * 70)
-    print("🧠 CORRECTED ENHANCED NEO4J FASTMCP LANGGRAPH SERVER")
+    print("🧠 WORKING NEO4J FASTAPI SERVER WITH NVL")
     print("=" * 70)
-    print("🔧 Fix Applied: Using mcp.app instead of mcp.get_app()")
-    print("🏗️  Architecture: Enhanced FastMCP + LangGraph + Neo4j + NVL")
+    print("🔧 Fix Applied: Removed FastMCP dependency, using pure FastAPI")
+    print("🏗️  Architecture: FastAPI + LangGraph + Neo4j + NVL")
     print("🔧 Configuration:")
     print(f"   📍 Neo4j URI: {NEO4J_URI}")
     print(f"   👤 Neo4j User: {NEO4J_USER}")
@@ -1234,31 +1157,22 @@ def main():
     print(f"   🌐 Server: {SERVER_HOST}:{SERVER_PORT}")
     print("=" * 70)
     print("✨ Features:")
-    print("   🎯 Real-time Neo4j visualization with NVL")
-    print("   📊 Live database statistics and monitoring")
-    print("   🔄 WebSocket-based live updates")
-    print("   📈 Enhanced chat responses with graph data")
-    print("   🖥️  Dedicated visualization interface at /viz")
+    print("   🎯 Neo4j visualization with NVL")
+    print("   📊 Live database statistics")
+    print("   🔄 WebSocket live updates")
+    print("   📈 LangGraph AI agent")
+    print("   🖥️  Visualization interface at /viz")
+    print("   📚 API documentation at /docs")
     print("=" * 70)
     
-    # Final checks
     if NEO4J_PASSWORD == "your_neo4j_password":
-        print("⚠️  WARNING: You're using the default Neo4j password!")
-        print("⚠️  Please change NEO4J_PASSWORD at the top of this file")
+        print("⚠️  WARNING: Change NEO4J_PASSWORD before using!")
     
     if driver is None:
-        print("❌ Cannot start server - Neo4j driver failed to initialize")
+        print("❌ Cannot start - Neo4j driver failed to initialize")
         return
     
-    print("🚀 Starting corrected enhanced FastMCP server...")
-    print("📋 This server provides:")
-    print("   • Fixed MCP tools with @mcp.tool decorators")
-    print("   • FastAPI endpoints for HTTP access")
-    print("   • LangGraph agent with graph data integration")
-    print("   • Neo4j NVL visualization library integration")
-    print("   • WebSocket support for real-time updates")
-    print("   • Live database monitoring and statistics")
-    print("   • Corrected FastMCP app access")
+    print("🚀 Starting working FastAPI server...")
     
     try:
         import uvicorn
