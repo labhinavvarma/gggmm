@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Enhanced CSS with better response styling
+# Enhanced CSS with better history styling
 st.markdown("""
 <style>
     .main .block-container {
@@ -111,6 +111,42 @@ st.markdown("""
         margin: 0.5rem 0;
         border-left: 4px solid #667eea;
     }
+    
+    .history-entry {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 12px;
+        margin: 0.5rem 0;
+        box-shadow: 0 4px 12px rgba(240, 147, 251, 0.3);
+    }
+    
+    .history-header {
+        background: rgba(255, 255, 255, 0.2);
+        padding: 0.75rem;
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        font-weight: bold;
+    }
+    
+    .history-section {
+        background: rgba(255, 255, 255, 0.1);
+        padding: 0.75rem;
+        border-radius: 6px;
+        margin: 0.25rem 0;
+        border-left: 3px solid rgba(255, 255, 255, 0.4);
+    }
+    
+    .cypher-query {
+        background: rgba(0, 0, 0, 0.3);
+        color: #a8ff60;
+        padding: 0.75rem;
+        border-radius: 6px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        margin: 0.5rem 0;
+        border-left: 3px solid #a8ff60;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -133,10 +169,10 @@ init_session_state()
 
 # Header
 st.markdown('<h1 class="main-header">🕸️ Neo4j Graph Explorer</h1>', unsafe_allow_html=True)
-st.markdown('<p style="text-align: center; color: #6c757d; font-size: 1.2rem;"><strong>🎨 Enhanced with Detailed Analysis</strong> • <strong>🔍 Comprehensive Query Responses</strong></p>', unsafe_allow_html=True)
+st.markdown('<p style="text-align: center; color: #6c757d; font-size: 1.2rem;"><strong>🎨 Enhanced with Detailed Analysis & History</strong> • <strong>🔍 Complete Query Tracking</strong></p>', unsafe_allow_html=True)
 
 def call_agent_api(question: str, node_limit: int = 50) -> dict:
-    """API call function"""
+    """Enhanced API call function with better response tracking"""
     try:
         api_url = "http://localhost:8081/chat"
         payload = {
@@ -160,6 +196,276 @@ def call_agent_api(question: str, node_limit: int = 50) -> dict:
     except Exception as e:
         st.error(f"❌ API Error: {str(e)}")
         return None
+
+def create_detailed_history_entry(question: str, result: dict, detailed_analysis: dict = None) -> dict:
+    """Create a comprehensive history entry with all details"""
+    timestamp = datetime.now().isoformat()
+    
+    # Extract basic info
+    answer = result.get("answer", "")
+    graph_data = result.get("graph_data", {})
+    tool_used = result.get("tool", "unknown")
+    cypher_query = result.get("query", "")
+    trace = result.get("trace", "")
+    execution_time = result.get("execution_time_ms", 0)
+    
+    # Analyze graph data for history
+    nodes = graph_data.get("nodes", []) if graph_data else []
+    relationships = graph_data.get("relationships", []) if graph_data else []
+    
+    # Get node types and relationship types
+    node_types = {}
+    if nodes:
+        for node in nodes:
+            labels = node.get("labels", ["Unknown"])
+            label = labels[0] if labels else "Unknown"
+            node_types[label] = node_types.get(label, 0) + 1
+    
+    relationship_types = {}
+    if relationships:
+        for rel in relationships:
+            rel_type = rel.get("type", "Unknown")
+            relationship_types[rel_type] = relationship_types.get(rel_type, 0) + 1
+    
+    # Calculate key metrics
+    connectivity = len(relationships) / max(len(nodes), 1) if nodes else 0
+    total_properties = sum(len(node.get("properties", {})) for node in nodes) if nodes else 0
+    avg_properties = total_properties / len(nodes) if nodes else 0
+    
+    # Create comprehensive history entry
+    history_entry = {
+        "timestamp": timestamp,
+        "question": question,
+        "answer": answer,
+        "graph_data": graph_data,
+        
+        # Enhanced fields for detailed history
+        "tool_used": tool_used,
+        "cypher_query": cypher_query,
+        "trace": trace,
+        "execution_time_ms": execution_time,
+        
+        # Graph analysis summary
+        "nodes_count": len(nodes),
+        "relationships_count": len(relationships),
+        "node_types": node_types,
+        "relationship_types": relationship_types,
+        "connectivity": connectivity,
+        "avg_properties": avg_properties,
+        
+        # Detailed analysis if available
+        "detailed_analysis": detailed_analysis,
+        
+        # Summary insights
+        "key_insights": generate_history_insights(nodes, relationships, question),
+        "data_summary": create_data_summary(nodes, relationships),
+        
+        # Success metrics
+        "success": bool(result.get("success", True)),
+        "error": result.get("error"),
+    }
+    
+    return history_entry
+
+def generate_history_insights(nodes, relationships, question):
+    """Generate key insights for history display"""
+    insights = []
+    
+    if not nodes:
+        insights.append("🔍 No data found - query returned empty results")
+        return insights
+    
+    # Network insights
+    if relationships:
+        density = len(relationships) / len(nodes)
+        if density > 2:
+            insights.append(f"🕸️ Highly connected network ({density:.1f} connections/node)")
+        elif density > 1:
+            insights.append(f"🔗 Well connected ({density:.1f} connections/node)")
+        else:
+            insights.append(f"📊 Sparse network ({density:.1f} connections/node)")
+    else:
+        insights.append("📍 Isolated nodes (no relationships found)")
+    
+    # Data type insights
+    node_types = list(set(node.get("labels", [None])[0] for node in nodes if node.get("labels")))
+    if len(node_types) == 1:
+        insights.append(f"🎯 Focused on {node_types[0]} entities")
+    elif len(node_types) > 1:
+        insights.append(f"🎨 Diverse data: {len(node_types)} entity types")
+    
+    # Query type insights
+    if "person" in question.lower() or "people" in question.lower():
+        insights.append("👥 Social network analysis")
+    elif "company" in question.lower():
+        insights.append("🏢 Business network analysis")
+    elif "all" in question.lower():
+        insights.append("📊 Comprehensive database query")
+    
+    return insights[:3]  # Limit to 3 key insights
+
+def create_data_summary(nodes, relationships):
+    """Create a concise data summary for history"""
+    if not nodes:
+        return "No data returned"
+    
+    # Node summary
+    node_types = {}
+    for node in nodes:
+        labels = node.get("labels", ["Unknown"])
+        label = labels[0] if labels else "Unknown"
+        node_types[label] = node_types.get(label, 0) + 1
+    
+    node_summary = ", ".join([f"{k}({v})" for k, v in node_types.items()])
+    
+    # Relationship summary
+    if relationships:
+        rel_types = {}
+        for rel in relationships:
+            rel_type = rel.get("type", "Unknown")
+            rel_types[rel_type] = rel_types.get(rel_type, 0) + 1
+        
+        rel_summary = ", ".join([f"{k}({v})" for k, v in rel_types.items()])
+        return f"Nodes: {node_summary} | Relationships: {rel_summary}"
+    else:
+        return f"Nodes: {node_summary} | No relationships"
+
+def display_detailed_history_entry(entry: dict, index: int):
+    """Display a comprehensive history entry"""
+    timestamp = entry.get("timestamp", "")
+    question = entry.get("question", "")
+    
+    # Create expandable history entry
+    with st.expander(
+        f"📊 Query #{len(st.session_state.conversation_history) - index}: {question[:50]}..." + 
+        f" | {entry.get('nodes_count', 0)} nodes, {entry.get('relationships_count', 0)} rels",
+        expanded=False
+    ):
+        # History entry container
+        st.markdown(f'''
+        <div class="history-entry">
+            <div class="history-header">
+                🕐 <strong>Executed:</strong> {timestamp[:19]} | 
+                ⚡ <strong>Time:</strong> {entry.get("execution_time_ms", 0):.1f}ms |
+                🔧 <strong>Tool:</strong> {entry.get("tool_used", "unknown")}
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
+        
+        # Question section
+        st.markdown("**❓ Original Question:**")
+        st.info(question)
+        
+        # Cypher query section (if available)
+        if entry.get("cypher_query"):
+            st.markdown("**🔧 Cypher Query Executed:**")
+            st.markdown(f'''
+            <div class="cypher-query">
+                {entry.get("cypher_query", "No query available")}
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Results overview
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Nodes Found", entry.get("nodes_count", 0))
+        with col2:
+            st.metric("Relationships", entry.get("relationships_count", 0))
+        with col3:
+            st.metric("Connectivity", f"{entry.get('connectivity', 0):.1f}")
+        with col4:
+            st.metric("Avg Properties", f"{entry.get('avg_properties', 0):.1f}")
+        
+        # Data composition
+        if entry.get("node_types") or entry.get("relationship_types"):
+            st.markdown("**📊 Data Composition:**")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if entry.get("node_types"):
+                    st.write("**Node Types:**")
+                    for node_type, count in entry["node_types"].items():
+                        st.write(f"• {node_type}: {count}")
+            
+            with col_b:
+                if entry.get("relationship_types"):
+                    st.write("**Relationship Types:**")
+                    for rel_type, count in entry["relationship_types"].items():
+                        st.write(f"• {rel_type}: {count}")
+        
+        # Key insights
+        if entry.get("key_insights"):
+            st.markdown("**🔍 Key Insights from this Query:**")
+            for insight in entry["key_insights"]:
+                st.markdown(f"• {insight}")
+        
+        # Data summary
+        if entry.get("data_summary"):
+            st.markdown("**📋 Data Summary:**")
+            st.code(entry["data_summary"])
+        
+        # Full response (truncated)
+        if entry.get("answer"):
+            st.markdown("**🤖 AI Response (Preview):**")
+            answer_preview = entry["answer"].replace("**", "").replace("#", "")
+            if len(answer_preview) > 200:
+                st.write(f"{answer_preview[:200]}...")
+                with st.expander("📖 Show Full Response", expanded=False):
+                    st.markdown(entry["answer"])
+            else:
+                st.write(answer_preview)
+        
+        # Technical details
+        with st.expander("🔧 Technical Details", expanded=False):
+            st.write(f"**Tool Used:** {entry.get('tool_used', 'unknown')}")
+            st.write(f"**Session ID:** {entry.get('trace', 'N/A')[:50]}...")
+            st.write(f"**Success:** {'✅ Yes' if entry.get('success', True) else '❌ No'}")
+            if entry.get("error"):
+                st.error(f"Error: {entry['error']}")
+            
+            # Show raw graph data structure
+            if entry.get("graph_data") and entry["graph_data"].get("nodes"):
+                st.write("**Sample Node Structure:**")
+                st.json(entry["graph_data"]["nodes"][0])
+            
+            if entry.get("graph_data") and entry["graph_data"].get("relationships"):
+                st.write("**Sample Relationship Structure:**")
+                st.json(entry["graph_data"]["relationships"][0])
+        
+        # Action buttons for this history entry
+        col_x, col_y, col_z = st.columns(3)
+        with col_x:
+            if st.button(f"🔄 Repeat Query #{len(st.session_state.conversation_history) - index}", key=f"repeat_{index}"):
+                # Re-execute the same question
+                result = call_agent_api(question, 30)
+                if result:
+                    if result.get("graph_data"):
+                        st.session_state.graph_data = result["graph_data"]
+                        detailed_analysis = generate_detailed_analysis(
+                            result["graph_data"], 
+                            question, 
+                            result.get("answer", "")
+                        )
+                        st.session_state.detailed_analysis = detailed_analysis
+                    
+                    st.session_state.last_response = result
+                    st.rerun()
+        
+        with col_y:
+            if entry.get("graph_data") and st.button(f"📊 Load Graph #{len(st.session_state.conversation_history) - index}", key=f"load_{index}"):
+                # Load this entry's graph data
+                st.session_state.graph_data = entry["graph_data"]
+                if entry.get("detailed_analysis"):
+                    st.session_state.detailed_analysis = entry["detailed_analysis"]
+                st.success("Graph loaded from history!")
+                st.rerun()
+        
+        with col_z:
+            if st.button(f"📋 Copy Query #{len(st.session_state.conversation_history) - index}", key=f"copy_{index}"):
+                # Show the query for copying
+                if entry.get("cypher_query"):
+                    st.code(entry["cypher_query"], language="cypher")
+                    st.success("Query displayed above for copying!")
 
 def generate_detailed_analysis(graph_data: dict, question: str, api_response: str) -> dict:
     """Generate comprehensive analysis of the query results"""
@@ -718,11 +1024,11 @@ with col1:
     # Quick actions
     st.markdown("#### 🚀 Intelligent Quick Actions")
     quick_actions = [
-        ("🌟 Comprehensive Network Analysis", "Show me all nodes with their names, relationships, and provide detailed analysis"),
-        ("👥 People & Social Connections", "Show me all Person nodes with their social connections and explain the network structure"),
-        ("🏢 Business Network Overview", "Display Company nodes with their business relationships and analyze the corporate structure"),
-        ("📊 Complete Database Analysis", "Give me a comprehensive overview of the entire database with detailed insights"),
-        ("🎯 Smart Sample Analysis", "Show me a representative sample of connected data with intelligent analysis")
+        ("🌟 Comprehensive Analysis", "Show me all nodes with detailed analysis and relationships"),
+        ("👥 Social Network Analysis", "Analyze all Person nodes and their social connections"),
+        ("🏢 Business Network Study", "Examine Company nodes and business relationships"),
+        ("📊 Complete Database Audit", "Provide comprehensive database overview with insights"),
+        ("🎯 Smart Sample Analysis", "Show intelligent sample with detailed breakdown")
     ]
     
     for action_name, action_query in quick_actions:
@@ -738,16 +1044,13 @@ with col1:
                     )
                     st.session_state.detailed_analysis = detailed_analysis
                 
-                st.session_state.conversation_history.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "question": action_query,
-                    "answer": result.get("answer", ""),
-                    "graph_data": result.get("graph_data")
-                })
+                # Create comprehensive history entry
+                history_entry = create_detailed_history_entry(action_query, result, detailed_analysis)
+                st.session_state.conversation_history.append(history_entry)
                 
                 if result.get("graph_data"):
                     st.session_state.graph_data = result["graph_data"]
-                    st.success("✅ Analysis complete!")
+                    st.success("✅ Comprehensive analysis complete!")
                 
                 st.session_state.last_response = result
                 st.rerun()
@@ -756,12 +1059,12 @@ with col1:
     
     # Question input
     st.markdown("#### ✍️ Ask Your Detailed Question")
-    st.info("💡 I provide comprehensive analysis with every response including insights and recommendations!")
+    st.info("💡 All queries are tracked with full details including Cypher queries and comprehensive analysis!")
     
     with st.form("question_form", clear_on_submit=True):
         user_question = st.text_area(
             "Your detailed question:",
-            placeholder="e.g., Analyze all Person nodes and their social networks, Examine company relationships and business patterns, What can you tell me about the data structure?",
+            placeholder="e.g., Analyze Person relationships, Study company networks, Show me database patterns...",
             height=100
         )
         
@@ -769,16 +1072,17 @@ with col1:
             "Analysis scope:",
             [10, 25, 50, 75],
             index=1,
-            help="Smaller scope = more detailed analysis"
+            help="Smaller scope = more detailed analysis and tracking"
         )
         
-        submit_button = st.form_submit_button("🚀 Generate Detailed Analysis", use_container_width=True)
+        submit_button = st.form_submit_button("🚀 Execute & Track Analysis", use_container_width=True)
     
     if submit_button and user_question.strip():
         result = call_agent_api(user_question.strip(), node_limit)
         
         if result:
             # Generate detailed analysis
+            detailed_analysis = None
             if result.get("graph_data"):
                 detailed_analysis = generate_detailed_analysis(
                     result["graph_data"], 
@@ -787,16 +1091,13 @@ with col1:
                 )
                 st.session_state.detailed_analysis = detailed_analysis
             
-            st.session_state.conversation_history.append({
-                "timestamp": datetime.now().isoformat(),
-                "question": user_question.strip(),
-                "answer": result.get("answer", ""),
-                "graph_data": result.get("graph_data")
-            })
+            # Create comprehensive history entry
+            history_entry = create_detailed_history_entry(user_question.strip(), result, detailed_analysis)
+            st.session_state.conversation_history.append(history_entry)
             
             if result.get("graph_data"):
                 st.session_state.graph_data = result["graph_data"]
-                st.success("✅ Detailed analysis generated!")
+                st.success("✅ Query executed and tracked in detailed history!")
             
             st.session_state.last_response = result
             st.rerun()
@@ -804,13 +1105,13 @@ with col1:
     st.divider()
     
     # Test data
-    if st.button("🧪 Load Enhanced Test Data", use_container_width=True):
+    if st.button("🧪 Load Enhanced Test Dataset", use_container_width=True):
         test_data = {
             "nodes": [
-                {"id": "person1", "labels": ["Person"], "properties": {"name": "Alice Johnson", "age": 30, "department": "Engineering", "role": "Senior Developer", "experience": 8}},
-                {"id": "person2", "labels": ["Person"], "properties": {"name": "Bob Smith", "age": 25, "department": "Marketing", "role": "Designer", "experience": 3}},
-                {"id": "person3", "labels": ["Person"], "properties": {"name": "Carol Brown", "age": 35, "department": "Engineering", "role": "Manager", "experience": 12}},
-                {"id": "person4", "labels": ["Person"], "properties": {"name": "David Wilson", "age": 28, "department": "Sales", "role": "Account Executive", "experience": 5}},
+                {"id": "person1", "labels": ["Person"], "properties": {"name": "Alice Johnson", "age": 30, "department": "Engineering", "role": "Senior Developer", "experience": 8, "salary": 120000}},
+                {"id": "person2", "labels": ["Person"], "properties": {"name": "Bob Smith", "age": 25, "department": "Marketing", "role": "Designer", "experience": 3, "salary": 85000}},
+                {"id": "person3", "labels": ["Person"], "properties": {"name": "Carol Brown", "age": 35, "department": "Engineering", "role": "Manager", "experience": 12, "salary": 150000}},
+                {"id": "person4", "labels": ["Person"], "properties": {"name": "David Wilson", "age": 28, "department": "Sales", "role": "Account Executive", "experience": 5, "salary": 95000}},
                 {"id": "company1", "labels": ["Company"], "properties": {"name": "TechCorp Inc.", "industry": "Technology", "employees": 500, "founded": 2010, "revenue": "50M"}},
                 {"id": "location1", "labels": ["Location"], "properties": {"name": "New York", "country": "USA", "population": 8000000, "timezone": "EST"}},
                 {"id": "project1", "labels": ["Project"], "properties": {"name": "AI Innovation", "status": "Active", "budget": 2000000, "duration": "12 months"}}
@@ -831,32 +1132,92 @@ with col1:
         st.session_state.graph_data = test_data
         
         # Generate analysis for test data
-        detailed_analysis = generate_detailed_analysis(test_data, "Enhanced test data analysis", "Test data loaded")
+        detailed_analysis = generate_detailed_analysis(test_data, "Enhanced test dataset analysis", "Test data loaded")
         st.session_state.detailed_analysis = detailed_analysis
         
-        st.success("✅ Enhanced test data with detailed analysis loaded!")
+        # Create mock result for history
+        mock_result = {
+            "answer": "Enhanced test dataset loaded with comprehensive analysis",
+            "graph_data": test_data,
+            "tool": "test_data_loader",
+            "query": "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 50",
+            "trace": "Test data loading operation",
+            "execution_time_ms": 15.5,
+            "success": True
+        }
+        
+        # Add to detailed history
+        history_entry = create_detailed_history_entry("Load enhanced test dataset", mock_result, detailed_analysis)
+        st.session_state.conversation_history.append(history_entry)
+        
+        st.success("✅ Enhanced test dataset loaded with complete tracking!")
         st.rerun()
     
-    # History
-    st.markdown("#### 📝 Analysis History")
-    if st.session_state.conversation_history:
-        for item in reversed(st.session_state.conversation_history[-2:]):
-            with st.expander(f"💬 {item['question'][:35]}...", expanded=False):
-                st.write(f"**⏰ Time:** {item['timestamp'][:19]}")
-                if item.get('graph_data'):
-                    nodes = len(item['graph_data'].get('nodes', []))
-                    rels = len(item['graph_data'].get('relationships', []))
-                    st.write(f"**📊 Graph:** {nodes} nodes, {rels} relationships")
-                answer_preview = item['answer'].replace("**", "").replace("#", "")[:150]
-                st.write(f"**💭 Summary:** {answer_preview}...")
+    # Enhanced History Section
+    st.markdown("#### 📊 Detailed Analysis History")
+    st.markdown(f"**{len(st.session_state.conversation_history)} queries tracked** with complete details")
     
-    if st.button("🗑️ Clear All", use_container_width=True):
+    if st.session_state.conversation_history:
+        # History controls
+        col_hist1, col_hist2 = st.columns(2)
+        with col_hist1:
+            show_count = st.selectbox("Show last:", [3, 5, 10, "All"], index=0)
+        with col_hist2:
+            if st.button("📥 Export History", use_container_width=True):
+                # Create downloadable history
+                history_json = json.dumps(st.session_state.conversation_history, indent=2, default=str)
+                st.download_button(
+                    label="💾 Download JSON",
+                    data=history_json,
+                    file_name=f"neo4j_analysis_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+        
+        # Display history entries
+        display_count = len(st.session_state.conversation_history) if show_count == "All" else int(show_count)
+        displayed_entries = st.session_state.conversation_history[-display_count:]
+        
+        for i, entry in enumerate(reversed(displayed_entries)):
+            display_detailed_history_entry(entry, i)
+        
+        # History statistics
+        with st.expander("📈 History Statistics", expanded=False):
+            total_queries = len(st.session_state.conversation_history)
+            total_nodes_analyzed = sum(entry.get("nodes_count", 0) for entry in st.session_state.conversation_history)
+            total_relationships_analyzed = sum(entry.get("relationships_count", 0) for entry in st.session_state.conversation_history)
+            avg_execution_time = sum(entry.get("execution_time_ms", 0) for entry in st.session_state.conversation_history) / max(total_queries, 1)
+            
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+            with col_s1:
+                st.metric("Total Queries", total_queries)
+            with col_s2:
+                st.metric("Nodes Analyzed", total_nodes_analyzed)
+            with col_s3:
+                st.metric("Relationships", total_relationships_analyzed)
+            with col_s4:
+                st.metric("Avg Time (ms)", f"{avg_execution_time:.1f}")
+            
+            # Show most used tools
+            tool_usage = {}
+            for entry in st.session_state.conversation_history:
+                tool = entry.get("tool_used", "unknown")
+                tool_usage[tool] = tool_usage.get(tool, 0) + 1
+            
+            if tool_usage:
+                st.write("**Most Used Tools:**")
+                for tool, count in sorted(tool_usage.items(), key=lambda x: x[1], reverse=True):
+                    st.write(f"• {tool}: {count} times")
+    else:
+        st.info("💡 No analysis history yet. Run some queries to build your detailed tracking history!")
+    
+    if st.button("🗑️ Clear All History & Data", use_container_width=True):
         for key in ["conversation_history", "graph_data", "last_response", "detailed_analysis"]:
             st.session_state[key] = [] if key == "conversation_history" else None
+        st.success("🧹 All history and data cleared!")
         st.rerun()
 
 with col2:
-    st.markdown("### 🎨 Detailed Analysis & Visualization")
+    st.markdown("### 🎨 Analysis & Visualization")
     
     # Show comprehensive detailed response
     if st.session_state.detailed_analysis:
@@ -942,9 +1303,9 @@ with col2:
         
         if success:
             if len(relationships) > 0:
-                st.markdown(f'<div class="success-box">🎉 <strong>Visualization Complete!</strong> Your enhanced graph displays {len(nodes)} named nodes connected by {len(relationships)} colored relationship lines with comprehensive analysis above!</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="success-box">🎉 <strong>Success!</strong> Interactive graph displays {len(nodes)} named nodes connected by {len(relationships)} colored relationship lines! All details tracked in analysis history.</div>', unsafe_allow_html=True)
             else:
-                st.markdown('<div class="warning-box">ℹ️ Graph shows isolated nodes - no relationships found in the current data set</div>', unsafe_allow_html=True)
+                st.markdown('<div class="warning-box">ℹ️ Graph shows isolated nodes - no relationships found in current dataset</div>', unsafe_allow_html=True)
             
             # Enhanced controls
             col_a, col_b, col_c = st.columns(3)
@@ -953,39 +1314,37 @@ with col2:
                     if st.session_state.graph_data:
                         detailed_analysis = generate_detailed_analysis(
                             st.session_state.graph_data, 
-                            "Refresh analysis", 
+                            "Manual refresh analysis", 
                             "Analysis refreshed"
                         )
                         st.session_state.detailed_analysis = detailed_analysis
                     st.rerun()
             with col_b:
-                if st.button("🌐 Full Network Analysis", use_container_width=True):
-                    result = call_agent_api("Provide comprehensive analysis of the complete network with detailed insights and recommendations", node_limit=50)
+                if st.button("🌐 Full Network Study", use_container_width=True):
+                    result = call_agent_api("Conduct comprehensive network analysis with detailed insights", node_limit=50)
                     if result and result.get("graph_data"):
                         st.session_state.graph_data = result["graph_data"]
                         detailed_analysis = generate_detailed_analysis(
                             result["graph_data"], 
-                            "Complete network analysis", 
+                            "Full network study", 
                             result.get("answer", "")
                         )
                         st.session_state.detailed_analysis = detailed_analysis
+                        
+                        # Add to history
+                        history_entry = create_detailed_history_entry("Full network study", result, detailed_analysis)
+                        st.session_state.conversation_history.append(history_entry)
                         st.rerun()
             with col_c:
-                if st.button("📈 Advanced Insights", use_container_width=True):
-                    if st.session_state.graph_data:
-                        # Generate additional insights
-                        nodes = st.session_state.graph_data.get("nodes", [])
-                        relationships = st.session_state.graph_data.get("relationships", [])
-                        
-                        additional_insights = [
-                            f"🔍 **Network Topology**: Your network shows a {'centralized' if len(relationships) > len(nodes) * 1.5 else 'distributed'} structure",
-                            f"📊 **Data Richness**: Average of {sum(len(node.get('properties', {})) for node in nodes) / max(len(nodes), 1):.1f} properties per node",
-                            f"🎯 **Connection Patterns**: Most relationships are of type '{max(set(rel.get('type', 'Unknown') for rel in relationships), key=lambda x: sum(1 for rel in relationships if rel.get('type') == x)) if relationships else 'None'}'",
-                            f"💡 **Optimization Tip**: {'Consider exploring node properties for deeper insights' if sum(len(node.get('properties', {})) for node in nodes) > len(nodes) * 2 else 'Your data structure is optimized for relationship analysis'}"
-                        ]
-                        
-                        for insight in additional_insights:
-                            st.info(insight)
+                if st.button("📊 Export Analysis", use_container_width=True):
+                    if st.session_state.detailed_analysis:
+                        analysis_json = json.dumps(st.session_state.detailed_analysis, indent=2, default=str)
+                        st.download_button(
+                            label="📥 Download Analysis",
+                            data=analysis_json,
+                            file_name=f"neo4j_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json"
+                        )
         else:
             st.error("❌ Graph rendering failed. Check the debug information above.")
     
@@ -1000,22 +1359,22 @@ with col2:
             border-radius: 15px; 
             margin: 2rem 0;
         ">
-            <h2>🎯 Enhanced Graph Explorer with Detailed Analysis!</h2>
-            <p><strong>Now with comprehensive AI-powered insights and recommendations!</strong></p>
+            <h2>🎯 Enhanced Graph Explorer with Complete Tracking!</h2>
+            <p><strong>Every query is now tracked with comprehensive details!</strong></p>
             
             <div style="background: rgba(255,255,255,0.1); padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
-                <h3>✨ Enhanced Features:</h3>
+                <h3>📊 What's Tracked in History:</h3>
                 <div style="text-align: left; display: inline-block;">
-                    <p>🏷️ <strong>Proper Node Names</strong> - Real names, not generic IDs</p>
-                    <p>🔗 <strong>Visible Relationship Lines</strong> - Clear colored connections with labels</p>
-                    <p>🎨 <strong>Beautiful Visualization</strong> - Colorful, stable, interactive graphs</p>
-                    <p>🧠 <strong>AI-Powered Analysis</strong> - Comprehensive insights and recommendations</p>
-                    <p>📊 <strong>Detailed Explanations</strong> - Deep dive into your data patterns</p>
-                    <p>💡 <strong>Smart Recommendations</strong> - Actionable next steps for exploration</p>
+                    <p>🔧 <strong>Cypher Queries</strong> - Exact queries executed</p>
+                    <p>📊 <strong>Detailed Metrics</strong> - Nodes, relationships, connectivity</p>
+                    <p>🧠 <strong>AI Analysis</strong> - Comprehensive insights and recommendations</p>
+                    <p>⚡ <strong>Performance Data</strong> - Execution times and success rates</p>
+                    <p>🎯 <strong>Key Insights</strong> - Smart observations about patterns</p>
+                    <p>🔄 <strong>Repeatable Actions</strong> - Re-run or load any previous query</p>
                 </div>
             </div>
             
-            <p><em>Click "Load Enhanced Test Data" to experience the full analysis capabilities!</em></p>
+            <p><em>Click "Load Enhanced Test Dataset" to see complete tracking in action!</em></p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1031,8 +1390,8 @@ st.markdown("""
     margin-top: 2rem;
 ">
     <h4 style="margin: 0; background: linear-gradient(90deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-        🚀 Neo4j Graph Explorer - Enhanced Analysis Edition
+        🚀 Neo4j Graph Explorer - Complete Tracking Edition
     </h4>
-    <p style="margin: 0.5rem 0;">🏷️ Named Nodes • 🔗 Colored Relationships • 🧠 AI Analysis • 💡 Smart Insights</p>
+    <p style="margin: 0.5rem 0;">🔧 Cypher Queries • 📊 Detailed History • 🧠 AI Analysis • 💾 Export Capabilities</p>
 </div>
 """, unsafe_allow_html=True)
