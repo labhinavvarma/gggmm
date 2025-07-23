@@ -1,453 +1,386 @@
-import requests
-import urllib3
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from langgraph.graph import StateGraph, END
-from langchain_core.runnables import RunnableLambda
-import re
-import json
+from langgraph_agent import build_agent, AgentState
+import uuid
 import logging
+import uvicorn
+from datetime import datetime
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("langgraph_agent")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("neo4j_agent_app")
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Create FastAPI app with enhanced metadata
+app = FastAPI(
+    title="Neo4j Graph Explorer API",
+    description="AI-powered Neo4j graph database agent with split-screen visualization support",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
-class AgentState(BaseModel):
+# Enhanced CORS middleware for split-screen UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your Streamlit URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize agent at startup
+agent = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the LangGraph agent when the server starts"""
+    global agent
+    try:
+        logger.info("🚀 Starting Neo4j Graph Explorer Agent server...")
+        logger.info("🎨 Optimized for split-screen interface with 5000 node support")
+        agent = build_agent()
+        logger.info("✅ LangGraph agent initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize agent: {e}")
+        raise e
+
+# Enhanced request/response models
+class ChatRequest(BaseModel):
     question: str
-    session_id: str
-    tool: str = ""
-    query: str = ""
-    trace: str = ""
-    answer: str = ""
+    session_id: str = None
+    node_limit: int = 5000  # Default node limit for visualization
+
+class ChatResponse(BaseModel):
+    trace: str
+    tool: str
+    query: str
+    answer: str
     graph_data: dict = None
-    node_limit: int = 5000
+    session_id: str
+    timestamp: str
+    node_limit: int
+    success: bool = True
+    error: str = None
+    execution_time_ms: float = 0
 
-def clean_cypher_query(query: str) -> str:
-    """Clean and format Cypher queries for execution"""
-    query = re.sub(r'[\r\n]+', ' ', query)
-    keywords = [
-        "MATCH", "WITH", "RETURN", "ORDER BY", "UNWIND", "WHERE", "LIMIT",
-        "SKIP", "CALL", "YIELD", "CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
-    ]
-    for kw in keywords:
-        query = re.sub(rf'(?<!\s)({kw})', r' \1', query)
-        query = re.sub(rf'({kw})([^\s\(])', r'\1 \2', query)
-    query = re.sub(r'\s+', ' ', query)
-    return query.strip()
-
-def optimize_query_for_visualization(query: str, node_limit: int = 5000) -> str:
-    """Optimize queries for better visualization performance"""
-    query = query.strip()
-    
-    # Add reasonable limits to MATCH queries that don't have them
-    if ("MATCH" in query.upper() and 
-        "LIMIT" not in query.upper() and 
-        "count(" not in query.lower() and
-        "COUNT(" not in query):
-        
-        # For visualization queries, add a reasonable limit
-        if "RETURN" in query.upper():
-            query += f" LIMIT {min(node_limit, 1000)}"
-    
-    return query
-
-def format_response_with_graph(result_data, tool_type, node_limit=5000):
-    """Format the response for split-screen display"""
-    try:
-        if isinstance(result_data, str):
-            try:
-                result_data = json.loads(result_data)
-            except:
-                return str(result_data), None
-        
-        graph_data = None
-        
-        if tool_type == "write_neo4j_cypher" and isinstance(result_data, dict):
-            if "change_info" in result_data:
-                change_info = result_data["change_info"]
-                formatted_response = f"""
-🔄 **Database Update Completed**
-
-**⚡ Execution:** {change_info['execution_time_ms']}ms  
-**🕐 Time:** {change_info['timestamp'][:19]}
-
-**📝 Changes Made:**
-{chr(10).join(f"{change}" for change in change_info['changes'])}
-
-**🔧 Query:** `{change_info['query']}`
-                """.strip()
-                
-                # Include graph data if available
-                if result_data.get("graph_data"):
-                    graph_data = result_data["graph_data"]
-                    node_count = len(graph_data.get('nodes', []))
-                    rel_count = len(graph_data.get('relationships', []))
-                    if node_count > 0 or rel_count > 0:
-                        formatted_response += f"\n\n🕸️ **Updated graph visualization** with {node_count} nodes and {rel_count} relationships"
-                
-                return formatted_response, graph_data
-        
-        elif tool_type == "read_neo4j_cypher" and isinstance(result_data, dict):
-            if "data" in result_data and "metadata" in result_data:
-                data = result_data["data"]
-                metadata = result_data["metadata"]
-                graph_data = result_data.get("graph_data")
-                
-                # Format response for split screen
-                formatted_response = f"""
-📊 **Query Results**
-
-**🔢 Records:** {metadata['record_count']}  
-**⚡ Time:** {metadata['execution_time_ms']}ms  
-**🕐 Timestamp:** {metadata['timestamp'][:19]}
-                """.strip()
-                
-                # Add data summary for non-graph queries
-                if not graph_data or not graph_data.get('nodes'):
-                    if isinstance(data, list) and len(data) > 0:
-                        if len(data) <= 3:
-                            formatted_response += f"\n\n**📋 Data:**\n```json\n{json.dumps(data, indent=2)}\n```"
-                        else:
-                            formatted_response += f"\n\n**📋 Sample Data:**\n```json\n{json.dumps(data[:2], indent=2)}\n... and {len(data) - 2} more records\n```"
-                    else:
-                        formatted_response += "\n\n**📋 Data:** No records found"
-                
-                # Add graph visualization info if available
-                if graph_data and graph_data.get('nodes'):
-                    node_count = len(graph_data['nodes'])
-                    rel_count = len(graph_data.get('relationships', []))
-                    
-                    formatted_response += f"\n\n🕸️ **Graph visualization updated** with {node_count} nodes and {rel_count} relationships"
-                    
-                    # Show node types summary
-                    if node_count > 0:
-                        label_counts = {}
-                        for node in graph_data['nodes']:
-                            for label in node.get('labels', ['Unknown']):
-                                label_counts[label] = label_counts.get(label, 0) + 1
-                        
-                        if len(label_counts) > 0:
-                            label_summary = ", ".join([f"{label}({count})" for label, count in sorted(label_counts.items())])
-                            formatted_response += f"\n**🏷️ Node Types:** {label_summary}"
-                    
-                    # Show if limited
-                    if graph_data.get('limited'):
-                        formatted_response += f"\n**⚠️ Display limited to {node_limit} nodes for performance**"
-                
-                return formatted_response, graph_data
-        
-        elif tool_type == "get_neo4j_schema" and isinstance(result_data, dict):
-            if "schema" in result_data:
-                schema = result_data["schema"]
-                metadata = result_data.get("metadata", {})
-                
-                # Format schema information for split screen
-                schema_summary = []
-                if isinstance(schema, dict):
-                    for label, info in schema.items():
-                        if isinstance(info, dict):
-                            props = info.get('properties', {})
-                            relationships = info.get('relationships', {})
-                            schema_summary.append(f"**{label}**: {len(props)} props, {len(relationships)} rels")
-                
-                formatted_response = f"""
-🏗️ **Database Schema**
-
-**⚡ Time:** {metadata.get('execution_time_ms', 'N/A')}ms
-
-**📊 Overview:**
-{chr(10).join(f"{item}" for item in schema_summary[:10])}
-{f"... and {len(schema_summary) - 10} more types" if len(schema_summary) > 10 else ""}
-                """.strip()
-                
-                return formatted_response, None
-        
-        # Fallback for other formats
-        formatted_text = json.dumps(result_data, indent=2) if isinstance(result_data, (dict, list)) else str(result_data)
-        return formatted_text, None
-    
-    except Exception as e:
-        error_msg = f"❌ **Error formatting response:** {str(e)}"
-        logger.error(error_msg)
-        return error_msg, None
-
-# Enhanced system message optimized for split-screen visualization
-SYS_MSG = """
-You are an expert AI assistant for a split-screen Neo4j graph explorer. The left side shows conversation, the right side shows interactive graph visualizations. Your goal is to provide great queries that create meaningful visualizations.
-
-INTERFACE CONTEXT:
-- Split-screen UI: Chat on left, graph visualization on right
-- Node limit: 5000 for performance (you can use smaller limits for specific queries)
-- Users see results immediately in both text and visual form
-- Focus on queries that create meaningful, explorable graphs
-
-TOOL DESCRIPTIONS:
-- read_neo4j_cypher: For all read queries. Returns data + graph visualization when nodes/relationships are queried.
-- write_neo4j_cypher: For create/update/delete operations. Shows changes + updated visualization.
-- get_neo4j_schema: For schema information. Shows database structure overview.
-
-VISUALIZATION OPTIMIZATION RULES:
-1. When users want to "see", "show", "explore", or "visualize" data, prioritize queries returning nodes and relationships
-2. Use LIMIT clauses to control visualization size (50-1000 nodes typically)
-3. For exploration queries, prefer: MATCH (n)-[r]->(m) RETURN n, r, m LIMIT X
-4. For specific entity queries: MATCH (n:Label) RETURN n LIMIT X
-5. Always include RETURN clauses in CREATE/MERGE for immediate visualization
-
-QUERY PATTERNS FOR GREAT VISUALIZATIONS:
-
-Network Exploration:
-- "Show network" → MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 100
-- "Explore connections" → MATCH (n)-[r]-(m) WHERE n.property = 'value' RETURN n, r, m LIMIT 50
-
-Entity Queries:
-- "Show people" → MATCH (p:Person) RETURN p LIMIT 50  
-- "Find companies" → MATCH (c:Company) RETURN c LIMIT 30
-
-Relationship Queries:
-- "Who works where" → MATCH (p:Person)-[r:WORKS_FOR]->(c:Company) RETURN p, r, c
-- "Show hierarchy" → MATCH (a)-[r:MANAGES]->(b) RETURN a, r, b
-
-Creation with Visualization:
-- "Create person" → CREATE (p:Person {name: 'X'}) RETURN p
-- "Connect people" → MATCH (a:Person {name: 'X'}), (b:Person {name: 'Y'}) CREATE (a)-[r:KNOWS]->(b) RETURN a, r, b
-
-RESPONSE STYLE:
-- Keep responses concise and visualization-focused
-- Mention when graph updates will be visible
-- Use engaging language about exploration
-- Point out interesting patterns users can click on
-
-EXAMPLES:
-
-User: Show me the network structure
-Tool: read_neo4j_cypher  
-Query: MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 200
-
-User: Create a person named Alice and connect her to existing people
-Tool: write_neo4j_cypher
-Query: CREATE (alice:Person {name: 'Alice', created: datetime()}) WITH alice MATCH (others:Person) WHERE others.name IN ['Bob', 'Charlie'] CREATE (alice)-[r:KNOWS]->(others) RETURN alice, r, others
-
-User: Find all managers and their teams
-Tool: read_neo4j_cypher
-Query: MATCH (manager:Person)-[r:MANAGES]->(employee:Person) RETURN manager, r, employee LIMIT 100
-
-User: What types of data do I have?
-Tool: get_neo4j_schema
-
-IMPORTANT:
-- Always explain your reasoning briefly
-- Focus on creating explorable, interactive visualizations
-- Use appropriate LIMIT values for performance
-- Ensure queries return graph objects when users want to see/explore data
-"""
-
-# Cortex LLM configuration
-API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-MODEL = "llama3.1-70b"
-
-def cortex_llm(prompt: str, session_id: str) -> str:
-    """Call the Cortex LLM API"""
-    headers = {
-        "Authorization": f'Snowflake Token="{API_KEY}"',
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "query": {
-            "aplctn_cd": "edagnai",
-            "app_id": "edadip",
-            "api_key": API_KEY,
-            "method": "cortex",
-            "model": MODEL,
-            "sys_msg": SYS_MSG,
-            "limit_convs": "0",
-            "prompt": {
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            "session_id": session_id
-        }
-    }
-    
-    try:
-        resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
-        resp.raise_for_status()
-        return resp.text.partition("end_of_stream")[0].strip()
-    except Exception as e:
-        logger.error(f"Cortex LLM API error: {e}")
-        return f"Error calling Cortex LLM: {str(e)}"
-
-def parse_llm_output(llm_output):
-    """Parse LLM output to extract tool and query"""
-    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    trace = llm_output.strip()
-    tool = None
-    query = None
-    
-    # Extract tool
-    tool_match = re.search(r"Tool:\s*([\w_]+)", llm_output, re.I)
-    if tool_match:
-        tname = tool_match.group(1).strip()
-        if tname in allowed_tools:
-            tool = tname
-    
-    # Extract query - handle multi-line queries better
-    query_match = re.search(r"Query:\s*(.+?)(?:\n\n|\n[A-Z]|$)", llm_output, re.I | re.DOTALL)
-    if query_match:
-        query = query_match.group(1).strip()
-    
-    return tool, query, trace
-
-def select_tool_node(state: AgentState) -> dict:
-    """Node to select tool and generate query using LLM"""
-    logger.info(f"Processing question: {state.question}")
-    
-    try:
-        llm_output = cortex_llm(state.question, state.session_id)
-        tool, query, trace = parse_llm_output(llm_output)
-        
-        # Optimize query for visualization if needed
-        if query and tool == "read_neo4j_cypher":
-            query = optimize_query_for_visualization(query, state.node_limit)
-        
-        logger.info(f"LLM selected tool: {tool}, query: {query[:100] if query else 'None'}")
-        
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": tool or "",
-            "query": query or "",
-            "trace": trace or "",
-            "answer": "",
-            "graph_data": None,
-            "node_limit": state.node_limit
-        }
-    except Exception as e:
-        logger.error(f"Error in select_tool_node: {e}")
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": "",
-            "query": "",
-            "trace": f"Error selecting tool: {str(e)}",
-            "answer": f"❌ Error processing question: {str(e)}",
-            "graph_data": None,
-            "node_limit": state.node_limit
-        }
-
-def execute_tool_node(state: AgentState) -> dict:
-    """Node to execute the selected tool with enhanced graph support"""
-    tool = state.tool
-    query = state.query
-    trace = state.trace
-    node_limit = state.node_limit
-    answer = ""
-    graph_data = None
-    
-    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    
-    logger.info(f"Executing tool: {tool} with node limit: {node_limit}")
-    
-    try:
-        if not tool:
-            answer = "⚠️ I couldn't determine the right tool for your question. Try asking about viewing data, making changes, or exploring the database schema."
-        elif tool not in valid_tools:
-            answer = f"⚠️ Tool '{tool}' not recognized. Available tools: {', '.join(valid_tools)}"
-        elif tool == "get_neo4j_schema":
-            result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers, timeout=30)
-            if result.ok:
-                answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-            else:
-                answer = f"❌ Schema query failed: {result.text}"
-        elif tool == "read_neo4j_cypher":
-            if not query or not query.strip():
-                answer = "⚠️ I couldn't generate a valid query for your question. Try rephrasing or being more specific about what you want to see."
-            else:
-                query_clean = clean_cypher_query(query)
-                data = {
-                    "query": query_clean, 
-                    "params": {},
-                    "node_limit": node_limit
-                }
-                result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=45)
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-                else:
-                    answer = f"❌ Query failed: {result.text}"
-        elif tool == "write_neo4j_cypher":
-            if not query or not query.strip():
-                answer = "⚠️ I couldn't generate a valid modification query. Please be more specific about what you want to create, update, or delete."
-            else:
-                query_clean = clean_cypher_query(query)
-                data = {
-                    "query": query_clean, 
-                    "params": {},
-                    "node_limit": node_limit
-                }
-                result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers, timeout=45)
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-                else:
-                    answer = f"❌ Update failed: {result.text}"
-        else:
-            answer = f"❌ Unknown tool: {tool}"
-    
-    except requests.exceptions.Timeout:
-        answer = "⚠️ Query timed out. Try a simpler query or reduce the data scope."
-    except requests.exceptions.ConnectionError:
-        answer = "⚠️ Cannot connect to the database server. Please check if all services are running."
-    except Exception as e:
-        logger.error(f"Error in execute_tool_node: {e}")
-        answer = f"⚠️ Execution failed: {str(e)}"
-    
-    logger.info(f"Tool execution completed. Graph data: {'Yes' if graph_data else 'No'}")
-    
+# Health check endpoint
+@app.get("/")
+async def health_check():
+    """Enhanced health check endpoint"""
     return {
-        "question": state.question,
-        "session_id": state.session_id,
-        "tool": tool,
-        "query": query,
-        "trace": trace,
-        "answer": answer,
-        "graph_data": graph_data,
-        "node_limit": node_limit
+        "status": "healthy",
+        "service": "Neo4j Graph Explorer API",
+        "version": "2.0.0",
+        "features": ["split_screen_ui", "5000_node_support", "interactive_visualization"],
+        "timestamp": datetime.now().isoformat(),
+        "agent_ready": agent is not None
     }
 
-def build_agent():
-    """Build and return the LangGraph agent"""
-    workflow = StateGraph(state_schema=AgentState)
+@app.get("/health")
+async def detailed_health():
+    """Comprehensive health check with all service dependencies"""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "services": {},
+        "configuration": {
+            "max_node_limit": 5000,
+            "default_node_limit": 5000,
+            "interface_type": "split_screen"
+        }
+    }
     
-    # Add nodes
-    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
-    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
+    # Check agent status
+    health_status["services"]["langgraph_agent"] = {
+        "status": "up" if agent is not None else "down",
+        "ready": agent is not None,
+        "features": ["visualization_optimization", "node_limiting", "split_screen_support"]
+    }
     
-    # Set entry point
-    workflow.set_entry_point("select_tool")
+    # Check MCP server connectivity
+    try:
+        import requests
+        mcp_response = requests.get("http://localhost:8000/", timeout=5)
+        health_status["services"]["mcp_server"] = {
+            "status": "up" if mcp_response.status_code == 200 else "down",
+            "url": "http://localhost:8000",
+            "features": ["graph_extraction", "node_limiting", "optimization"]
+        }
+    except Exception as e:
+        health_status["services"]["mcp_server"] = {
+            "status": "down",
+            "error": str(e),
+            "url": "http://localhost:8000"
+        }
     
-    # Add edges
-    workflow.add_edge("select_tool", "execute_tool")
-    workflow.add_edge("execute_tool", END)
+    # Check Neo4j connectivity via MCP server
+    try:
+        import requests
+        neo4j_response = requests.post(
+            "http://localhost:8000/get_neo4j_schema", 
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        health_status["services"]["neo4j"] = {
+            "status": "up" if neo4j_response.status_code == 200 else "down",
+            "features": ["graph_database", "cypher_queries", "apoc_procedures"]
+        }
+    except Exception as e:
+        health_status["services"]["neo4j"] = {
+            "status": "down",
+            "error": str(e)
+        }
     
-    # Compile and return
-    agent = workflow.compile()
-    logger.info("LangGraph agent built successfully for split-screen interface")
-    return agent
-
-# For testing purposes
-if __name__ == "__main__":
-    # Test the agent locally
-    agent = build_agent()
-    test_state = AgentState(
-        question="Show me the network structure",
-        session_id="test_session",
-        node_limit=5000
+    # Check graph statistics
+    try:
+        import requests
+        stats_response = requests.get("http://localhost:8000/graph_stats", timeout=10)
+        if stats_response.status_code == 200:
+            stats_data = stats_response.json()
+            health_status["graph_statistics"] = stats_data.get("stats", {})
+    except Exception:
+        health_status["graph_statistics"] = {"error": "Could not retrieve graph statistics"}
+    
+    # Determine overall status
+    all_up = all(
+        service.get("status") == "up" 
+        for service in health_status["services"].values()
     )
+    health_status["status"] = "healthy" if all_up else "degraded"
     
-    import asyncio
+    return health_status
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Enhanced chat endpoint optimized for split-screen interface
     
-    async def test():
-        result = await agent.ainvoke(test_state)
-        print("Test Result:", result)
+    Processes questions and returns responses with graph visualization data
+    optimized for the split-screen UI layout.
+    """
+    if agent is None:
+        logger.error("Agent not initialized")
+        raise HTTPException(status_code=500, detail="Agent not initialized")
     
-    # asyncio.run(test())
+    # Generate session_id if not provided
+    session_id = request.session_id or str(uuid.uuid4())
+    node_limit = min(request.node_limit, 10000)  # Cap at 10k for performance
+    
+    logger.info(f"🤔 Processing chat request - Session: {session_id[:8]}...")
+    logger.info(f"📊 Question: {request.question[:100]} (Node limit: {node_limit})")
+    
+    start_time = datetime.now()
+    
+    try:
+        # Create enhanced agent state
+        state = AgentState(
+            question=request.question,
+            session_id=session_id,
+            node_limit=node_limit
+        )
+        
+        # Run the agent
+        logger.info(f"🔄 Running LangGraph agent with visualization optimization...")
+        result = await agent.ainvoke(state)
+        
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds() * 1000
+        
+        logger.info(f"✅ Agent completed - Tool: {result.get('tool')}")
+        logger.info(f"📈 Execution time: {execution_time:.2f}ms")
+        
+        # Check if we have graph data
+        has_graph_data = result.get('graph_data') and result.get('graph_data', {}).get('nodes')
+        if has_graph_data:
+            node_count = len(result['graph_data']['nodes'])
+            rel_count = len(result['graph_data'].get('relationships', []))
+            logger.info(f"🕸️ Graph data: {node_count} nodes, {rel_count} relationships")
+        
+        # Prepare enhanced response
+        response = ChatResponse(
+            trace=result.get("trace", ""),
+            tool=result.get("tool", ""),
+            query=result.get("query", ""),
+            answer=result.get("answer", ""),
+            graph_data=result.get("graph_data"),
+            session_id=session_id,
+            timestamp=datetime.now().isoformat(),
+            node_limit=node_limit,
+            execution_time_ms=execution_time,
+            success=True
+        )
+        
+        return response
+        
+    except Exception as e:
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds() * 1000
+        
+        logger.error(f"❌ Chat request failed: {str(e)}")
+        
+        # Return enhanced error response
+        error_response = ChatResponse(
+            trace=f"Error occurred: {str(e)}",
+            tool="",
+            query="",
+            answer=f"❌ I encountered an error processing your request: {str(e)}",
+            graph_data=None,
+            session_id=session_id,
+            timestamp=datetime.now().isoformat(),
+            node_limit=node_limit,
+            execution_time_ms=execution_time,
+            success=False,
+            error=str(e)
+        )
+        
+        return error_response
+
+@app.post("/agent/invoke")
+async def invoke_agent(request: dict):
+    """
+    Direct agent invocation endpoint with node limit support
+    """
+    if agent is None:
+        raise HTTPException(status_code=500, detail="Agent not initialized")
+    
+    try:
+        # Ensure node_limit is set
+        if 'node_limit' not in request:
+            request['node_limit'] = 5000
+            
+        # Create AgentState from request
+        state = AgentState(**request)
+        result = await agent.ainvoke(state)
+        return result
+    except Exception as e:
+        logger.error(f"Agent invocation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/agent/status")
+async def agent_status():
+    """Get the current status of the LangGraph agent with configuration info"""
+    return {
+        "agent_initialized": agent is not None,
+        "agent_type": "LangGraph Neo4j Graph Explorer Agent",
+        "interface_type": "split_screen",
+        "max_node_limit": 10000,
+        "default_node_limit": 5000,
+        "features": [
+            "interactive_visualization",
+            "node_limiting",
+            "query_optimization", 
+            "split_screen_layout",
+            "real_time_updates"
+        ],
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/graph/sample/{node_limit}")
+async def get_sample_graph(node_limit: int = 5000):
+    """Get a sample graph with specified node limit"""
+    try:
+        import requests
+        capped_limit = min(node_limit, 5000)
+        
+        response = requests.get(
+            f"http://localhost:8000/sample_graph?node_limit={capped_limit}",
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+            
+    except Exception as e:
+        logger.error(f"Error getting sample graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/graph/stats")
+async def get_graph_statistics():
+    """Get comprehensive graph statistics for the split-screen interface"""
+    try:
+        import requests
+        response = requests.get("http://localhost:8000/graph_stats", timeout=15)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+            
+    except Exception as e:
+        logger.error(f"Error getting graph statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/query/optimize")
+async def optimize_query(query: str, node_limit: int = 5000):
+    """Optimize a Cypher query for better visualization performance"""
+    try:
+        import requests
+        response = requests.get(
+            f"http://localhost:8000/optimize_query/{node_limit}?query={query}",
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+            
+    except Exception as e:
+        logger.error(f"Error optimizing query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Enhanced error handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions with enhanced error info"""
+    logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.now().isoformat(),
+            "service": "Neo4j Graph Explorer API",
+            "request_path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle general exceptions with detailed logging"""
+    logger.error(f"Unexpected error: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": str(exc),
+            "timestamp": datetime.now().isoformat(),
+            "service": "Neo4j Graph Explorer API",
+            "request_path": str(request.url.path)
+        }
+    )
+
+# Development server configuration
+if __name__ == "__main__":
+    logger.info("🚀 Starting Neo4j Graph Explorer API in development mode...")
+    logger.info("🎨 Optimized for split-screen interface with enhanced visualization")
+    
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=8081,
+        reload=True,
+        log_level="info",
+        reload_includes=["*.py"],
+        reload_excludes=["test_*", "__pycache__"]
+    )
+
+# Production server command:
+# uvicorn app:app --host 0.0.0.0 --port 8081 --workers 1
