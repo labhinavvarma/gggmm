@@ -1,420 +1,530 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional
-import uuid
-import logging
-import uvicorn
+import streamlit as st
+import streamlit.components.v1 as components
+from pyvis.network import Network
+import requests
+import json
+import os
+import tempfile
 from datetime import datetime
+import uuid
 
-# Import the enhanced agent
-try:
-    from enhanced_agent_with_explanations import build_agent, AgentState
-except ImportError:
-    # Fallback to original if enhanced not available
-    from langgraph_agent import build_agent, AgentState
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("neo4j_agent_app")
-
-# Create FastAPI app
-app = FastAPI(
-    title="Neo4j Graph Explorer API - Enhanced",
-    description="AI-powered Neo4j graph database agent with explanations and auto-refresh",
-    version="2.1.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+# Page configuration
+st.set_page_config(
+    page_title="Neo4j Graph Explorer", 
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Streamlit URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize agent at startup
-agent = None
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the enhanced LangGraph agent when the server starts"""
-    global agent
-    try:
-        logger.info("🚀 Starting Enhanced Neo4j Graph Explorer Agent server...")
-        logger.info("✨ Features: Explanations, Auto-refresh, Better UX")
-        agent = build_agent()
-        logger.info("✅ Enhanced LangGraph agent initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize agent: {e}")
-        raise e
-
-# Enhanced request/response models
-class ChatRequest(BaseModel):
-    question: str
-    session_id: str = None
-    node_limit: int = 1000  # Reduced default for better performance
-
-class ChatResponse(BaseModel):
-    trace: str
-    tool: str
-    query: str
-    answer: str
-    graph_data: Optional[dict] = None
-    session_id: str
-    timestamp: str
-    node_limit: int
-    success: bool = True
-    error: Optional[str] = None
-    execution_time_ms: float = 0
-    explanation: Optional[str] = None  # New field for explanations
-
-# Health check endpoint
-@app.get("/")
-async def health_check():
-    """Enhanced health check endpoint"""
-    return {
-        "status": "healthy",
-        "service": "Neo4j Graph Explorer API - Enhanced",
-        "version": "2.1.0",
-        "features": [
-            "explanations", 
-            "auto_refresh", 
-            "enhanced_ui", 
-            "improved_error_handling",
-            "conversation_history",
-            "quick_actions"
-        ],
-        "timestamp": datetime.now().isoformat(),
-        "agent_ready": agent is not None
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .main-header {
+        text-align: center;
+        color: #1f77b4;
+        margin-bottom: 2rem;
     }
+    .chat-container {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    .response-container {
+        background-color: #e8f4f8;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #1f77b4;
+        margin: 1rem 0;
+    }
+    .graph-container {
+        background-color: #ffffff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 2px solid #dee2e6;
+        margin: 1rem 0;
+        min-height: 600px;
+    }
+    .stButton button {
+        width: 100%;
+        background-color: #1f77b4;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 0.25rem;
+        font-weight: 600;
+    }
+    .stButton button:hover {
+        background-color: #0d5aa7;
+    }
+    .metric-container {
+        background-color: #f1f3f4;
+        padding: 0.5rem;
+        border-radius: 0.25rem;
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-@app.get("/health")
-async def detailed_health():
-    """Comprehensive health check with all service dependencies"""
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {},
-        "configuration": {
-            "max_node_limit": 1000,
-            "default_node_limit": 100,
-            "interface_type": "enhanced_split_screen",
-            "features_enabled": [
-                "explanations",
-                "auto_refresh", 
-                "conversation_history",
-                "quick_actions",
-                "graph_statistics"
+# Initialize session state
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+if "graph_data" not in st.session_state:
+    st.session_state.graph_data = None
+if "last_response" not in st.session_state:
+    st.session_state.last_response = None
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
+# Header
+st.markdown('<h1 class="main-header">🕸️ Neo4j Graph Explorer</h1>', unsafe_allow_html=True)
+st.markdown('<p style="text-align: center; color: #6c757d;">Ask questions, run queries, and visualize your Neo4j database in real-time</p>', unsafe_allow_html=True)
+
+def call_agent_api(question: str, node_limit: int = 100) -> dict:
+    """Call the FastAPI agent endpoint"""
+    try:
+        api_url = "http://localhost:8081/chat"
+        payload = {
+            "question": question,
+            "session_id": st.session_state.session_id,
+            "node_limit": node_limit
+        }
+        
+        with st.spinner("🤖 Processing your request..."):
+            response = requests.post(api_url, json=payload, timeout=60)
+            response.raise_for_status()
+            return response.json()
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Cannot connect to the agent API. Please ensure the FastAPI server is running on port 8081.")
+        return None
+    except requests.exceptions.Timeout:
+        st.error("⏰ Request timed out. Please try a simpler query.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error calling agent API: {str(e)}")
+        return None
+
+def get_node_color(labels):
+    """Get color based on node labels"""
+    if not labels:
+        return "#95afc0"
+    
+    label = labels[0] if isinstance(labels, list) else labels
+    
+    color_map = {
+        "Person": "#ff6b6b",
+        "Movie": "#4ecdc4", 
+        "Company": "#45b7d1",
+        "Product": "#96ceb4",
+        "Location": "#feca57",
+        "Event": "#ff9ff3",
+        "User": "#a55eea",
+        "Order": "#26de81",
+        "Category": "#fd79a8",
+        "Unknown": "#95afc0"
+    }
+    return color_map.get(label, "#95afc0")
+
+def render_graph(graph_data: dict) -> bool:
+    """Render the graph using Pyvis with better error handling"""
+    
+    if not graph_data:
+        st.info("🔍 No graph data available. Ask a question to visualize the database!")
+        return False
+    
+    nodes = graph_data.get("nodes", [])
+    relationships = graph_data.get("relationships", [])
+    
+    if not nodes:
+        st.info("📊 No nodes to display. Try a query that returns graph data.")
+        return False
+    
+    try:
+        # Debug information
+        st.write(f"📊 **Graph Debug Info:** {len(nodes)} nodes, {len(relationships)} relationships")
+        
+        # Create Pyvis network
+        net = Network(
+            height="600px", 
+            width="100%", 
+            bgcolor="#ffffff", 
+            font_color="#333333",
+            directed=True
+        )
+        
+        # Add nodes
+        for node in nodes:
+            node_id = str(node.get("id", "unknown"))
+            properties = node.get("properties", {})
+            labels = node.get("labels", ["Unknown"])
+            
+            # Create display label
+            display_name = (
+                properties.get("name") or 
+                properties.get("title") or 
+                properties.get("label") or 
+                f"Node_{node_id}"
+            )
+            
+            # Create hover info
+            hover_info = f"ID: {node_id}\\nLabels: {', '.join(labels)}"
+            for key, value in list(properties.items())[:5]:  # Show first 5 properties
+                hover_info += f"\\n{key}: {str(value)[:50]}"
+            
+            # Add node
+            net.add_node(
+                node_id,
+                label=str(display_name)[:30],  # Limit label length
+                title=hover_info,
+                color=get_node_color(labels),
+                size=25,
+                font={'size': 14}
+            )
+        
+        # Add edges/relationships
+        for rel in relationships:
+            start_id = str(rel.get("startNode", rel.get("start", "")))
+            end_id = str(rel.get("endNode", rel.get("end", "")))
+            rel_type = rel.get("type", "CONNECTED")
+            rel_props = rel.get("properties", {})
+            
+            # Only add edge if both nodes exist
+            if start_id and end_id:
+                # Create edge hover info
+                edge_info = f"Type: {rel_type}"
+                for key, value in list(rel_props.items())[:3]:
+                    edge_info += f"\\n{key}: {str(value)[:30]}"
+                
+                net.add_edge(
+                    start_id,
+                    end_id,
+                    label=rel_type,
+                    title=edge_info,
+                    color={'color': '#666666', 'highlight': '#ff0000'},
+                    arrows={'to': {'enabled': True, 'scaleFactor': 1}},
+                    width=2
+                )
+        
+        # Configure physics for better layout
+        net.set_options("""
+        var options = {
+            "physics": {
+                "enabled": true,
+                "stabilization": {"iterations": 100},
+                "barnesHut": {
+                    "gravitationalConstant": -8000,
+                    "centralGravity": 0.3,
+                    "springLength": 100,
+                    "springConstant": 0.04,
+                    "damping": 0.09,
+                    "avoidOverlap": 0.1
+                }
+            },
+            "interaction": {
+                "dragNodes": true,
+                "dragView": true,
+                "zoomView": true
+            },
+            "nodes": {
+                "borderWidth": 2,
+                "borderWidthSelected": 4
+            },
+            "edges": {
+                "width": 2,
+                "smooth": {
+                    "type": "continuous"
+                }
+            }
+        }
+        """)
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
+            net.save_graph(f.name)
+            html_file = f.name
+        
+        # Read and display the HTML
+        with open(html_file, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # Enhanced HTML wrapper
+        enhanced_html = f"""
+        <div style="border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: white;">
+            {html_content}
+        </div>
+        """
+        
+        # Display in Streamlit
+        components.html(enhanced_html, height=650, scrolling=False)
+        
+        # Clean up temp file
+        try:
+            os.unlink(html_file)
+        except:
+            pass
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Error rendering graph: {str(e)}")
+        
+        # Fallback: Show raw data
+        with st.expander("🔍 Raw Graph Data (Debug)", expanded=False):
+            st.json(graph_data)
+        
+        return False
+
+def display_conversation_item(item: dict):
+    """Display a conversation item with proper formatting"""
+    timestamp = item.get("timestamp", datetime.now().isoformat())
+    question = item.get("question", "")
+    answer = item.get("answer", "")
+    
+    with st.container():
+        # User question
+        st.markdown(f"""
+        <div style="background: #e3f2fd; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 0.5rem;">
+            <strong>🧑‍💻 You ({timestamp[:19]}):</strong><br>
+            {question}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Agent response
+        formatted_answer = answer.replace('\n', '<br>').replace('**', '<strong>').replace('**', '</strong>')
+        st.markdown(f"""
+        <div class="response-container">
+            <strong>🤖 Agent Response:</strong><br>
+            {formatted_answer}
+        </div>
+        """, unsafe_allow_html=True)
+
+# Main layout with columns
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.markdown("### 💬 Chat Interface")
+    
+    # Quick action buttons
+    st.markdown("#### 🚀 Quick Actions")
+    quick_actions = [
+        ("Show all nodes", "Show me all nodes in the database"),
+        ("Database schema", "What is the database schema?"),
+        ("Count nodes", "How many nodes are in the database?"),
+        ("Person nodes", "Show me all Person nodes"),
+        ("Relationships", "Display all relationships"),
+        ("Sample data", "Give me a sample of the graph")
+    ]
+    
+    for action_name, action_query in quick_actions:
+        if st.button(action_name, key=f"quick_{action_name}"):
+            # Execute quick action
+            result = call_agent_api(action_query, node_limit=50)  # Smaller limit for quick actions
+            if result:
+                # Add to conversation history
+                st.session_state.conversation_history.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "question": action_query,
+                    "answer": result.get("answer", ""),
+                    "graph_data": result.get("graph_data")
+                })
+                
+                # Update current graph data
+                if result.get("graph_data"):
+                    st.session_state.graph_data = result["graph_data"]
+                    st.success("✅ Graph updated!")
+                
+                st.session_state.last_response = result
+                st.rerun()
+    
+    st.divider()
+    
+    # Custom question input
+    st.markdown("#### ✍️ Ask a Question")
+    with st.form("question_form", clear_on_submit=True):
+        user_question = st.text_area(
+            "Your question:",
+            placeholder="e.g., Show me all Person nodes, Delete a person named John, Create a new company...",
+            height=100
+        )
+        
+        node_limit = st.slider(
+            "Max nodes to display:",
+            min_value=10,
+            max_value=500,
+            value=50,
+            step=10,
+            help="Limit the number of nodes in the visualization for better performance"
+        )
+        
+        submit_button = st.form_submit_button("🚀 Submit")
+    
+    if submit_button and user_question.strip():
+        # Call the agent
+        result = call_agent_api(user_question.strip(), node_limit)
+        
+        if result:
+            # Add to conversation history
+            st.session_state.conversation_history.append({
+                "timestamp": datetime.now().isoformat(),
+                "question": user_question.strip(),
+                "answer": result.get("answer", ""),
+                "graph_data": result.get("graph_data"),
+                "tool": result.get("tool", ""),
+                "query": result.get("query", "")
+            })
+            
+            # Update current graph data (important for auto-refresh)
+            if result.get("graph_data"):
+                st.session_state.graph_data = result["graph_data"]
+                st.success("✅ Graph updated with latest data!")
+            
+            st.session_state.last_response = result
+            st.rerun()
+    
+    st.divider()
+    
+    # Test graph with sample data button
+    if st.button("🧪 Test Graph with Sample Data"):
+        # Create sample graph data for testing
+        sample_data = {
+            "nodes": [
+                {"id": "1", "labels": ["Person"], "properties": {"name": "Alice", "age": 30}},
+                {"id": "2", "labels": ["Person"], "properties": {"name": "Bob", "age": 25}},
+                {"id": "3", "labels": ["Company"], "properties": {"name": "TechCorp"}},
+                {"id": "4", "labels": ["Location"], "properties": {"name": "New York"}}
+            ],
+            "relationships": [
+                {"startNode": "1", "endNode": "2", "type": "KNOWS", "properties": {}},
+                {"startNode": "1", "endNode": "3", "type": "WORKS_FOR", "properties": {}},
+                {"startNode": "3", "endNode": "4", "type": "LOCATED_IN", "properties": {}}
             ]
         }
-    }
+        st.session_state.graph_data = sample_data
+        st.success("✅ Sample graph data loaded!")
+        st.rerun()
     
-    # Check agent status
-    health_status["services"]["langgraph_agent"] = {
-        "status": "up" if agent is not None else "down",
-        "ready": agent is not None,
-        "type": "enhanced_agent",
-        "features": [
-            "explanations", 
-            "auto_refresh",
-            "keyword_fallback",
-            "enhanced_parsing"
-        ]
-    }
+    # Conversation history
+    st.markdown("#### 📝 Recent Conversations")
+    if st.session_state.conversation_history:
+        # Show last 3 conversations
+        for item in reversed(st.session_state.conversation_history[-3:]):
+            with st.expander(f"🗨️ {item['question'][:50]}...", expanded=False):
+                st.write(f"**Time:** {item['timestamp'][:19]}")
+                if item.get('tool'):
+                    st.write(f"**Tool:** {item['tool']}")
+                if item.get('query'):
+                    st.code(item['query'], language='cypher')
+                st.markdown(item['answer'])
+    else:
+        st.info("No conversations yet. Ask a question to get started!")
     
-    # Check MCP server connectivity
-    try:
-        import requests
-        mcp_response = requests.get("http://localhost:8000/", timeout=5)
-        health_status["services"]["mcp_server"] = {
-            "status": "up" if mcp_response.status_code == 200 else "down",
-            "url": "http://localhost:8000",
-            "features": ["graph_extraction", "node_limiting", "optimization"]
-        }
-    except Exception as e:
-        health_status["services"]["mcp_server"] = {
-            "status": "down",
-            "error": str(e),
-            "url": "http://localhost:8000"
-        }
-    
-    # Check Neo4j connectivity
-    try:
-        import requests
-        neo4j_response = requests.post(
-            "http://localhost:8000/get_neo4j_schema", 
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
-        health_status["services"]["neo4j"] = {
-            "status": "up" if neo4j_response.status_code == 200 else "down",
-            "features": ["graph_database", "cypher_queries", "apoc_procedures"]
-        }
-    except Exception as e:
-        health_status["services"]["neo4j"] = {
-            "status": "down",
-            "error": str(e)
-        }
-    
-    # Get graph statistics if available
-    try:
-        import requests
-        stats_response = requests.get("http://localhost:8000/graph_stats", timeout=10)
-        if stats_response.status_code == 200:
-            stats_data = stats_response.json()
-            health_status["graph_statistics"] = stats_data.get("stats", {})
-    except Exception:
-        health_status["graph_statistics"] = {"error": "Could not retrieve graph statistics"}
-    
-    # Determine overall status
-    all_up = all(
-        service.get("status") == "up" 
-        for service in health_status["services"].values()
-    )
-    health_status["status"] = "healthy" if all_up else "degraded"
-    
-    return health_status
+    # Clear history button
+    if st.button("🗑️ Clear History"):
+        st.session_state.conversation_history = []
+        st.session_state.graph_data = None
+        st.session_state.last_response = None
+        st.rerun()
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    Enhanced chat endpoint with explanations and auto-refresh
+with col2:
+    st.markdown("### 🕸️ Graph Visualization")
     
-    Processes questions and returns responses with detailed explanations
-    and automatically refreshed graph visualization data.
-    """
-    if agent is None:
-        logger.error("Agent not initialized")
-        raise HTTPException(status_code=500, detail="Agent not initialized")
+    # Display current response if available
+    if st.session_state.last_response:
+        answer = st.session_state.last_response.get("answer", "")
+        if answer:
+            st.markdown('<div class="response-container">', unsafe_allow_html=True)
+            st.markdown("#### 🤖 Latest Response")
+            # Format the answer better
+            formatted_answer = answer.replace('\n', '  \n')  # Markdown line breaks
+            st.markdown(formatted_answer)
+            st.markdown('</div>', unsafe_allow_html=True)
     
-    # Generate session_id if not provided
-    session_id = request.session_id or str(uuid.uuid4())
-    node_limit = min(request.node_limit, 1000)  # Cap at 1k for performance
-    
-    logger.info(f"🤔 Processing enhanced chat request - Session: {session_id[:8]}...")
-    logger.info(f"💬 Question: {request.question[:100]}... (Node limit: {node_limit})")
-    
-    start_time = datetime.now()
-    
-    try:
-        # Create enhanced agent state
-        state = AgentState(
-            question=request.question,
-            session_id=session_id,
-            node_limit=node_limit
-        )
-        
-        # Run the enhanced agent
-        logger.info(f"🔄 Running enhanced LangGraph agent...")
-        result = await agent.ainvoke(state)
-        
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds() * 1000
-        
-        logger.info(f"✅ Enhanced agent completed - Tool: {result.get('tool')}")
-        logger.info(f"📈 Execution time: {execution_time:.2f}ms")
-        
-        # Check if we have graph data
-        has_graph_data = result.get('graph_data') and result.get('graph_data', {}).get('nodes')
-        if has_graph_data:
-            node_count = len(result['graph_data']['nodes'])
-            rel_count = len(result['graph_data'].get('relationships', []))
-            logger.info(f"🕸️ Graph data: {node_count} nodes, {rel_count} relationships")
-        
-        # Extract explanation from answer if it contains formatting
-        answer = result.get("answer", "")
-        explanation = None
-        
-        # Try to extract explanation section
-        if "## " in answer:
-            parts = answer.split("---")
-            if len(parts) >= 2:
-                explanation = parts[1].strip() if len(parts) > 1 else None
-        
-        # Prepare enhanced response
-        response = ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=answer,
-            graph_data=result.get("graph_data") if has_graph_data else None,
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            node_limit=node_limit,
-            execution_time_ms=execution_time,
-            success=True,
-            explanation=explanation
-        )
-        
-        return response
-        
-    except Exception as e:
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds() * 1000
-        
-        logger.error(f"❌ Enhanced chat request failed: {str(e)}")
-        
-        # Return enhanced error response
-        error_response = ChatResponse(
-            trace=f"Error occurred: {str(e)}",
-            tool="",
-            query="",
-            answer=f"❌ I encountered an error processing your request: {str(e)}",
-            graph_data=None,
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            node_limit=node_limit,
-            execution_time_ms=execution_time,
-            success=False,
-            error=str(e)
-        )
-        
-        return error_response
-
-@app.post("/agent/invoke")
-async def invoke_agent(request: dict):
-    """
-    Direct agent invocation endpoint with enhanced features
-    """
-    if agent is None:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
-    
-    try:
-        # Ensure node_limit is set
-        if 'node_limit' not in request:
-            request['node_limit'] = 100
+    # Debug section
+    with st.expander("🔍 Debug Info", expanded=False):
+        if st.session_state.graph_data:
+            st.write("✅ Graph data available")
+            st.write(f"Nodes: {len(st.session_state.graph_data.get('nodes', []))}")
+            st.write(f"Relationships: {len(st.session_state.graph_data.get('relationships', []))}")
             
-        # Create AgentState from request
-        state = AgentState(**request)
-        result = await agent.ainvoke(state)
-        return result
-    except Exception as e:
-        logger.error(f"Agent invocation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/agent/status")
-async def agent_status():
-    """Get the current status of the enhanced LangGraph agent"""
-    return {
-        "agent_initialized": agent is not None,
-        "agent_type": "Enhanced LangGraph Neo4j Graph Explorer Agent",
-        "interface_type": "enhanced_split_screen",
-        "max_node_limit": 1000,
-        "default_node_limit": 100,
-        "features": [
-            "detailed_explanations",
-            "auto_refresh_graphs",
-            "conversation_history",
-            "quick_actions",
-            "enhanced_error_handling",
-            "keyword_fallback",
-            "improved_parsing",
-            "graph_statistics"
-        ],
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/graph/sample/{node_limit}")
-async def get_sample_graph(node_limit: int = 100):
-    """Get a sample graph with specified node limit"""
-    try:
-        import requests
-        capped_limit = min(node_limit, 500)  # Reduced max for better performance
-        
-        response = requests.get(
-            f"http://localhost:8000/sample_graph?node_limit={capped_limit}",
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            return response.json()
+            # Show first few nodes for debugging
+            nodes = st.session_state.graph_data.get('nodes', [])
+            if nodes:
+                st.write("Sample node:")
+                st.json(nodes[0])
         else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
-    except Exception as e:
-        logger.error(f"Error getting sample graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/graph/stats")
-async def get_graph_statistics():
-    """Get comprehensive graph statistics for the enhanced interface"""
-    try:
-        import requests
-        response = requests.get("http://localhost:8000/graph_stats", timeout=15)
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
-    except Exception as e:
-        logger.error(f"Error getting graph statistics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/conversation/export/{session_id}")
-async def export_conversation(session_id: str):
-    """Export conversation history for a session"""
-    # This would typically connect to a database to retrieve conversation history
-    # For now, return a placeholder
-    return {
-        "session_id": session_id,
-        "conversations": [],
-        "exported_at": datetime.now().isoformat(),
-        "note": "Conversation export feature - implement with persistent storage"
-    }
-
-# Enhanced error handlers
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with enhanced error info"""
-    logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "timestamp": datetime.now().isoformat(),
-            "service": "Enhanced Neo4j Graph Explorer API",
-            "request_path": str(request.url.path),
-            "suggestion": "Check the logs for more details or try a simpler query"
-        }
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle general exceptions with detailed logging"""
-    logger.error(f"Unexpected error: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "detail": str(exc),
-            "timestamp": datetime.now().isoformat(),
-            "service": "Enhanced Neo4j Graph Explorer API",
-            "request_path": str(request.url.path),
-            "suggestion": "Please check if all services are running and try again"
-        }
-    )
-
-# Development server configuration
-if __name__ == "__main__":
-    logger.info("🚀 Starting Enhanced Neo4j Graph Explorer API in development mode...")
-    logger.info("✨ Features: Explanations, Auto-refresh, Enhanced UX, Conversation History")
+            st.write("❌ No graph data available")
     
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=8081,
-        reload=True,
-        log_level="info",
-        reload_includes=["*.py"],
-        reload_excludes=["test_*", "__pycache__"]
-    )
+    # Render graph
+    if st.session_state.graph_data:
+        st.markdown("#### 🎨 Interactive Graph")
+        
+        # Graph statistics
+        nodes_count = len(st.session_state.graph_data.get("nodes", []))
+        rels_count = len(st.session_state.graph_data.get("relationships", []))
+        
+        col2_1, col2_2, col2_3 = st.columns(3)
+        with col2_1:
+            st.markdown(f'<div class="metric-container"><strong>{nodes_count}</strong><br>Nodes</div>', unsafe_allow_html=True)
+        with col2_2:
+            st.markdown(f'<div class="metric-container"><strong>{rels_count}</strong><br>Relationships</div>', unsafe_allow_html=True)
+        with col2_3:
+            density = rels_count/max(nodes_count,1) if nodes_count > 0 else 0
+            st.markdown(f'<div class="metric-container"><strong>{density:.1f}</strong><br>Density</div>', unsafe_allow_html=True)
+        
+        # Render the graph
+        st.markdown('<div class="graph-container">', unsafe_allow_html=True)
+        success = render_graph(st.session_state.graph_data)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        if success:
+            st.success(f"✅ Displaying {nodes_count} nodes and {rels_count} relationships")
+            
+            # Graph controls
+            col2_4, col2_5 = st.columns(2)
+            with col2_4:
+                if st.button("🔄 Refresh Graph"):
+                    # Force refresh by calling a simple query
+                    refresh_result = call_agent_api("Show me the current graph structure", node_limit=50)
+                    if refresh_result and refresh_result.get("graph_data"):
+                        st.session_state.graph_data = refresh_result["graph_data"]
+                        st.rerun()
+            
+            with col2_5:
+                if st.button("💾 Download Graph Data"):
+                    # Prepare download
+                    graph_json = json.dumps(st.session_state.graph_data, indent=2)
+                    st.download_button(
+                        label="📥 Download JSON",
+                        data=graph_json,
+                        file_name=f"neo4j_graph_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+        else:
+            st.error("❌ Failed to render graph - check debug info above")
+    else:
+        # Welcome message when no graph data
+        st.markdown("""
+        <div style="text-align: center; padding: 3rem; background: #f8f9fa; border-radius: 1rem; margin: 2rem 0;">
+            <h3>🎯 Welcome to Neo4j Graph Explorer!</h3>
+            <p>Ask a question or use the quick actions to start exploring your database.</p>
+            <p><strong>Try these examples:</strong></p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>"Show me all Person nodes"</li>
+                <li>"How many nodes are in the database?"</li>
+                <li>"What is the database schema?"</li>
+                <li>"Create a person named Alice"</li>
+                <li>"Delete a person named John"</li>
+            </ul>
+            <p><em>💡 Or click "Test Graph with Sample Data" to see a demo visualization</em></p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: #6c757d; padding: 1rem;">
+    <p>🚀 <strong>Neo4j Graph Explorer</strong> | Built with Streamlit & LangGraph | 
+    <a href="http://localhost:8081/docs" target="_blank">API Docs</a> | 
+    <a href="http://localhost:8000" target="_blank">MCP Server</a>
+    </p>
+</div>
+""", unsafe_allow_html=True)
