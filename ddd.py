@@ -16,24 +16,21 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Fixed CSS to remove white gaps and improve stability
+# Enhanced CSS for better relationship visibility
 st.markdown("""
 <style>
-    /* Remove default margins and padding */
     .main .block-container {
         padding-top: 1rem;
         padding-bottom: 1rem;
         max-width: 100%;
     }
     
-    /* Header styling */
     .main-header {
         text-align: center;
         color: #1f77b4;
         margin-bottom: 1.5rem;
     }
     
-    /* Chat container */
     .chat-container {
         background-color: #f8f9fa;
         padding: 1rem;
@@ -42,7 +39,6 @@ st.markdown("""
         border: 1px solid #dee2e6;
     }
     
-    /* Response container */
     .response-container {
         background-color: #e8f4f8;
         padding: 1rem;
@@ -51,7 +47,6 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     
-    /* Graph container - fixed to remove gaps */
     .graph-container {
         background-color: #ffffff;
         padding: 0.5rem;
@@ -59,10 +54,9 @@ st.markdown("""
         border: 1px solid #dee2e6;
         margin: 0;
         width: 100%;
-        min-height: 600px;
+        min-height: 650px;
     }
     
-    /* Button styling */
     .stButton button {
         width: 100%;
         background-color: #1f77b4;
@@ -76,10 +70,8 @@ st.markdown("""
     
     .stButton button:hover {
         background-color: #0d5aa7;
-        transform: translateY(-1px);
     }
     
-    /* Metrics */
     .metric-container {
         background-color: #f1f3f4;
         padding: 0.75rem;
@@ -89,7 +81,6 @@ st.markdown("""
         border: 1px solid #e0e0e0;
     }
     
-    /* Legend */
     .legend-container {
         background-color: #f8f9fa;
         padding: 0.75rem;
@@ -99,30 +90,18 @@ st.markdown("""
         font-size: 0.9rem;
     }
     
-    /* Fix column gaps */
-    .css-1r6slb0 {
-        gap: 1rem;
-    }
-    
-    /* Remove extra whitespace */
-    .element-container {
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    
-    /* Graph frame styling */
-    .graph-frame {
-        border: 2px solid #ddd;
-        border-radius: 8px;
-        overflow: hidden;
-        background: white;
-        margin: 0;
-        padding: 0;
+    .relationship-debug {
+        background-color: #fff3cd;
+        padding: 0.5rem;
+        border-radius: 0.25rem;
+        border: 1px solid #ffeaa7;
+        margin: 0.5rem 0;
+        font-size: 0.8rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state with better error handling
+# Initialize session state
 def init_session_state():
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
@@ -141,11 +120,18 @@ init_session_state()
 st.markdown('<h1 class="main-header">🕸️ Neo4j Graph Explorer</h1>', unsafe_allow_html=True)
 
 def call_agent_api(question: str, node_limit: int = 50) -> dict:
-    """Stable API call with better error handling"""
+    """Enhanced API call that ensures relationships are included"""
     try:
         api_url = "http://localhost:8081/chat"
+        
+        # Modify questions to ensure relationships are included
+        enhanced_question = question
+        if any(word in question.lower() for word in ["show", "display", "get", "find"]):
+            if "relationship" not in question.lower() and "connection" not in question.lower():
+                enhanced_question = f"{question} with their relationships and connections"
+        
         payload = {
-            "question": question,
+            "question": enhanced_question,
             "session_id": st.session_state.session_id,
             "node_limit": node_limit
         }
@@ -155,7 +141,6 @@ def call_agent_api(question: str, node_limit: int = 50) -> dict:
             response.raise_for_status()
             result = response.json()
             
-            # Reset error count on success
             st.session_state.error_count = 0
             return result
             
@@ -164,58 +149,62 @@ def call_agent_api(question: str, node_limit: int = 50) -> dict:
         st.error("❌ Cannot connect to agent API (port 8081). Please start the FastAPI server.")
         return None
     except requests.exceptions.Timeout:
-        st.error("⏰ Request timed out. Try a simpler query or increase timeout.")
+        st.error("⏰ Request timed out. Try a simpler query.")
         return None
     except Exception as e:
         st.session_state.error_count += 1
         st.error(f"❌ API Error: {str(e)}")
         return None
 
-def get_safe_node_color(labels):
-    """Safe color assignment with fallback"""
-    try:
-        if not labels or len(labels) == 0:
-            return "#95afc0"
-        
-        label = labels[0] if isinstance(labels, list) else str(labels)
-        
-        colors = {
-            "Person": "#FF6B6B",
-            "Movie": "#4ECDC4", 
-            "Company": "#45B7D1",
-            "Product": "#96CEB4",
-            "Location": "#FECA57",
-            "Event": "#FF9FF3",
-            "User": "#A55EEA",
-            "Order": "#26DE81",
-            "Category": "#FD79A8",
-            "Department": "#6C5CE7",
-            "Project": "#FDCB6E"
-        }
-        
-        return colors.get(label, "#95afc0")
-    except:
+def get_node_color(labels):
+    """Enhanced color assignment"""
+    if not labels or len(labels) == 0:
         return "#95afc0"
+    
+    label = labels[0] if isinstance(labels, list) else str(labels)
+    
+    colors = {
+        "Person": "#FF6B6B",      # Bright Red
+        "Movie": "#4ECDC4",       # Teal
+        "Company": "#45B7D1",     # Blue
+        "Product": "#96CEB4",     # Green
+        "Location": "#FECA57",    # Yellow
+        "Event": "#FF9FF3",       # Pink
+        "User": "#A55EEA",        # Purple
+        "Order": "#26DE81",       # Mint
+        "Category": "#FD79A8",    # Rose
+        "Department": "#6C5CE7",  # Indigo
+        "Project": "#FDCB6E",     # Orange
+        "Task": "#E17055",        # Coral
+        "Actor": "#00CEC9",       # Cyan
+        "Director": "#E84393",    # Magenta
+        "Producer": "#00B894"     # Emerald
+    }
+    
+    return colors.get(label, "#95afc0")
 
-def get_safe_edge_color(rel_type):
-    """Safe edge color with fallback"""
-    try:
-        colors = {
-            "KNOWS": "#FF6B6B",
-            "WORKS_FOR": "#4ECDC4",
-            "MANAGES": "#45B7D1", 
-            "LOCATED_IN": "#FECA57",
-            "BELONGS_TO": "#96CEB4",
-            "CREATED": "#FF9FF3",
-            "OWNS": "#A55EEA",
-            "USES": "#26DE81"
-        }
-        return colors.get(rel_type, "#666666")
-    except:
-        return "#666666"
+def get_relationship_color(rel_type):
+    """Enhanced relationship colors - more visible"""
+    colors = {
+        "KNOWS": "#e74c3c",           # Strong Red
+        "WORKS_FOR": "#3498db",       # Strong Blue
+        "MANAGES": "#9b59b6",         # Purple
+        "LOCATED_IN": "#f39c12",      # Orange
+        "BELONGS_TO": "#27ae60",      # Green
+        "CREATED": "#e91e63",         # Pink
+        "OWNS": "#673ab7",            # Deep Purple
+        "USES": "#009688",            # Teal
+        "MEMBER_OF": "#ff5722",       # Deep Orange
+        "ASSIGNED_TO": "#795548",     # Brown
+        "REPORTS_TO": "#607d8b",      # Blue Grey
+        "ACTED_IN": "#2196f3",        # Blue
+        "DIRECTED": "#ff9800",        # Amber
+        "PRODUCED": "#4caf50"         # Light Green
+    }
+    return colors.get(rel_type, "#333333")  # Darker default for visibility
 
-def render_stable_graph(graph_data: dict) -> bool:
-    """Stable graph rendering with comprehensive error handling"""
+def render_graph_with_relationships(graph_data: dict) -> bool:
+    """Enhanced graph rendering with focus on relationship visibility"""
     
     if not graph_data:
         st.info("🔍 No graph data available. Run a query to visualize your database!")
@@ -226,53 +215,68 @@ def render_stable_graph(graph_data: dict) -> bool:
         relationships = graph_data.get("relationships", [])
         
         if not nodes:
-            st.info("📊 No nodes found. Try a query that returns graph data like 'Show me all nodes'")
+            st.info("📊 No nodes found. Try a query that returns graph data.")
             return False
         
-        # Debug info
-        st.write(f"📊 **Processing:** {len(nodes)} nodes, {len(relationships)} relationships")
+        # Enhanced debug information
+        st.write(f"📊 **Data Analysis:** {len(nodes)} nodes, {len(relationships)} relationships")
         
-        # Create network with stable settings
+        # Debug relationships structure
+        if relationships:
+            rel_types = list(set(rel.get('type', 'UNKNOWN') for rel in relationships))
+            st.markdown(f'<div class="relationship-debug">🔗 <strong>Relationship Types Found:</strong> {", ".join(rel_types)}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="relationship-debug">⚠️ <strong>No relationships found in data</strong> - This might be why lines aren\'t showing</div>', unsafe_allow_html=True)
+        
+        # Create network with enhanced settings for relationship visibility
         net = Network(
-            height="600px",
+            height="650px",
             width="100%", 
-            bgcolor="#ffffff",
-            font_color="#333333",
-            directed=False  # Simplified for stability
+            bgcolor="#f8f9fa",
+            font_color="#2c3e50",
+            directed=True  # Enable directed edges for better visibility
         )
         
-        # Process nodes safely
+        # Process nodes with enhanced styling
         added_nodes = set()
+        node_positions = {}  # Track positions for better layout
+        
         for i, node in enumerate(nodes):
             try:
-                # Safe node ID extraction
                 node_id = str(node.get("id", f"node_{i}"))
                 if node_id in added_nodes:
                     node_id = f"{node_id}_{i}"
                 
-                # Safe property extraction
                 props = node.get("properties", {})
                 labels = node.get("labels", ["Unknown"])
                 
-                # Create display name safely
-                display_name = str(props.get("name", props.get("title", f"Node_{i}")))[:20]
+                # Enhanced display name
+                display_name = str(props.get("name", props.get("title", props.get("label", f"Node_{i}"))))[:25]
                 
-                # Safe color assignment
-                color = get_safe_node_color(labels)
-                
-                # Create simple tooltip
-                tooltip = f"ID: {node_id}\\nType: {labels[0] if labels else 'Unknown'}"
+                # Enhanced tooltip with more info
+                tooltip = f"🆔 ID: {node_id}\\n🏷️ Type: {labels[0] if labels else 'Unknown'}"
                 if props:
-                    prop_count = len(props)
-                    tooltip += f"\\nProperties: {prop_count}"
+                    tooltip += f"\\n📊 Properties: {len(props)}"
+                    # Show key properties
+                    for key, value in list(props.items())[:3]:
+                        tooltip += f"\\n• {key}: {str(value)[:30]}"
                 
-                # Add node with basic styling
+                # Enhanced node styling
+                color = get_node_color(labels)
+                size = 30 + len(props) * 2  # Larger nodes with more properties
+                
                 net.add_node(
                     node_id,
                     label=display_name,
                     title=tooltip,
-                    color=color,
-                    size=20
+                    color={
+                        'background': color,
+                        'border': '#2c3e50',
+                        'highlight': {'background': color, 'border': '#e74c3c'}
+                    },
+                    size=size,
+                    font={'size': 14, 'color': '#2c3e50'},
+                    borderWidth=2
                 )
                 added_nodes.add(node_id)
                 
@@ -280,70 +284,150 @@ def render_stable_graph(graph_data: dict) -> bool:
                 st.warning(f"⚠️ Skipped node {i}: {str(e)}")
                 continue
         
-        # Process relationships safely
+        # Enhanced relationship processing with better visibility
         added_edges = 0
+        relationship_debug = []
+        
         for i, rel in enumerate(relationships):
             try:
-                # Safe relationship extraction
-                start_id = str(rel.get("startNode", rel.get("start", "")))
-                end_id = str(rel.get("endNode", rel.get("end", "")))
+                # Handle different relationship data formats
+                start_id = str(rel.get("startNode", rel.get("start", rel.get("source", ""))))
+                end_id = str(rel.get("endNode", rel.get("end", rel.get("target", ""))))
                 rel_type = str(rel.get("type", "CONNECTED"))
+                rel_props = rel.get("properties", {})
+                
+                relationship_debug.append(f"{start_id} -[{rel_type}]-> {end_id}")
                 
                 # Only add if both nodes exist
                 if start_id in added_nodes and end_id in added_nodes:
-                    color = get_safe_edge_color(rel_type)
+                    color = get_relationship_color(rel_type)
                     
+                    # Enhanced edge tooltip
+                    edge_tooltip = f"🔗 {rel_type}\\n📍 {start_id} → {end_id}"
+                    if rel_props:
+                        edge_tooltip += f"\\n📊 Properties: {len(rel_props)}"
+                        for key, value in list(rel_props.items())[:2]:
+                            edge_tooltip += f"\\n• {key}: {str(value)[:20]}"
+                    
+                    # Add edge with enhanced visibility
                     net.add_edge(
                         start_id,
                         end_id,
                         label=rel_type,
-                        color=color,
-                        width=2,
-                        title=f"Type: {rel_type}"
+                        title=edge_tooltip,
+                        color={
+                            'color': color,
+                            'highlight': '#e74c3c',
+                            'hover': '#f39c12'
+                        },
+                        width=4,  # Thicker lines for visibility
+                        arrows={
+                            'to': {
+                                'enabled': True, 
+                                'scaleFactor': 1.5,
+                                'type': 'arrow'
+                            }
+                        },
+                        font={'size': 12, 'color': color, 'strokeWidth': 3, 'strokeColor': '#ffffff'},
+                        smooth={'type': 'continuous', 'roundness': 0.1}
                     )
                     added_edges += 1
+                else:
+                    if start_id not in added_nodes:
+                        st.warning(f"⚠️ Relationship {i}: Start node '{start_id}' not found")
+                    if end_id not in added_nodes:
+                        st.warning(f"⚠️ Relationship {i}: End node '{end_id}' not found")
                     
             except Exception as e:
                 st.warning(f"⚠️ Skipped relationship {i}: {str(e)}")
                 continue
         
-        st.write(f"✅ **Added:** {len(added_nodes)} nodes, {added_edges} relationships")
+        # Show relationship processing results
+        st.write(f"✅ **Successfully added:** {len(added_nodes)} nodes, {added_edges} relationships")
         
-        # Simple physics settings for stability
+        if relationship_debug:
+            with st.expander("🔍 Relationship Processing Details", expanded=False):
+                st.write("**Relationships found in data:**")
+                for rel_info in relationship_debug[:10]:  # Show first 10
+                    st.code(rel_info)
+                if len(relationship_debug) > 10:
+                    st.write(f"... and {len(relationship_debug) - 10} more")
+        
+        # Enhanced physics settings for better relationship visibility
         net.set_options("""
         var options = {
             "physics": {
                 "enabled": true,
-                "stabilization": {"iterations": 100}
+                "stabilization": {
+                    "enabled": true,
+                    "iterations": 150
+                },
+                "barnesHut": {
+                    "gravitationalConstant": -8000,
+                    "centralGravity": 0.1,
+                    "springLength": 200,
+                    "springConstant": 0.04,
+                    "damping": 0.09,
+                    "avoidOverlap": 0.5
+                }
             },
             "interaction": {
                 "dragNodes": true,
                 "dragView": true,
-                "zoomView": true
+                "zoomView": true,
+                "selectConnectedEdges": true,
+                "hover": true
+            },
+            "edges": {
+                "width": 4,
+                "selectionWidth": 6,
+                "hoverWidth": 6,
+                "smooth": {
+                    "enabled": true,
+                    "type": "continuous",
+                    "roundness": 0.1
+                }
+            },
+            "nodes": {
+                "borderWidth": 2,
+                "borderWidthSelected": 4
             }
         }
         """)
         
         # Generate and display HTML
         try:
-            # Create temp file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
                 net.save_graph(f.name)
                 html_file = f.name
             
-            # Read HTML content
             with open(html_file, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             
-            # Simple wrapper to prevent CSS conflicts
+            # Enhanced wrapper with better styling
             wrapped_html = f"""
-            <div class="graph-frame">
+            <div style="
+                border: 2px solid #ddd; 
+                border-radius: 8px; 
+                overflow: hidden; 
+                background: white;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            ">
+                <div style="
+                    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 8px 16px;
+                    font-weight: bold;
+                    font-size: 14px;
+                ">
+                    🕸️ Neo4j Graph | {len(added_nodes)} Nodes | {added_edges} Relationships
+                </div>
                 {html_content}
             </div>
             """
             
-            # Display in Streamlit
-            components.html(wrapped_html, height=620, scrolling=False)
+            # Display with larger height for better visibility
+            components.html(wrapped_html, height=680, scrolling=False)
             
             # Cleanup
             try:
@@ -360,7 +444,6 @@ def render_stable_graph(graph_data: dict) -> bool:
     except Exception as e:
         st.error(f"❌ Graph rendering failed: {str(e)}")
         
-        # Show debug info on error
         with st.expander("🔍 Debug Information", expanded=True):
             st.write("**Error Details:**")
             st.code(traceback.format_exc())
@@ -369,41 +452,32 @@ def render_stable_graph(graph_data: dict) -> bool:
         
         return False
 
-def create_simple_legend(nodes, relationships):
-    """Create a simple legend"""
+def create_enhanced_legend(nodes, relationships):
+    """Create enhanced legend with relationship info"""
     try:
-        # Get unique node types
-        node_types = set()
-        for node in nodes:
-            labels = node.get("labels", ["Unknown"])
-            if labels:
-                node_types.add(labels[0])
-        
-        # Get unique relationship types  
-        rel_types = set()
-        for rel in relationships:
-            rel_types.add(rel.get("type", "CONNECTED"))
+        node_types = list(set(labels[0] for node in nodes for labels in [node.get("labels", ["Unknown"])] if labels))
+        rel_types = list(set(rel.get("type", "CONNECTED") for rel in relationships))
         
         legend_html = '<div class="legend-container">'
-        legend_html += '<strong>🎨 Graph Legend:</strong><br>'
+        legend_html += '<h4>🎨 Graph Legend</h4>'
         
         if node_types:
-            legend_html += '<strong>Nodes:</strong> '
+            legend_html += '<p><strong>📊 Node Types:</strong></p>'
             for node_type in sorted(node_types):
-                color = get_safe_node_color([node_type])
-                legend_html += f'<span style="color: {color};">● {node_type}</span> '
+                color = get_node_color([node_type])
+                legend_html += f'<span style="color: {color}; font-size: 16px;">●</span> <strong>{node_type}</strong> &nbsp;&nbsp;'
         
         if rel_types:
-            legend_html += '<br><strong>Relationships:</strong> '
+            legend_html += '<p><strong>🔗 Relationship Types:</strong></p>'
             for rel_type in sorted(rel_types):
-                color = get_safe_edge_color(rel_type)
-                legend_html += f'<span style="color: {color};">━ {rel_type}</span> '
+                color = get_relationship_color(rel_type)
+                legend_html += f'<span style="color: {color}; font-size: 14px; font-weight: bold;">━━━</span> <strong>{rel_type}</strong> &nbsp;&nbsp;'
         
         legend_html += '</div>'
         return legend_html
         
-    except:
-        return '<div class="legend-container">Legend unavailable</div>'
+    except Exception as e:
+        return f'<div class="legend-container">Legend error: {str(e)}</div>'
 
 # Main layout
 col1, col2 = st.columns([1, 2], gap="medium")
@@ -418,19 +492,20 @@ with col1:
             st.session_state.error_count = 0
             st.rerun()
     
-    # Quick actions with simpler queries
+    # Enhanced quick actions focused on relationships
     st.markdown("#### 🚀 Quick Actions")
     quick_actions = [
-        ("Show nodes", "Show me all nodes"),
-        ("Show relationships", "Display relationships between nodes"),
-        ("Count nodes", "How many nodes are there?"),
-        ("Database info", "What is in the database?"),
-        ("Sample data", "Give me a sample of the graph")
+        ("Show all with connections", "Show me all nodes with their relationships and connections"),
+        ("Person network", "Show me all Person nodes and how they are connected"),
+        ("Company relationships", "Display Company nodes with their relationships"),
+        ("Full network", "Show me the complete network structure with all connections"),
+        ("Relationship types", "What types of relationships exist in the database?"),
+        ("Connected components", "Show me groups of connected nodes")
     ]
     
     for action_name, action_query in quick_actions:
         if st.button(action_name, key=f"quick_{action_name}"):
-            result = call_agent_api(action_query, node_limit=30)  # Smaller limit for stability
+            result = call_agent_api(action_query, node_limit=40)
             if result:
                 st.session_state.conversation_history.append({
                     "timestamp": datetime.now().isoformat(),
@@ -441,82 +516,106 @@ with col1:
                 
                 if result.get("graph_data"):
                     st.session_state.graph_data = result["graph_data"]
-                    st.success("✅ Graph updated!")
+                    st.success("✅ Graph updated with relationships!")
                 
                 st.session_state.last_response = result
                 st.rerun()
     
     st.divider()
     
-    # Simple question input
+    # Enhanced question input with relationship hints
     st.markdown("#### ✍️ Ask a Question")
+    st.info("💡 **Tip:** Add 'with relationships' or 'and connections' to ensure relationship lines are shown!")
+    
     with st.form("question_form", clear_on_submit=True):
         user_question = st.text_area(
             "Your question:",
-            placeholder="e.g., Show me all nodes, What relationships exist?",
+            placeholder="e.g., Show me Person nodes with their relationships, Find Alice and her connections",
             height=80
+        )
+        
+        # Checkbox to force relationship inclusion
+        include_relationships = st.checkbox(
+            "🔗 Force include relationships", 
+            value=True, 
+            help="Automatically add relationship data to your query"
         )
         
         node_limit = st.selectbox(
             "Node limit:",
             [10, 25, 50, 75, 100],
-            index=2,  # Default to 50
-            help="Smaller limits are more stable"
+            index=2,
+            help="Smaller limits show relationships more clearly"
         )
         
         submit_button = st.form_submit_button("🚀 Submit")
     
     if submit_button and user_question.strip():
-        result = call_agent_api(user_question.strip(), node_limit)
+        # Enhance question if checkbox is selected
+        final_question = user_question.strip()
+        if include_relationships and "relationship" not in final_question.lower():
+            final_question += " with their relationships and connections"
+        
+        result = call_agent_api(final_question, node_limit)
         
         if result:
             st.session_state.conversation_history.append({
                 "timestamp": datetime.now().isoformat(),
-                "question": user_question.strip(),
+                "question": final_question,
                 "answer": result.get("answer", ""),
                 "graph_data": result.get("graph_data")
             })
             
             if result.get("graph_data"):
                 st.session_state.graph_data = result["graph_data"]
-                st.success("✅ Graph updated!")
+                st.success("✅ Graph updated with relationships!")
             
             st.session_state.last_response = result
             st.rerun()
     
     st.divider()
     
-    # Test with reliable sample data
-    if st.button("🧪 Load Test Graph"):
+    # Enhanced test data with more relationships
+    if st.button("🧪 Load Test Graph with Relationships"):
         try:
             sample_data = {
                 "nodes": [
-                    {"id": "1", "labels": ["Person"], "properties": {"name": "Alice"}},
-                    {"id": "2", "labels": ["Person"], "properties": {"name": "Bob"}},
-                    {"id": "3", "labels": ["Company"], "properties": {"name": "TechCorp"}},
-                    {"id": "4", "labels": ["Location"], "properties": {"name": "NYC"}}
+                    {"id": "1", "labels": ["Person"], "properties": {"name": "Alice", "age": 30}},
+                    {"id": "2", "labels": ["Person"], "properties": {"name": "Bob", "age": 25}},
+                    {"id": "3", "labels": ["Person"], "properties": {"name": "Charlie", "age": 35}},
+                    {"id": "4", "labels": ["Company"], "properties": {"name": "TechCorp"}},
+                    {"id": "5", "labels": ["Location"], "properties": {"name": "NYC"}},
+                    {"id": "6", "labels": ["Project"], "properties": {"name": "AI Project"}}
                 ],
                 "relationships": [
-                    {"startNode": "1", "endNode": "2", "type": "KNOWS"},
-                    {"startNode": "1", "endNode": "3", "type": "WORKS_FOR"},
-                    {"startNode": "3", "endNode": "4", "type": "LOCATED_IN"}
+                    {"startNode": "1", "endNode": "2", "type": "KNOWS", "properties": {"since": "2020"}},
+                    {"startNode": "2", "endNode": "3", "type": "KNOWS", "properties": {"since": "2021"}},
+                    {"startNode": "1", "endNode": "4", "type": "WORKS_FOR", "properties": {"role": "Engineer"}},
+                    {"startNode": "2", "endNode": "4", "type": "WORKS_FOR", "properties": {"role": "Developer"}},
+                    {"startNode": "3", "endNode": "4", "type": "MANAGES", "properties": {"department": "Tech"}},
+                    {"startNode": "4", "endNode": "5", "type": "LOCATED_IN", "properties": {}},
+                    {"startNode": "1", "endNode": "6", "type": "ASSIGNED_TO", "properties": {"role": "Lead"}},
+                    {"startNode": "2", "endNode": "6", "type": "ASSIGNED_TO", "properties": {"role": "Dev"}}
                 ]
             }
             st.session_state.graph_data = sample_data
-            st.success("✅ Test graph loaded!")
+            st.success("✅ Test graph with 8 relationships loaded!")
             st.rerun()
         except Exception as e:
             st.error(f"Failed to load test data: {e}")
     
     # Recent conversations
-    st.markdown("#### 📝 History")
+    st.markdown("#### 📝 Recent Conversations")
     if st.session_state.conversation_history:
-        for item in reversed(st.session_state.conversation_history[-2:]):  # Show last 2
-            with st.expander(f"💬 {item['question'][:30]}...", expanded=False):
+        for item in reversed(st.session_state.conversation_history[-2:]):
+            with st.expander(f"💬 {item['question'][:40]}...", expanded=False):
                 st.write(f"**Time:** {item['timestamp'][:19]}")
+                if item.get('graph_data'):
+                    rel_count = len(item['graph_data'].get('relationships', []))
+                    st.write(f"**Relationships:** {rel_count}")
                 st.write(f"**Answer:** {item['answer'][:100]}...")
     else:
-        st.info("No history yet.")
+        st.info("No conversations yet.")
     
     if st.button("🗑️ Clear All"):
         st.session_state.conversation_history = []
@@ -526,7 +625,7 @@ with col1:
         st.rerun()
 
 with col2:
-    st.markdown("### 🕸️ Graph Visualization")
+    st.markdown("### 🕸️ Graph with Relationships")
     
     # Response display
     if st.session_state.last_response:
@@ -534,50 +633,59 @@ with col2:
         if answer:
             with st.container():
                 st.markdown("#### 🤖 Latest Response")
-                # Clean answer display
                 clean_answer = answer.replace("**", "").replace("#", "").strip()
-                st.info(clean_answer[:300] + "..." if len(clean_answer) > 300 else clean_answer)
+                st.info(clean_answer[:200] + "..." if len(clean_answer) > 200 else clean_answer)
     
-    # Graph section
+    # Graph section with enhanced relationship focus
     if st.session_state.graph_data:
         nodes = st.session_state.graph_data.get("nodes", [])
         relationships = st.session_state.graph_data.get("relationships", [])
         
-        # Statistics
+        # Enhanced statistics
         col2_1, col2_2, col2_3 = st.columns(3)
         with col2_1:
             st.markdown(f'<div class="metric-container"><strong>{len(nodes)}</strong><br>Nodes</div>', unsafe_allow_html=True)
         with col2_2:
-            st.markdown(f'<div class="metric-container"><strong>{len(relationships)}</strong><br>Edges</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-container"><strong>{len(relationships)}</strong><br>Relationships</div>', unsafe_allow_html=True)
         with col2_3:
-            density = len(relationships) / max(len(nodes), 1)
-            st.markdown(f'<div class="metric-container"><strong>{density:.1f}</strong><br>Density</div>', unsafe_allow_html=True)
+            connectivity = len(relationships) / max(len(nodes), 1)
+            st.markdown(f'<div class="metric-container"><strong>{connectivity:.1f}</strong><br>Connectivity</div>', unsafe_allow_html=True)
         
-        # Legend
-        legend = create_simple_legend(nodes, relationships)
-        st.markdown(legend, unsafe_allow_html=True)
+        # Enhanced legend
+        if nodes or relationships:
+            legend = create_enhanced_legend(nodes, relationships)
+            st.markdown(legend, unsafe_allow_html=True)
         
-        # Render graph
-        st.markdown("#### 🎨 Interactive Graph")
+        # Render graph with relationship focus
+        st.markdown("#### 🎨 Interactive Network")
         with st.container():
-            success = render_stable_graph(st.session_state.graph_data)
+            success = render_graph_with_relationships(st.session_state.graph_data)
             
             if success:
-                st.success(f"✅ Graph rendered successfully!")
+                if len(relationships) > 0:
+                    st.success(f"✅ Graph with {len(relationships)} relationship lines displayed!")
+                else:
+                    st.warning("⚠️ No relationships found in data - try queries that include 'with relationships'")
                 
-                # Simple controls
-                col_a, col_b = st.columns(2)
+                # Enhanced controls
+                col_a, col_b, col_c = st.columns(3)
                 with col_a:
                     if st.button("🔄 Refresh"):
                         st.rerun()
                 with col_b:
-                    if st.button("📊 Get Stats"):
-                        st.info(f"Nodes: {len(nodes)}, Relationships: {len(relationships)}")
+                    if st.button("🔗 Show Connections"):
+                        result = call_agent_api("Show me all connections and relationships in the database", node_limit=50)
+                        if result and result.get("graph_data"):
+                            st.session_state.graph_data = result["graph_data"]
+                            st.rerun()
+                with col_c:
+                    if st.button("📊 Network Stats"):
+                        st.info(f"Nodes: {len(nodes)}, Relationships: {len(relationships)}, Avg Connections: {len(relationships)*2/max(len(nodes),1):.1f}")
             else:
-                st.error("❌ Graph rendering failed. Try with simpler data or check the debug info above.")
+                st.error("❌ Graph rendering failed. Check debug info above.")
     
     else:
-        # Welcome screen
+        # Welcome screen with relationship focus
         st.markdown("""
         <div style="
             text-align: center; 
@@ -587,11 +695,11 @@ with col2:
             border-radius: 1rem; 
             margin: 1rem 0;
         ">
-            <h3>🎯 Neo4j Graph Explorer</h3>
-            <p>Visualize your Neo4j database with interactive graphs</p>
+            <h3>🕸️ Neo4j Graph with Relationships</h3>
+            <p>Visualize nodes <strong>AND</strong> their connecting relationships</p>
             <p><strong>✨ Features:</strong></p>
-            <p>🎨 Colored nodes • 🔗 Relationship visualization • 🖱️ Interactive controls</p>
-            <p><em>Click "Load Test Graph" to see a demo!</em></p>
+            <p>🎨 Colored nodes • 🔗 <strong>Visible relationship lines</strong> • 🏷️ Relationship labels • 🖱️ Interactive</p>
+            <p><em>Click "Load Test Graph with Relationships" to see relationships!</em></p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -599,7 +707,7 @@ with col2:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #6c757d; padding: 0.5rem;">
-    <small>🚀 <strong>Neo4j Graph Explorer</strong> | Stable Version | 
+    <small>🚀 <strong>Neo4j Graph Explorer</strong> | Enhanced for Relationship Visibility | 
     <a href="http://localhost:8081/docs" target="_blank">API</a></small>
 </div>
 """, unsafe_allow_html=True)
