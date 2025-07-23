@@ -41,15 +41,12 @@ def optimize_query_for_visualization(query: str, node_limit: int = 1000) -> str:
     """Optimize queries for better Pyvis visualization performance"""
     query = query.strip()
     
-    # Add reasonable limits to MATCH queries that don't have them
     if ("MATCH" in query.upper() and 
         "LIMIT" not in query.upper() and 
         "count(" not in query.lower() and
         "COUNT(" not in query):
         
-        # For Pyvis visualization, use smaller limits for cleaner display
         if "RETURN" in query.upper():
-            # Use smaller limits for better visualization
             limit = min(node_limit, 200) if node_limit > 200 else node_limit
             query += f" LIMIT {limit}"
     
@@ -81,7 +78,6 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
 **🔧 Query:** `{change_info['query']}`
                 """.strip()
                 
-                # Include graph data if available
                 if result_data.get("graph_data"):
                     graph_data = result_data["graph_data"]
                     node_count = len(graph_data.get('nodes', []))
@@ -97,7 +93,6 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
                 metadata = result_data["metadata"]
                 graph_data = result_data.get("graph_data")
                 
-                # Format response for split screen
                 formatted_response = f"""
 📊 **Query Results**
 
@@ -106,7 +101,6 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
 **🕐 Timestamp:** {metadata['timestamp'][:19]}
                 """.strip()
                 
-                # Add data summary for non-graph queries
                 if not graph_data or not graph_data.get('nodes'):
                     if isinstance(data, list) and len(data) > 0:
                         if len(data) <= 3:
@@ -116,14 +110,12 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
                     else:
                         formatted_response += "\n\n**📋 Data:** No records found"
                 
-                # Add graph visualization info if available
                 if graph_data and graph_data.get('nodes'):
                     node_count = len(graph_data['nodes'])
                     rel_count = len(graph_data.get('relationships', []))
                     
                     formatted_response += f"\n\n🕸️ **Graph visualization updated** with {node_count} nodes and {rel_count} relationships"
                     
-                    # Show node types summary
                     if node_count > 0:
                         label_counts = {}
                         for node in graph_data['nodes']:
@@ -134,7 +126,6 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
                             label_summary = ", ".join([f"{label}({count})" for label, count in sorted(label_counts.items())])
                             formatted_response += f"\n**🏷️ Node Types:** {label_summary}"
                     
-                    # Show if limited
                     if graph_data.get('limited'):
                         formatted_response += f"\n**⚠️ Display limited to {node_limit} nodes for performance**"
                 
@@ -145,7 +136,6 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
                 schema = result_data["schema"]
                 metadata = result_data.get("metadata", {})
                 
-                # Format schema information for split screen
                 schema_summary = []
                 if isinstance(schema, dict):
                     for label, info in schema.items():
@@ -166,7 +156,6 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
                 
                 return formatted_response, None
         
-        # Fallback for other formats
         formatted_text = json.dumps(result_data, indent=2) if isinstance(result_data, (dict, list)) else str(result_data)
         return formatted_text, None
     
@@ -175,130 +164,36 @@ def format_response_with_graph(result_data, tool_type, node_limit=5000):
         logger.error(error_msg)
         return error_msg, None
 
-# Enhanced system message optimized for split-screen visualization
-# Enhanced system message with comprehensive Neo4j guidance and summary generation
-SYS_MSG = """
-You are an expert AI assistant that helps users query and manage a Neo4j database by selecting and using one of three MCP tools. Choose the most appropriate tool and generate the correct Cypher query or action, following all instructions and best practices below.
+# Enhanced system message - simpler and more explicit
+SYS_MSG = """You are a Neo4j database assistant. For each user question, you must select ONE tool and provide a Cypher query (if needed).
 
-TOOL DESCRIPTIONS:
-- read_neo4j_cypher:
-    - Use for all read-only graph queries: exploring data, finding nodes/relationships, aggregation, reporting, analysis, counting.
-    - Only run safe queries (MATCH, RETURN, WHERE, OPTIONAL MATCH, etc).
-    - Never use this tool for CREATE, UPDATE, DELETE, SET, or any modification.
-    - Returns a list of matching nodes, relationships, or computed values.
-    - Can return graph data for visualization when nodes/relationships are queried.
+REQUIRED OUTPUT FORMAT:
+Tool: [tool_name]
+Query: [cypher_query_if_needed]
 
-- write_neo4j_cypher:
-    - Use only for write queries: CREATE, MERGE, SET, DELETE, REMOVE, or modifying properties or structure.
-    - Use to create nodes/edges, update, or delete data.
-    - Never use this for data retrieval only.
-    - Returns detailed change information with timestamps.
-    - Include RETURN clauses to see created/modified nodes in visualization.
+AVAILABLE TOOLS:
+1. read_neo4j_cypher - for reading data (MATCH, RETURN, WHERE, COUNT, etc.)
+2. write_neo4j_cypher - for modifying data (CREATE, MERGE, SET, DELETE, etc.) 
+3. get_neo4j_schema - for schema information (no query needed)
 
-- get_neo4j_schema:
-    - Use when the user asks about structure, schema, labels, relationship types, available node kinds, or properties.
-    - Returns a detailed schema graph, including node labels, relationship types, and property keys.
-
-VISUALIZATION OPTIMIZATION FOR PYVIS:
-- When users want to "see", "show", "display", or "visualize" data, prefer queries that return actual graph objects (nodes and relationships).
-- Use queries like: MATCH (n:Person) RETURN n, MATCH (a)-[r]->(b) RETURN a, r, b
-- Add RETURN clauses to CREATE/MERGE operations when users want to see results.
-- Use reasonable LIMIT clauses (20-100) for clean Pyvis visualization.
-- Focus on returning complete nodes and relationships for graph display.
-
-IMPORTANT GUIDELINES:
-- Always output your reasoning and then the tool and Cypher query (if any).
-- For graph visualization, return complete nodes and relationships, not just properties.
-- If the user requests counts and the result is unexpectedly low, try admin-level count:
-    CALL db.stats.retrieve('GRAPH COUNTS') YIELD data RETURN data['NodeCount'] AS node_count
-- If the user asks for schema, always use get_neo4j_schema.
-- For ambiguous requests, ask clarifying questions or choose the safest tool.
-- Always include proper whitespace between Cypher clauses.
-
-CYPHER GENERATION GUIDELINES (for accuracy):
-- Use only node labels, relationship types, and properties that are present in the schema provided.
-- Do not invent or assume labels, properties, or relationship types.
-- If the user request is ambiguous or refers to unknown elements, ask for clarification instead of guessing.
-- Use double quotes for all string values.
-- Follow correct capitalization for properties, labels, and relationships as they appear in the schema.
-- Always use explicit and precise patterns for matching, filtering, and returning results.
-- Use MATCH to specify node and relationship patterns.
-- Use WHERE for property-based filtering with operators such as =, >, <, <>, CONTAINS, STARTS WITH, and ENDS WITH.
-- Use RETURN to specify explicit fields. Avoid RETURN * unless the schema is very small and well known.
-- Use ORDER BY, LIMIT, and DISTINCT as required by the user's request.
-- Use aggregation functions like COUNT, SUM, AVG, MIN, MAX for summary queries.
-- Use OPTIONAL MATCH for optional relationships.
-- For multi-pattern queries, separate patterns with commas in the MATCH clause.
-- When the user requests multiple conditions, combine them logically in the WHERE clause.
-
-FEW-SHOT EXAMPLES:
-
-User: How many nodes are in the graph?
-Tool: read_neo4j_cypher
-Query: MATCH (n) RETURN count(n) AS node_count
+EXAMPLES:
 
 User: Show me all Person nodes
 Tool: read_neo4j_cypher
 Query: MATCH (n:Person) RETURN n LIMIT 25
 
-User: Display relationships between people
-Tool: read_neo4j_cypher
-Query: MATCH (a:Person)-[r]->(b:Person) RETURN a, r, b LIMIT 30
-
-User: Show me the network structure
-Tool: read_neo4j_cypher
-Query: MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 50
-
-User: Visualize employees and departments
+User: How many nodes are there?
 Tool: read_neo4j_cypher  
-Query: MATCH (e:Employee)-[r:WORKS_IN]->(d:Department) RETURN e, r, d
+Query: MATCH (n) RETURN count(n) AS node_count
 
-User: Create a Person named Alice and show it
+User: Create a person named John
 Tool: write_neo4j_cypher
-Query: CREATE (n:Person {name: "Alice", created_at: datetime()}) RETURN n
+Query: CREATE (n:Person {name: "John"}) RETURN n
 
-User: Connect Alice to Bob and visualize
-Tool: write_neo4j_cypher
-Query: MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[r:KNOWS {created_at: datetime()}]->(b) RETURN a, r, b
-
-User: Show the database schema
+User: What is the database schema?
 Tool: get_neo4j_schema
 
-User: What are the node types in my graph?
-Tool: get_neo4j_schema
-
-User: Find all movies released after 2015
-Tool: read_neo4j_cypher
-Query: MATCH (m:Movie) WHERE m.released > 2015 RETURN m LIMIT 30
-
-User: Get all actors who acted in "Inception"
-Tool: read_neo4j_cypher
-Query: MATCH (a:Person)-[:ACTED_IN]->(m:Movie {title: "Inception"}) RETURN a, m
-
-User: Show the top 5 movies by box office revenue
-Tool: read_neo4j_cypher
-Query: MATCH (m:Movie) RETURN m ORDER BY m.boxOffice DESC LIMIT 5
-
-User: Find people who acted and directed the same movie
-Tool: read_neo4j_cypher
-Query: MATCH (p:Person)-[:ACTED_IN]->(m:Movie)<-[:DIRECTED]-(p) RETURN p, m LIMIT 20
-
-ERROR PREVENTION:
-- Never run write queries using read_neo4j_cypher.
-- Never use read_neo4j_cypher for CREATE, UPDATE, DELETE operations.
-- Always validate query safety before execution.
-- If the user's request does not provide enough information, respond with: "Unable to generate Cypher: Insufficient information."
-- If the user requests a label, relationship, or property not present in the schema, respond with: "Unable to generate Cypher: Entity or property not in schema."
-
-RESPONSE FORMAT:
-1. First, explain your reasoning for tool selection and query design
-2. State the Tool and Query clearly
-3. After execution, provide a clear summary of what was accomplished and what the results mean
-
-ALLOWED TOOLS: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema
-
-ALWAYS explain your reasoning before selecting the tool and generating the query, and provide a clear summary of results after execution.
-"""
+Always respond with Tool: and Query: on separate lines."""
 
 # Cortex LLM configuration
 API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
@@ -306,7 +201,7 @@ API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
 MODEL = "llama3.1-70b"
 
 def cortex_llm(prompt: str, session_id: str) -> str:
-    """Call the Cortex LLM API"""
+    """Call the Cortex LLM API with enhanced debugging"""
     headers = {
         "Authorization": f'Snowflake Token="{API_KEY}"',
         "Content-Type": "application/json"
@@ -328,37 +223,115 @@ def cortex_llm(prompt: str, session_id: str) -> str:
     }
     
     try:
+        logger.info(f"🔄 Calling Cortex LLM with prompt: {prompt[:100]}...")
         resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
         resp.raise_for_status()
-        return resp.text.partition("end_of_stream")[0].strip()
+        
+        # Enhanced response parsing with debugging
+        raw_response = resp.text
+        logger.info(f"📥 Raw Cortex response length: {len(raw_response)}")
+        logger.info(f"📥 Raw response preview: {raw_response[:200]}...")
+        
+        # Try different parsing approaches
+        if "end_of_stream" in raw_response:
+            parsed_response = raw_response.partition("end_of_stream")[0].strip()
+            logger.info(f"✂️ Parsed response (end_of_stream): {parsed_response[:200]}...")
+        else:
+            parsed_response = raw_response.strip()
+            logger.info(f"✂️ Parsed response (full): {parsed_response[:200]}...")
+        
+        return parsed_response
+        
     except Exception as e:
-        logger.error(f"Cortex LLM API error: {e}")
+        logger.error(f"❌ Cortex LLM API error: {e}")
         return f"Error calling Cortex LLM: {str(e)}"
 
 def parse_llm_output(llm_output):
-    """Parse LLM output to extract tool and query"""
+    """Enhanced parsing with better debugging and fallback logic"""
     allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
     trace = llm_output.strip()
     tool = None
     query = None
     
-    # Extract tool
-    tool_match = re.search(r"Tool:\s*([\w_]+)", llm_output, re.I)
-    if tool_match:
-        tname = tool_match.group(1).strip()
-        if tname in allowed_tools:
-            tool = tname
+    logger.info(f"🔍 Parsing LLM output (length: {len(llm_output)})")
+    logger.info(f"🔍 LLM output preview: {llm_output[:300]}...")
     
-    # Extract query - handle multi-line queries better
-    query_match = re.search(r"Query:\s*(.+?)(?:\n\n|\n[A-Z]|$)", llm_output, re.I | re.DOTALL)
-    if query_match:
-        query = query_match.group(1).strip()
+    # Multiple patterns to try for tool extraction
+    tool_patterns = [
+        r"Tool:\s*([\w_]+)",           # Standard format
+        r"**Tool:**\s*([\w_]+)",       # Bold format
+        r"Tool\s*=\s*([\w_]+)",        # Assignment format
+        r"Selected tool:\s*([\w_]+)",  # Alternative format
+        r"Using tool:\s*([\w_]+)",     # Another alternative
+        r"I'll use:\s*([\w_]+)",       # Natural language
+    ]
+    
+    for pattern in tool_patterns:
+        tool_match = re.search(pattern, llm_output, re.I)
+        if tool_match:
+            tname = tool_match.group(1).strip()
+            logger.info(f"🎯 Found tool candidate: '{tname}' using pattern: {pattern}")
+            if tname in allowed_tools:
+                tool = tname
+                logger.info(f"✅ Valid tool found: {tool}")
+                break
+            else:
+                logger.warning(f"⚠️ Invalid tool: '{tname}' not in {allowed_tools}")
+    
+    # Multiple patterns for query extraction
+    query_patterns = [
+        r"Query:\s*(.+?)(?:\n\n|\n[A-Z]|$)",      # Standard format
+        r"**Query:**\s*(.+?)(?:\n\n|\n[A-Z]|$)",  # Bold format
+        r"Query\s*=\s*(.+?)(?:\n\n|\n[A-Z]|$)",   # Assignment format
+        r"Cypher:\s*(.+?)(?:\n\n|\n[A-Z]|$)",     # Alternative format
+        r"```cypher\s*(.+?)\s*```",               # Code block format
+        r"```\s*(.+?)\s*```",                     # Generic code block
+    ]
+    
+    for pattern in query_patterns:
+        query_match = re.search(pattern, llm_output, re.I | re.DOTALL)
+        if query_match:
+            query = query_match.group(1).strip()
+            logger.info(f"🎯 Found query candidate using pattern: {pattern}")
+            logger.info(f"🎯 Query preview: {query[:100]}...")
+            if query and len(query) > 3:  # Basic validation
+                logger.info(f"✅ Valid query found")
+                break
+    
+    # Fallback logic for common patterns
+    if not tool:
+        logger.warning("⚠️ No tool found, attempting fallback logic...")
+        
+        # Check for common keywords to infer tool
+        lower_output = llm_output.lower()
+        if any(word in lower_output for word in ["show", "display", "find", "get", "match", "return", "count"]):
+            tool = "read_neo4j_cypher"
+            logger.info(f"🔄 Fallback: Inferred tool as {tool} based on read keywords")
+        elif any(word in lower_output for word in ["create", "add", "insert", "update", "set", "delete", "merge"]):
+            tool = "write_neo4j_cypher"
+            logger.info(f"🔄 Fallback: Inferred tool as {tool} based on write keywords")
+        elif any(word in lower_output for word in ["schema", "structure", "types", "labels", "properties"]):
+            tool = "get_neo4j_schema"
+            logger.info(f"🔄 Fallback: Inferred tool as {tool} based on schema keywords")
+    
+    # Fallback query generation if tool found but no query
+    if tool and not query and tool != "get_neo4j_schema":
+        logger.warning("⚠️ Tool found but no query, attempting to generate fallback query...")
+        
+        if tool == "read_neo4j_cypher":
+            query = "MATCH (n) RETURN n LIMIT 25"
+            logger.info(f"🔄 Fallback query generated: {query}")
+        elif tool == "write_neo4j_cypher":
+            query = "// No specific query could be generated"
+            logger.info(f"🔄 Fallback query placeholder: {query}")
+    
+    logger.info(f"🎯 Final parsing results - Tool: {tool}, Query: {query[:50] if query else 'None'}...")
     
     return tool, query, trace
 
 def select_tool_node(state: AgentState) -> dict:
-    """Node to select tool and generate query using LLM"""
-    logger.info(f"Processing question: {state.question}")
+    """Enhanced tool selection with better error handling"""
+    logger.info(f"🤔 Processing question: {state.question}")
     
     try:
         llm_output = cortex_llm(state.question, state.session_id)
@@ -368,7 +341,7 @@ def select_tool_node(state: AgentState) -> dict:
         if query and tool == "read_neo4j_cypher":
             query = optimize_query_for_visualization(query, state.node_limit)
         
-        logger.info(f"LLM selected tool: {tool}, query: {query[:100] if query else 'None'}")
+        logger.info(f"✅ Tool selection complete - Tool: {tool}, Query: {query[:100] if query else 'None'}")
         
         return {
             "question": state.question,
@@ -381,7 +354,7 @@ def select_tool_node(state: AgentState) -> dict:
             "node_limit": state.node_limit
         }
     except Exception as e:
-        logger.error(f"Error in select_tool_node: {e}")
+        logger.error(f"❌ Error in select_tool_node: {e}")
         return {
             "question": state.question,
             "session_id": state.session_id,
@@ -394,35 +367,42 @@ def select_tool_node(state: AgentState) -> dict:
         }
 
 def execute_tool_node(state: AgentState) -> dict:
-    """Node to execute the selected tool with enhanced graph support and AI summaries"""
+    """Enhanced tool execution with better debugging"""
     tool = state.tool
     query = state.query
     trace = state.trace
     node_limit = state.node_limit
-    session_id = state.session_id
     answer = ""
     graph_data = None
     
     valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     
-    logger.info(f"Executing tool: {tool} with node limit: {node_limit}")
+    logger.info(f"⚡ Executing tool: '{tool}' with node limit: {node_limit}")
+    logger.info(f"🔧 Query: {query[:200] if query else 'None'}...")
     
     try:
         if not tool:
-            answer = "⚠️ I couldn't determine the right tool for your question. Try asking about viewing data, making changes, or exploring the database schema."
+            logger.error("❌ No tool selected")
+            answer = "⚠️ I couldn't determine the right tool for your question. Please check the logs for debugging information. Try asking about viewing data, making changes, or exploring the database schema."
         elif tool not in valid_tools:
+            logger.error(f"❌ Invalid tool: {tool}")
             answer = f"⚠️ Tool '{tool}' not recognized. Available tools: {', '.join(valid_tools)}"
         elif tool == "get_neo4j_schema":
+            logger.info("📋 Calling get_neo4j_schema endpoint...")
             result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers, timeout=30)
             if result.ok:
-                answer, graph_data = format_response_with_graph(result.json(), tool, node_limit, session_id, query)
+                answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
+                logger.info("✅ Schema retrieval successful")
             else:
+                logger.error(f"❌ Schema query failed: {result.status_code} - {result.text}")
                 answer = f"❌ Schema query failed: {result.text}"
         elif tool == "read_neo4j_cypher":
             if not query or not query.strip():
+                logger.error("❌ No query provided for read operation")
                 answer = "⚠️ I couldn't generate a valid query for your question. Try rephrasing or being more specific about what you want to see."
             else:
+                logger.info("📖 Executing read query...")
                 query_clean = clean_cypher_query(query)
                 data = {
                     "query": query_clean, 
@@ -431,13 +411,17 @@ def execute_tool_node(state: AgentState) -> dict:
                 }
                 result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=45)
                 if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit, session_id, query_clean)
+                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
+                    logger.info("✅ Read query successful")
                 else:
+                    logger.error(f"❌ Read query failed: {result.status_code} - {result.text}")
                     answer = f"❌ Query failed: {result.text}"
         elif tool == "write_neo4j_cypher":
             if not query or not query.strip():
+                logger.error("❌ No query provided for write operation")
                 answer = "⚠️ I couldn't generate a valid modification query. Please be more specific about what you want to create, update, or delete."
             else:
+                logger.info("✏️ Executing write query...")
                 query_clean = clean_cypher_query(query)
                 data = {
                     "query": query_clean, 
@@ -446,21 +430,26 @@ def execute_tool_node(state: AgentState) -> dict:
                 }
                 result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers, timeout=45)
                 if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit, session_id, query_clean)
+                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
+                    logger.info("✅ Write query successful")
                 else:
+                    logger.error(f"❌ Write query failed: {result.status_code} - {result.text}")
                     answer = f"❌ Update failed: {result.text}"
         else:
+            logger.error(f"❌ Unknown tool: {tool}")
             answer = f"❌ Unknown tool: {tool}"
     
     except requests.exceptions.Timeout:
+        logger.error("⏰ Request timed out")
         answer = "⚠️ Query timed out. Try a simpler query or reduce the data scope."
     except requests.exceptions.ConnectionError:
+        logger.error("🔌 Connection error")
         answer = "⚠️ Cannot connect to the database server. Please check if all services are running."
     except Exception as e:
-        logger.error(f"Error in execute_tool_node: {e}")
+        logger.error(f"💥 Unexpected error in execute_tool_node: {e}")
         answer = f"⚠️ Execution failed: {str(e)}"
     
-    logger.info(f"Tool execution completed. Graph data: {'Yes' if graph_data else 'No'}")
+    logger.info(f"🏁 Tool execution completed. Graph data: {'Yes' if graph_data else 'No'}")
     
     return {
         "question": state.question,
@@ -490,7 +479,7 @@ def build_agent():
     
     # Compile and return
     agent = workflow.compile()
-    logger.info("LangGraph agent built successfully for split-screen interface")
+    logger.info("🚀 LangGraph agent built successfully for split-screen interface")
     return agent
 
 # For testing purposes
@@ -509,4 +498,4 @@ if __name__ == "__main__":
         result = await agent.ainvoke(test_state)
         print("Test Result:", result)
     
-    # asyncio.run(test())c
+    # asyncio.run(test())
