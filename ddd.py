@@ -186,7 +186,9 @@ def init_session_state():
         "last_response": None,
         "session_id": str(uuid.uuid4()),
         "connection_status": "unknown",
-        "detailed_analysis": None
+        "detailed_analysis": None,
+        "last_read_query": None,  # Store the last successful read query
+        "last_read_params": {}    # Store parameters for the last read query
     }
     
     for key, default_value in defaults.items():
@@ -1132,7 +1134,7 @@ with col1:
         "Count all nodes in database",
         "Show companies and employees",
         "Create a person named John",
-        "Create a company called TechStart"
+        "Create relationship between Alice and Bob"
     ]
     
     for i, suggestion in enumerate(suggestions):
@@ -1193,29 +1195,58 @@ with col1:
         result = call_agent_api(user_question.strip(), node_limit)
         
         if result:
-            # Generate detailed analysis
-            detailed_analysis = None
-            if result.get("graph_data"):
+            # Check if this is a read query that returned graph data
+            if result.get("tool") == "read_neo4j_cypher" and result.get("graph_data"):
+                # Store this as the last successful read query for future reference
+                st.session_state.last_read_query = result.get("query", "")
+                st.session_state.last_read_params = {"node_limit": node_limit}
+                st.session_state.graph_data = result["graph_data"]
+                
+                # Generate detailed analysis
                 detailed_analysis = generate_detailed_analysis(
                     result["graph_data"], 
                     user_question.strip(), 
                     result.get("answer", "")
                 )
                 st.session_state.detailed_analysis = detailed_analysis
-                # Update graph data with new results
-                st.session_state.graph_data = result["graph_data"]
-            else:
-                # For non-graph queries (like create operations), try to fetch updated graph
-                # This ensures the graph refreshes with any new data created
-                if any(keyword in user_question.lower() for keyword in ['create', 'add', 'insert', 'merge', 'delete', 'remove', 'update', 'set']):
-                    # After a write operation, get a sample of the current graph state
-                    refresh_result = call_agent_api("Show me a sample of the current database with relationships", 30)
+                
+            elif result.get("tool") == "write_neo4j_cypher":
+                # For write operations, re-execute the last read query to maintain context
+                if st.session_state.last_read_query:
+                    st.info("🔄 Refreshing graph with previous view context...")
+                    
+                    # Re-execute the last successful read query
+                    refresh_result = call_agent_api(
+                        f"Execute this query to refresh the view: {st.session_state.last_read_query}", 
+                        st.session_state.last_read_params.get("node_limit", node_limit)
+                    )
+                    
                     if refresh_result and refresh_result.get("graph_data"):
                         st.session_state.graph_data = refresh_result["graph_data"]
-                        st.info("🔄 Graph refreshed to show updated database state")
+                        # Generate analysis for the refreshed view
+                        detailed_analysis = generate_detailed_analysis(
+                            refresh_result["graph_data"], 
+                            f"Refreshed view after: {user_question.strip()}", 
+                            result.get("answer", "")
+                        )
+                        st.session_state.detailed_analysis = detailed_analysis
+                        st.success("✅ Graph refreshed with previous view context!")
+                    else:
+                        st.warning("Could not refresh previous view, showing write operation result")
+                        if result.get("graph_data"):
+                            st.session_state.graph_data = result["graph_data"]
+                else:
+                    # No previous read query, try to show the write result or get a sample
+                    if result.get("graph_data"):
+                        st.session_state.graph_data = result["graph_data"]
+                    else:
+                        # Get a basic sample to show something
+                        sample_result = call_agent_api("Show me a sample of current database", 30)
+                        if sample_result and sample_result.get("graph_data"):
+                            st.session_state.graph_data = sample_result["graph_data"]
             
             # Create comprehensive history entry
-            history_entry = create_detailed_history_entry(user_question.strip(), result, detailed_analysis)
+            history_entry = create_detailed_history_entry(user_question.strip(), result, st.session_state.detailed_analysis)
             st.session_state.conversation_history.append(history_entry)
             
             st.session_state.last_response = result
@@ -1341,8 +1372,13 @@ with col1:
         st.info("💡 No analysis history yet. Run some queries to build your detailed tracking history!")
     
     if st.button("🗑️ Clear All History & Data", use_container_width=True):
-        for key in ["conversation_history", "graph_data", "last_response", "detailed_analysis"]:
-            st.session_state[key] = [] if key == "conversation_history" else None
+        for key in ["conversation_history", "graph_data", "last_response", "detailed_analysis", "last_read_query", "last_read_params"]:
+            if key == "conversation_history":
+                st.session_state[key] = []
+            elif key == "last_read_params":
+                st.session_state[key] = {}
+            else:
+                st.session_state[key] = None
         st.success("🧹 All history and data cleared!")
         st.rerun()
 
@@ -1430,9 +1466,15 @@ with col2:
             legend = create_simple_legend(nodes, relationships)
             st.markdown(legend, unsafe_allow_html=True)
         
+        # Show current context info if available
+        if st.session_state.last_read_query:
+            with st.expander("🔍 Current Graph Context", expanded=False):
+                st.info(f"Graph is showing results from: **{st.session_state.last_read_query}**")
+                st.write("Write operations (create/update/delete) will refresh this view to show changes.")
+        
         # Render graph
         st.markdown("#### 🎨 Interactive Network Visualization")
-        st.info("💡 **Auto-refresh**: Graph automatically updates when you create/modify nodes or relationships!")
+        st.info("💡 **Context Preserved**: After create/update operations, graph maintains your previous view and shows the changes!")
         success = render_working_graph(st.session_state.graph_data)
         
         if success:
@@ -1440,61 +1482,6 @@ with col2:
                 st.markdown(f'<div class="success-box">🎉 <strong>Success!</strong> Interactive graph displays {len(nodes)} named nodes connected by {len(relationships)} colored relationship lines! All details tracked in analysis history.</div>', unsafe_allow_html=True)
             else:
                 st.markdown('<div class="warning-box">ℹ️ Graph shows isolated nodes - no relationships found in current dataset</div>', unsafe_allow_html=True)
-            
-            # Enhanced controls
-            col_a, col_b, col_c, col_d = st.columns(4)
-            with col_a:
-                if st.button("🔄 Refresh Analysis", use_container_width=True):
-                    if st.session_state.graph_data:
-                        detailed_analysis = generate_detailed_analysis(
-                            st.session_state.graph_data, 
-                            "Manual refresh analysis", 
-                            "Analysis refreshed"
-                        )
-                        st.session_state.detailed_analysis = detailed_analysis
-                    st.rerun()
-            with col_b:
-                if st.button("🔄 Refresh Graph", use_container_width=True):
-                    # Get fresh data from database
-                    refresh_result = call_agent_api("Show me current database state with relationships", node_limit=50)
-                    if refresh_result and refresh_result.get("graph_data"):
-                        st.session_state.graph_data = refresh_result["graph_data"]
-                        detailed_analysis = generate_detailed_analysis(
-                            refresh_result["graph_data"], 
-                            "Database refresh", 
-                            refresh_result.get("answer", "")
-                        )
-                        st.session_state.detailed_analysis = detailed_analysis
-                        st.success("🔄 Graph refreshed with latest database state!")
-                        st.rerun()
-                    else:
-                        st.warning("Could not refresh graph data")
-            with col_c:
-                if st.button("🌐 Full Network Study", use_container_width=True):
-                    result = call_agent_api("Conduct comprehensive network analysis with detailed insights", node_limit=50)
-                    if result and result.get("graph_data"):
-                        st.session_state.graph_data = result["graph_data"]
-                        detailed_analysis = generate_detailed_analysis(
-                            result["graph_data"], 
-                            "Full network study", 
-                            result.get("answer", "")
-                        )
-                        st.session_state.detailed_analysis = detailed_analysis
-                        
-                        # Add to history
-                        history_entry = create_detailed_history_entry("Full network study", result, detailed_analysis)
-                        st.session_state.conversation_history.append(history_entry)
-                        st.rerun()
-            with col_d:
-                if st.button("📊 Export Analysis", use_container_width=True):
-                    if st.session_state.detailed_analysis:
-                        analysis_json = json.dumps(st.session_state.detailed_analysis, indent=2, default=str)
-                        st.download_button(
-                            label="📥 Download Analysis",
-                            data=analysis_json,
-                            file_name=f"neo4j_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json"
-                        )
         else:
             st.error("❌ Graph rendering failed. Check the debug information above.")
     
