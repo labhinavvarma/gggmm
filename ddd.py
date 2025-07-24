@@ -7,6 +7,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
 
+# Correct MCP imports
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_neo4j_server")
 
@@ -20,19 +25,17 @@ driver: AsyncDriver = AsyncGraphDatabase.driver(
     NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
 )
 
+# Initialize MCP Server properly
+server = Server("neo4j-mcp-server")
+
 # FastAPI app
-app = FastAPI(title="Enhanced Neo4j Server with MCP Support", version="1.0.0")
+app = FastAPI(title="MCP Neo4j Server with FastAPI", version="1.0.0")
 
 # Pydantic models for FastAPI
 class CypherRequest(BaseModel):
     query: str
     params: dict = {}
     node_limit: int = 5000
-
-class Neo4jResult(BaseModel):
-    data: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
-    graph_data: Optional[Dict[str, Any]] = None
 
 # Utility functions
 def extract_graph_data_optimized(records, node_limit=2000):
@@ -189,21 +192,31 @@ async def _write(tx: AsyncTransaction, query: str, params: dict):
     return await tx.run(query, params)
 
 # =============================================================================
-# ENHANCED NEO4J FUNCTIONS (MCP-Style but as regular functions)  
+# MCP TOOLS SECTION WITH PROPER @server.tool() DECORATORS
 # =============================================================================
 
-async def read_neo4j_cypher_tool(
+@server.tool()
+async def read_neo4j_cypher(
     query: str,
-    params: Optional[Dict[str, Any]] = None,
+    params: Optional[str] = None,
     node_limit: int = 5000
-) -> Dict[str, Any]:
+) -> str:
     """
     Execute a read-only Cypher query against the Neo4j database.
-    Enhanced with better error handling and validation.
+    
+    Args:
+        query: The Cypher query to execute (must be read-only)
+        params: Optional JSON string of parameters for the query
+        node_limit: Maximum number of nodes to return for visualization
+    
+    Returns:
+        JSON string containing query results, metadata, and optional graph data
     """
     try:
         start_time = datetime.now()
-        params = params or {}
+        
+        # Parse params if provided
+        parsed_params = json.loads(params) if params else {}
         
         # Validate that this is a read-only query
         write_keywords = ['CREATE', 'MERGE', 'SET', 'DELETE', 'REMOVE', 'DROP']
@@ -211,10 +224,10 @@ async def read_neo4j_cypher_tool(
         if any(keyword in query_upper for keyword in write_keywords):
             raise ValueError("Write operations not allowed in read_neo4j_cypher. Use write_neo4j_cypher instead.")
         
-        logger.info(f"🔍 Executing read query: {query[:100]}...")
+        logger.info(f"🔍 MCP: Executing read query: {query[:100]}...")
         
         async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.execute_read(_read, query, params)
+            result = await session.execute_read(_read, query, parsed_params)
         
         end_time = datetime.now()
         execution_time = (end_time - start_time).total_seconds()
@@ -225,7 +238,7 @@ async def read_neo4j_cypher_tool(
         graph_data = None
         try:
             async with driver.session(database=NEO4J_DATABASE) as session:
-                viz_result = await session.execute_read(_read_for_viz, query, params)
+                viz_result = await session.execute_read(_read_for_viz, query, parsed_params)
             graph_data = extract_graph_data_optimized(viz_result, node_limit)
         except Exception as e:
             logger.warning(f"Could not extract graph data: {e}")
@@ -244,35 +257,46 @@ async def read_neo4j_cypher_tool(
             "graph_data": graph_data if graph_data and (graph_data.get('nodes') or graph_data.get('relationships')) else None
         }
         
-        logger.info(f"✅ Read query completed: {len(result_data)} records, {execution_time*1000:.1f}ms")
-        return response
+        logger.info(f"✅ MCP: Read query completed: {len(result_data)} records, {execution_time*1000:.1f}ms")
+        return json.dumps(response)
         
     except Exception as e:
-        logger.error(f"❌ Error in read_neo4j_cypher: {e}")
-        return {
+        logger.error(f"❌ MCP: Error in read_neo4j_cypher: {e}")
+        error_response = {
             "success": False,
             "error": str(e),
             "query": query,
             "timestamp": datetime.now().isoformat()
         }
+        return json.dumps(error_response)
 
-async def write_neo4j_cypher_tool(
+@server.tool()
+async def write_neo4j_cypher(
     query: str,
-    params: Optional[Dict[str, Any]] = None,
+    params: Optional[str] = None,
     node_limit: int = 5000
-) -> Dict[str, Any]:
+) -> str:
     """
     Execute a write Cypher query against the Neo4j database.
-    Enhanced with change tracking and optional visualization data.
+    
+    Args:
+        query: The Cypher query to execute (CREATE, MERGE, SET, DELETE, etc.)
+        params: Optional JSON string of parameters for the query
+        node_limit: Maximum number of nodes to return for visualization
+    
+    Returns:
+        JSON string containing operation results, change summary, and optional graph data
     """
     try:
         start_time = datetime.now()
-        params = params or {}
         
-        logger.info(f"✏️  Executing write query: {query[:100]}...")
+        # Parse params if provided
+        parsed_params = json.loads(params) if params else {}
+        
+        logger.info(f"✏️  MCP: Executing write query: {query[:100]}...")
         
         async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.execute_write(_write, query, params)
+            result = await session.execute_write(_write, query, parsed_params)
         
         end_time = datetime.now()
         execution_time = (end_time - start_time).total_seconds()
@@ -280,7 +304,7 @@ async def write_neo4j_cypher_tool(
         # Format detailed change information
         change_info = format_change_summary(result._summary.counters, query, execution_time)
         
-        logger.info(f"💾 Neo4j Write Operation: {change_info['summary']}")
+        logger.info(f"💾 MCP: Neo4j Write Operation: {change_info['summary']}")
         
         response = {
             "success": True,
@@ -293,35 +317,39 @@ async def write_neo4j_cypher_tool(
         try:
             if "RETURN" in query.upper():
                 async with driver.session(database=NEO4J_DATABASE) as session:
-                    viz_result = await session.execute_read(_read_for_viz, query, params)
+                    viz_result = await session.execute_read(_read_for_viz, query, parsed_params)
                 graph_data = extract_graph_data_optimized(viz_result, node_limit)
                 response["graph_data"] = graph_data
-                logger.info(f"📊 Write operation returned graph data: {len(graph_data.get('nodes', []))} nodes")
+                logger.info(f"📊 MCP: Write operation returned graph data: {len(graph_data.get('nodes', []))} nodes")
         except Exception as e:
             logger.warning(f"Could not extract graph data from write operation: {e}")
             response["graph_data"] = None
             
-        return response
+        return json.dumps(response)
         
     except Exception as e:
-        logger.error(f"❌ Error in write_neo4j_cypher: {e}")
-        return {
+        logger.error(f"❌ MCP: Error in write_neo4j_cypher: {e}")
+        error_response = {
             "success": False,
             "error": str(e),
             "query": query,
             "timestamp": datetime.now().isoformat()
         }
+        return json.dumps(error_response)
 
-async def get_neo4j_schema_tool() -> Dict[str, Any]:
+@server.tool()
+async def get_neo4j_schema() -> str:
     """
     Get the Neo4j database schema including node labels, relationships, and properties.
-    Enhanced with better error handling and metadata.
+    
+    Returns:
+        JSON string containing the database schema information
     """
     try:
         start_time = datetime.now()
         get_schema_query = "CALL apoc.meta.schema();"
         
-        logger.info("🏗️  Retrieving database schema...")
+        logger.info("🏗️  MCP: Retrieving database schema...")
         
         async with driver.session(database=NEO4J_DATABASE) as session:
             result = await session.execute_read(_read, get_schema_query, {})
@@ -332,9 +360,9 @@ async def get_neo4j_schema_tool() -> Dict[str, Any]:
         schema_data = json.loads(result)
         schema = schema_data[0].get('value') if schema_data else {}
         
-        logger.info(f"✅ Schema retrieved: {len(schema)} node types, {execution_time*1000:.1f}ms")
+        logger.info(f"✅ MCP: Schema retrieved: {len(schema)} node types, {execution_time*1000:.1f}ms")
         
-        return {
+        response = {
             "success": True,
             "schema": schema,
             "metadata": {
@@ -346,18 +374,24 @@ async def get_neo4j_schema_tool() -> Dict[str, Any]:
             "graph_data": None
         }
         
+        return json.dumps(response)
+        
     except Exception as e:
-        logger.error(f"❌ Error in get_neo4j_schema: {e}")
-        return {
+        logger.error(f"❌ MCP: Error in get_neo4j_schema: {e}")
+        error_response = {
             "success": False,
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+        return json.dumps(error_response)
 
-async def get_graph_stats_tool() -> Dict[str, Any]:
+@server.tool()
+async def get_graph_stats() -> str:
     """
     Get comprehensive statistics about the Neo4j graph database.
-    Enhanced with better error handling and more detailed stats.
+    
+    Returns:
+        JSON string containing various graph statistics
     """
     stats_queries = [
         ("total_nodes", "MATCH (n) RETURN count(n) as count"),
@@ -371,7 +405,7 @@ async def get_graph_stats_tool() -> Dict[str, Any]:
     stats = {}
     start_time = datetime.now()
     
-    logger.info("📊 Collecting graph statistics...")
+    logger.info("📊 MCP: Collecting graph statistics...")
     
     try:
         async with driver.session(database=NEO4J_DATABASE) as session:
@@ -392,9 +426,9 @@ async def get_graph_stats_tool() -> Dict[str, Any]:
         total_nodes = stats.get('total_nodes', [{}])[0].get('count', 0)
         total_rels = stats.get('total_relationships', [{}])[0].get('count', 0)
         
-        logger.info(f"✅ Statistics collected: {total_nodes} nodes, {total_rels} relationships, {execution_time*1000:.1f}ms")
+        logger.info(f"✅ MCP: Statistics collected: {total_nodes} nodes, {total_rels} relationships, {execution_time*1000:.1f}ms")
         
-        return {
+        response = {
             "success": True,
             "stats": stats,
             "summary": {
@@ -408,18 +442,27 @@ async def get_graph_stats_tool() -> Dict[str, Any]:
             }
         }
         
+        return json.dumps(response)
+        
     except Exception as e:
-        logger.error(f"❌ Error getting graph stats: {e}")
-        return {
+        logger.error(f"❌ MCP: Error getting graph stats: {e}")
+        error_response = {
             "success": False,
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+        return json.dumps(error_response)
 
-async def get_sample_graph_tool(node_limit: int = 200) -> Dict[str, Any]:
+@server.tool()
+async def get_sample_graph(node_limit: int = 200) -> str:
     """
     Get a sample of the graph for visualization.
-    Enhanced with configurable limits and better error handling.
+    
+    Args:
+        node_limit: Maximum number of nodes to return
+    
+    Returns:
+        JSON string containing sample graph data
     """
     # Cap the node limit for performance
     safe_limit = min(node_limit, 1000)
@@ -432,7 +475,7 @@ async def get_sample_graph_tool(node_limit: int = 200) -> Dict[str, Any]:
     try:
         start_time = datetime.now()
         
-        logger.info(f"🎲 Getting sample graph with limit {safe_limit}...")
+        logger.info(f"🎲 MCP: Getting sample graph with limit {safe_limit}...")
         
         async with driver.session(database=NEO4J_DATABASE) as session:
             result = await session.execute_read(_read_for_viz, query, {})
@@ -445,9 +488,9 @@ async def get_sample_graph_tool(node_limit: int = 200) -> Dict[str, Any]:
         node_count = len(graph_data.get('nodes', []))
         rel_count = len(graph_data.get('relationships', []))
         
-        logger.info(f"✅ Sample graph retrieved: {node_count} nodes, {rel_count} relationships, {execution_time*1000:.1f}ms")
+        logger.info(f"✅ MCP: Sample graph retrieved: {node_count} nodes, {rel_count} relationships, {execution_time*1000:.1f}ms")
         
-        return {
+        response = {
             "success": True,
             "graph_data": graph_data,
             "metadata": {
@@ -461,16 +504,19 @@ async def get_sample_graph_tool(node_limit: int = 200) -> Dict[str, Any]:
             }
         }
         
+        return json.dumps(response)
+        
     except Exception as e:
-        logger.error(f"❌ Error getting sample graph: {e}")
-        return {
+        logger.error(f"❌ MCP: Error getting sample graph: {e}")
+        error_response = {
             "success": False,
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+        return json.dumps(error_response)
 
 # =============================================================================
-# FASTAPI ENDPOINTS SECTION
+# FASTAPI ENDPOINTS SECTION (Wrapper functions for MCP tools)
 # =============================================================================
 
 @app.get("/")
@@ -484,12 +530,12 @@ async def health_check():
         
         return {
             "status": "healthy", 
-            "service": "Enhanced Neo4j Server with MCP-Style Tools", 
+            "service": "Neo4j MCP Server with FastAPI", 
             "version": "2.0.0",
             "neo4j_connection": "✅ Connected",
             "database": NEO4J_DATABASE,
             "total_nodes": node_count,
-            "available_tools": [
+            "mcp_tools": [
                 "read_neo4j_cypher", 
                 "write_neo4j_cypher", 
                 "get_neo4j_schema", 
@@ -502,20 +548,27 @@ async def health_check():
     except Exception as e:
         return {
             "status": "unhealthy",
-            "service": "Enhanced Neo4j Server with MCP-Style Tools",
+            "service": "Neo4j MCP Server with FastAPI",
             "neo4j_connection": f"❌ Failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }
 
 @app.post("/read_neo4j_cypher")
 async def api_read_neo4j_cypher(request: CypherRequest):
-    """FastAPI endpoint that calls the enhanced read tool"""
+    """FastAPI endpoint that calls the MCP tool"""
     try:
-        result = await read_neo4j_cypher_tool(
+        # Convert params to JSON string for MCP tool
+        params_json = json.dumps(request.params) if request.params else None
+        
+        # Call the MCP tool
+        result_json = await read_neo4j_cypher(
             query=request.query,
-            params=request.params,
+            params=params_json,
             node_limit=request.node_limit
         )
+        
+        # Parse the result
+        result = json.loads(result_json)
         
         if not result.get("success"):
             raise HTTPException(status_code=400, detail=result.get("error"))
@@ -530,13 +583,20 @@ async def api_read_neo4j_cypher(request: CypherRequest):
 
 @app.post("/write_neo4j_cypher")
 async def api_write_neo4j_cypher(request: CypherRequest):
-    """FastAPI endpoint that calls the enhanced write tool"""
+    """FastAPI endpoint that calls the MCP tool"""
     try:
-        result = await write_neo4j_cypher_tool(
+        # Convert params to JSON string for MCP tool
+        params_json = json.dumps(request.params) if request.params else None
+        
+        # Call the MCP tool
+        result_json = await write_neo4j_cypher(
             query=request.query,
-            params=request.params,
+            params=params_json,
             node_limit=request.node_limit
         )
+        
+        # Parse the result
+        result = json.loads(result_json)
         
         if not result.get("success"):
             raise HTTPException(status_code=400, detail=result.get("error"))
@@ -551,9 +611,13 @@ async def api_write_neo4j_cypher(request: CypherRequest):
 
 @app.post("/get_neo4j_schema")
 async def api_get_neo4j_schema():
-    """FastAPI endpoint that calls the enhanced schema tool"""
+    """FastAPI endpoint that calls the MCP tool"""
     try:
-        result = await get_neo4j_schema_tool()
+        # Call the MCP tool
+        result_json = await get_neo4j_schema()
+        
+        # Parse the result
+        result = json.loads(result_json)
         
         if not result.get("success"):
             raise HTTPException(status_code=400, detail=result.get("error"))
@@ -568,9 +632,13 @@ async def api_get_neo4j_schema():
 
 @app.get("/graph_stats")
 async def api_get_graph_stats():
-    """FastAPI endpoint that calls the enhanced stats tool"""
+    """FastAPI endpoint that calls the MCP tool"""
     try:
-        result = await get_graph_stats_tool()
+        # Call the MCP tool
+        result_json = await get_graph_stats()
+        
+        # Parse the result
+        result = json.loads(result_json)
         
         if not result.get("success"):
             raise HTTPException(status_code=400, detail=result.get("error"))
@@ -585,9 +653,13 @@ async def api_get_graph_stats():
 
 @app.get("/sample_graph")
 async def api_get_sample_graph(node_limit: int = 200):
-    """FastAPI endpoint that calls the enhanced sample graph tool"""
+    """FastAPI endpoint that calls the MCP tool"""
     try:
-        result = await get_sample_graph_tool(node_limit=node_limit)
+        # Call the MCP tool
+        result_json = await get_sample_graph(node_limit=node_limit)
+        
+        # Parse the result
+        result = json.loads(result_json)
         
         if not result.get("success"):
             raise HTTPException(status_code=400, detail=result.get("error"))
@@ -626,17 +698,36 @@ async def optimize_query_for_limit(node_limit: int, query: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # =============================================================================
-# MAIN EXECUTION
+# MCP SERVER SETUP
 # =============================================================================
+
+async def run_mcp_server():
+    """Run the MCP server"""
+    logger.info("🚀 Starting Neo4j MCP Server with @server.tool() decorators...")
+    logger.info("🔧 MCP Tools: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema, get_graph_stats, get_sample_graph")
+    
+    # Run the server using stdio transport
+    async with server:
+        await stdio_server(server)
 
 def run_fastapi_server():
     """Run the FastAPI server"""
     import uvicorn
-    logger.info("🚀 Starting Enhanced Neo4j FastAPI Server...")
-    logger.info("🔧 Enhanced Tools: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema, get_graph_stats, get_sample_graph")
+    logger.info("🚀 Starting Neo4j FastAPI Server with MCP Tools...")
+    logger.info("🔧 FastAPI endpoints wrapping MCP tools with @server.tool() decorators")
     logger.info(f"🔗 Neo4j Connection: {NEO4J_URI}")
-    logger.info("📊 Features: Enhanced error handling, better logging, graph visualization support")
     uvicorn.run("mcpserver:app", host="0.0.0.0", port=8000, reload=True)
 
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
 if __name__ == "__main__":
-    run_fastapi_server()
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        # Run as MCP server
+        asyncio.run(run_mcp_server())
+    else:
+        # Run as FastAPI server (default)
+        run_fastapi_server()
