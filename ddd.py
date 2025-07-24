@@ -169,7 +169,7 @@ init_session_state()
 
 # Header
 st.markdown('<h1 class="main-header">🕸️ Neo4j Graph Explorer</h1>', unsafe_allow_html=True)
-st.markdown('<p style="text-align: center; color: #6c757d; font-size: 1.2rem;"><strong>🎨 Enhanced with Detailed Analysis & History</strong> • <strong>🔍 Complete Query Tracking</strong></p>', unsafe_allow_html=True)
+st.markdown('<p style="text-align: center; color: #6c757d; font-size: 1.2rem;"><strong>🔍 Complete Query Tracking</strong> • <strong>📊 Detailed Analysis</strong></p>', unsafe_allow_html=True)
 
 def call_agent_api(question: str, node_limit: int = 50) -> dict:
     """Enhanced API call function with better response tracking"""
@@ -1038,50 +1038,16 @@ def render_working_graph(graph_data: dict) -> bool:
 col1, col2 = st.columns([1, 2], gap="large")
 
 with col1:
-    st.markdown("### 💬 Enhanced Chat Interface")
+    st.markdown("### 💬 Chat Interface")
     
     # Status
     status_colors = {"connected": "🟢", "disconnected": "🔴", "unknown": "⚪"}
     st.markdown(f'<div class="success-box"><strong>API Status:</strong> {status_colors.get(st.session_state.connection_status, "⚪")} {st.session_state.connection_status}</div>', unsafe_allow_html=True)
     
-    # Quick actions
-    st.markdown("#### 🚀 Intelligent Quick Actions")
-    quick_actions = [
-        ("🌟 Comprehensive Analysis", "Show me all nodes with detailed analysis and relationships"),
-        ("👥 Social Network Analysis", "Analyze all Person nodes and their social connections"),
-        ("🏢 Business Network Study", "Examine Company nodes and business relationships"),
-        ("📊 Complete Database Audit", "Provide comprehensive database overview with insights"),
-        ("🎯 Smart Sample Analysis", "Show intelligent sample with detailed breakdown")
-    ]
-    
-    for action_name, action_query in quick_actions:
-        if st.button(action_name, key=f"quick_{action_name}"):
-            result = call_agent_api(action_query, node_limit=30)
-            if result:
-                # Generate detailed analysis
-                if result.get("graph_data"):
-                    detailed_analysis = generate_detailed_analysis(
-                        result["graph_data"], 
-                        action_query, 
-                        result.get("answer", "")
-                    )
-                    st.session_state.detailed_analysis = detailed_analysis
-                
-                # Create comprehensive history entry
-                history_entry = create_detailed_history_entry(action_query, result, detailed_analysis)
-                st.session_state.conversation_history.append(history_entry)
-                
-                if result.get("graph_data"):
-                    st.session_state.graph_data = result["graph_data"]
-                    st.success("✅ Comprehensive analysis complete!")
-                
-                st.session_state.last_response = result
-                st.rerun()
-    
-    st.divider()
+
     
     # Question input
-    st.markdown("#### ✍️ Ask Your Detailed Question")
+    st.markdown("#### ✍️ Ask Your Question")
     st.info("💡 All queries are tracked with full details including Cypher queries and comprehensive analysis!")
     
     with st.form("question_form", clear_on_submit=True):
@@ -1128,7 +1094,7 @@ with col1:
     st.divider()
     
     # Test data
-    if st.button("🧪 Load Enhanced Test Dataset", use_container_width=True):
+    if st.button("🧪 Load Test Dataset", use_container_width=True):
         test_data = {
             "nodes": [
                 {"id": "person1", "labels": ["Person"], "properties": {"name": "Alice Johnson", "age": 30, "department": "Engineering", "role": "Senior Developer", "experience": 8, "salary": 120000}},
@@ -1155,12 +1121,12 @@ with col1:
         st.session_state.graph_data = test_data
         
         # Generate analysis for test data
-        detailed_analysis = generate_detailed_analysis(test_data, "Enhanced test dataset analysis", "Test data loaded")
+        detailed_analysis = generate_detailed_analysis(test_data, "Test dataset analysis", "Test data loaded")
         st.session_state.detailed_analysis = detailed_analysis
         
         # Create mock result for history
         mock_result = {
-            "answer": "Enhanced test dataset loaded with comprehensive analysis",
+            "answer": "Test dataset loaded with comprehensive analysis",
             "graph_data": test_data,
             "tool": "test_data_loader",
             "query": "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 50",
@@ -1170,14 +1136,14 @@ with col1:
         }
         
         # Add to detailed history
-        history_entry = create_detailed_history_entry("Load enhanced test dataset", mock_result, detailed_analysis)
+        history_entry = create_detailed_history_entry("Load test dataset", mock_result, detailed_analysis)
         st.session_state.conversation_history.append(history_entry)
         
-        st.success("✅ Enhanced test dataset loaded with complete tracking!")
+        st.success("✅ Test dataset loaded with complete tracking!")
         st.rerun()
     
-    # Enhanced History Section
-    st.markdown("#### 📊 Detailed Analysis History")
+    # History Section
+    st.markdown("#### 📊 Query History")
     st.markdown(f"**{len(st.session_state.conversation_history)} queries tracked** with complete details")
     
     if st.session_state.conversation_history:
@@ -1249,7 +1215,7 @@ with col2:
     if st.session_state.detailed_analysis:
         analysis = st.session_state.detailed_analysis
         
-        st.markdown("#### 🤖 Comprehensive AI Analysis")
+        st.markdown("#### 🤖 AI Analysis")
         
         # Main summary
         st.markdown(f'<div class="detailed-response-box">{analysis["summary"]}</div>', unsafe_allow_html=True)
@@ -1388,8 +1354,8 @@ with col2:
             border-radius: 15px; 
             margin: 2rem 0;
         ">
-            <h2>🎯 Enhanced Graph Explorer with Complete Tracking!</h2>
-            <p><strong>Every query is now tracked with comprehensive details!</strong></p>
+            <h2>🎯 Neo4j Graph Explorer</h2>
+            <p><strong>Complete Query Tracking & Analysis</strong></p>
             
             <div style="background: rgba(255,255,255,0.1); padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
                 <h3>📊 What's Tracked in History:</h3>
@@ -1419,7 +1385,7 @@ st.markdown("""
     margin-top: 2rem;
 ">
     <h4 style="margin: 0; background: linear-gradient(90deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-        🚀 Neo4j Graph Explorer - Complete Tracking Edition
+        🚀 Neo4j Graph Explorer
     </h4>
     <p style="margin: 0.5rem 0;">🔧 Cypher Queries • 📊 Detailed History • 🧠 AI Analysis • 💾 Export Capabilities</p>
 </div>
