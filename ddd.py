@@ -1,2 +1,2 @@
-MATCH (eda:Subsidiary {name: "EDA"})-[rel]-(eai:Subsidiary {name: "EAI"})
-RETURN type(rel) AS relationship_type, properties(rel) AS relationship_properties
+MATCH (eda:Group {name: "EDA"})-[rel]-(eai:Group {name: "EAI"})
+RETURN eda, rel, eai
