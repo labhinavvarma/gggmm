@@ -331,7 +331,7 @@ def create_data_summary(nodes, relationships):
         return f"Nodes: {node_summary} | No relationships"
 
 def display_detailed_history_entry(entry: dict, index: int):
-    """Display a comprehensive history entry"""
+    """Display a comprehensive history entry without nested expanders"""
     timestamp = entry.get("timestamp", "")
     question = entry.get("question", "")
     
@@ -404,19 +404,34 @@ def display_detailed_history_entry(entry: dict, index: int):
             st.markdown("**📋 Data Summary:**")
             st.code(entry["data_summary"])
         
-        # Full response (truncated)
+        # Full response section - using checkbox instead of nested expander
         if entry.get("answer"):
-            st.markdown("**🤖 AI Response (Preview):**")
+            st.markdown("**🤖 AI Response:**")
             answer_preview = entry["answer"].replace("**", "").replace("#", "")
+            
+            # Create unique key for this checkbox
+            show_full_key = f"show_full_{index}_{hash(question) % 1000}"
+            
             if len(answer_preview) > 200:
                 st.write(f"{answer_preview[:200]}...")
-                with st.expander("📖 Show Full Response", expanded=False):
+                
+                # Use checkbox to toggle full response instead of nested expander
+                show_full = st.checkbox("📖 Show Full Response", key=show_full_key)
+                if show_full:
+                    st.markdown("---")
+                    st.markdown("**Complete Response:**")
                     st.markdown(entry["answer"])
+                    st.markdown("---")
             else:
                 st.write(answer_preview)
         
-        # Technical details
-        with st.expander("🔧 Technical Details", expanded=False):
+        # Technical details section - using checkbox instead of nested expander
+        tech_details_key = f"tech_details_{index}_{hash(question) % 1000}"
+        show_tech_details = st.checkbox("🔧 Show Technical Details", key=tech_details_key)
+        
+        if show_tech_details:
+            st.markdown("---")
+            st.markdown("**Technical Details:**")
             st.write(f"**Tool Used:** {entry.get('tool_used', 'unknown')}")
             st.write(f"**Session ID:** {entry.get('trace', 'N/A')[:50]}...")
             st.write(f"**Success:** {'✅ Yes' if entry.get('success', True) else '❌ No'}")
@@ -431,6 +446,7 @@ def display_detailed_history_entry(entry: dict, index: int):
             if entry.get("graph_data") and entry["graph_data"].get("relationships"):
                 st.write("**Sample Relationship Structure:**")
                 st.json(entry["graph_data"]["relationships"][0])
+            st.markdown("---")
         
         # Action buttons for this history entry
         col_x, col_y, col_z = st.columns(3)
@@ -932,20 +948,24 @@ def render_working_graph(graph_data: dict) -> bool:
         
         st.write(f"✅ **Successfully created:** {len(simple_nodes)} nodes, {added_edges} relationships")
         
-        # Show details
-        if node_details:
-            with st.expander(f"👥 Node Names ({len(node_details)})", expanded=False):
-                for name in node_details[:10]:
-                    st.write(f"• {name}")
-                if len(node_details) > 10:
-                    st.write(f"... and {len(node_details) - 10} more")
+        # Show details with checkboxes instead of nested expanders
+        node_details_key = f"node_details_{hash(str(node_details)) % 1000}"
+        show_node_details = st.checkbox(f"👥 Show Node Names ({len(node_details)})", key=node_details_key)
         
-        if relationship_details:
-            with st.expander(f"🔗 Relationships ({len(relationship_details)})", expanded=False):
-                for rel in relationship_details[:10]:
-                    st.write(f"• {rel}")
-                if len(relationship_details) > 10:
-                    st.write(f"... and {len(relationship_details) - 10} more")
+        if show_node_details:
+            for name in node_details[:10]:
+                st.write(f"• {name}")
+            if len(node_details) > 10:
+                st.write(f"... and {len(node_details) - 10} more")
+        
+        rel_details_key = f"rel_details_{hash(str(relationship_details)) % 1000}"
+        show_rel_details = st.checkbox(f"🔗 Show Relationships ({len(relationship_details)})", key=rel_details_key)
+        
+        if show_rel_details:
+            for rel in relationship_details[:10]:
+                st.write(f"• {rel}")
+            if len(relationship_details) > 10:
+                st.write(f"... and {len(relationship_details) - 10} more")
         
         # Use VERY SIMPLE options that won't cause JSON errors
         try:
@@ -997,7 +1017,10 @@ def render_working_graph(graph_data: dict) -> bool:
     except Exception as e:
         st.error(f"❌ Graph rendering failed: {str(e)}")
         
-        with st.expander("🔍 Detailed Debug Info", expanded=True):
+        debug_details_key = f"debug_details_{hash(str(e)) % 1000}"
+        show_debug = st.checkbox("🔍 Show Detailed Debug Info", key=debug_details_key)
+        
+        if show_debug:
             st.write("**Error:**")
             st.code(str(e))
             st.write("**Full traceback:**")
@@ -1180,8 +1203,11 @@ with col1:
         for i, entry in enumerate(reversed(displayed_entries)):
             display_detailed_history_entry(entry, i)
         
-        # History statistics
-        with st.expander("📈 History Statistics", expanded=False):
+        # History statistics - using checkbox instead of nested expander
+        stats_key = f"history_stats_{len(st.session_state.conversation_history)}"
+        show_stats = st.checkbox("📈 Show History Statistics", key=stats_key)
+        
+        if show_stats:
             total_queries = len(st.session_state.conversation_history)
             total_nodes_analyzed = sum(entry.get("nodes_count", 0) for entry in st.session_state.conversation_history)
             total_relationships_analyzed = sum(entry.get("relationships_count", 0) for entry in st.session_state.conversation_history)
@@ -1242,9 +1268,12 @@ with col2:
                 st.markdown(f'<div class="insight-box">{rec}</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
         
-        # Technical details
+        # Technical details - using checkbox instead of nested expander
         if analysis.get("raw_stats"):
-            with st.expander("📊 Detailed Technical Analysis", expanded=False):
+            tech_analysis_key = f"tech_analysis_{hash(str(analysis['raw_stats'])) % 1000}"
+            show_tech_analysis = st.checkbox("📊 Show Detailed Technical Analysis", key=tech_analysis_key)
+            
+            if show_tech_analysis:
                 stats = analysis["raw_stats"]
                 st.write(f"**Network Metrics:**")
                 st.write(f"• Total Nodes: {stats['total_nodes']}")
