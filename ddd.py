@@ -1131,8 +1131,8 @@ with col1:
         "Show network connections",
         "Count all nodes in database",
         "Show companies and employees",
-        "Find isolated nodes",
-        "Display node properties"
+        "Create a person named John",
+        "Create a company called TechStart"
     ]
     
     for i, suggestion in enumerate(suggestions):
@@ -1202,16 +1202,24 @@ with col1:
                     result.get("answer", "")
                 )
                 st.session_state.detailed_analysis = detailed_analysis
+                # Update graph data with new results
+                st.session_state.graph_data = result["graph_data"]
+            else:
+                # For non-graph queries (like create operations), try to fetch updated graph
+                # This ensures the graph refreshes with any new data created
+                if any(keyword in user_question.lower() for keyword in ['create', 'add', 'insert', 'merge', 'delete', 'remove', 'update', 'set']):
+                    # After a write operation, get a sample of the current graph state
+                    refresh_result = call_agent_api("Show me a sample of the current database with relationships", 30)
+                    if refresh_result and refresh_result.get("graph_data"):
+                        st.session_state.graph_data = refresh_result["graph_data"]
+                        st.info("🔄 Graph refreshed to show updated database state")
             
             # Create comprehensive history entry
             history_entry = create_detailed_history_entry(user_question.strip(), result, detailed_analysis)
             st.session_state.conversation_history.append(history_entry)
             
-            if result.get("graph_data"):
-                st.session_state.graph_data = result["graph_data"]
-                st.success("✅ Query executed and tracked in detailed history!")
-            
             st.session_state.last_response = result
+            st.success("✅ Query executed and tracked in detailed history!")
             st.rerun()
     
     st.divider()
@@ -1424,6 +1432,7 @@ with col2:
         
         # Render graph
         st.markdown("#### 🎨 Interactive Network Visualization")
+        st.info("💡 **Auto-refresh**: Graph automatically updates when you create/modify nodes or relationships!")
         success = render_working_graph(st.session_state.graph_data)
         
         if success:
@@ -1433,7 +1442,7 @@ with col2:
                 st.markdown('<div class="warning-box">ℹ️ Graph shows isolated nodes - no relationships found in current dataset</div>', unsafe_allow_html=True)
             
             # Enhanced controls
-            col_a, col_b, col_c = st.columns(3)
+            col_a, col_b, col_c, col_d = st.columns(4)
             with col_a:
                 if st.button("🔄 Refresh Analysis", use_container_width=True):
                     if st.session_state.graph_data:
@@ -1445,6 +1454,22 @@ with col2:
                         st.session_state.detailed_analysis = detailed_analysis
                     st.rerun()
             with col_b:
+                if st.button("🔄 Refresh Graph", use_container_width=True):
+                    # Get fresh data from database
+                    refresh_result = call_agent_api("Show me current database state with relationships", node_limit=50)
+                    if refresh_result and refresh_result.get("graph_data"):
+                        st.session_state.graph_data = refresh_result["graph_data"]
+                        detailed_analysis = generate_detailed_analysis(
+                            refresh_result["graph_data"], 
+                            "Database refresh", 
+                            refresh_result.get("answer", "")
+                        )
+                        st.session_state.detailed_analysis = detailed_analysis
+                        st.success("🔄 Graph refreshed with latest database state!")
+                        st.rerun()
+                    else:
+                        st.warning("Could not refresh graph data")
+            with col_c:
                 if st.button("🌐 Full Network Study", use_container_width=True):
                     result = call_agent_api("Conduct comprehensive network analysis with detailed insights", node_limit=50)
                     if result and result.get("graph_data"):
@@ -1460,7 +1485,7 @@ with col2:
                         history_entry = create_detailed_history_entry("Full network study", result, detailed_analysis)
                         st.session_state.conversation_history.append(history_entry)
                         st.rerun()
-            with col_c:
+            with col_d:
                 if st.button("📊 Export Analysis", use_container_width=True):
                     if st.session_state.detailed_analysis:
                         analysis_json = json.dumps(st.session_state.detailed_analysis, indent=2, default=str)
