@@ -1,428 +1,384 @@
-def get_node_color(labels):
-    """Get beautiful, vibrant colors for nodes"""
-    if not labels:
-        return "#95afc0"
-    
-    label = labels[0] if isinstance(labels, list) else str(labels)
-    
-    # Beautiful high-contrast color palette
-    colors = {
-        "Person": "#FF4757",        # Bright Red
-        "User": "#5352ED",          # Bright Purple  
-        "Employee": "#3742FA",      # Royal Blue
-        "Customer": "#FF6B35",      # Bright Orange
-        "Movie": "#00D2D3",         # Cyan
-        "Film": "#00A8A8",          # Dark Cyan
-        "Actor": "#FFD700",         # Gold
-        "Director": "#9C27B0",      # Purple
-        "Producer": "#673AB7",      # Deep Purple
-        "Company": "#00BF63",       # Emerald
-        "Organization": "#00A651",  # Green
-        "Department": "#FFC107",    # Amber
-        "Product": "#E91E63",       # Pink
-        "Service": "#FF5722",       # Deep Orange
-        "Location": "#8E24AA",      # Violet
-        "City": "#7B1FA2",          # Dark Violet
-        "Country": "#6A1B9A",       # Purple
-        "Event": "#FF9800",         # Orange
-        "Project": "#4CAF50",       # Light Green
-        "Database": "#00BCD4",      # Cyan
-        "Server": "#009688",        # Teal
-        "Network": "#795548",       # Brown
-        "Group": "#607D8B",         # Blue Gray
-        "Team": "#455A64",          # Dark Blue Gray
-        "Document": "#9E9E9E",      # Gray
-        "File": "#757575",          # Dark Gray
-        "Unknown": "#B0BEC5"        # Light Blue Gray
-    }
-    
-    return colors.get(label, "#6C5CE7")
+# Enhanced system message with better general question handling
+SYS_MSG = """You are a Neo4j database expert assistant. Your job is to help users explore and interact with their graph database.
 
-def get_relationship_color(rel_type):
-    """Get beautiful colors for relationships"""
-    colors = {
-        "KNOWS": "#FF4757",         # Red
-        "FRIEND_OF": "#FF3838",     # Bright Red
-        "WORKS_FOR": "#3742FA",     # Blue
-        "WORKS_IN": "#2F3542",      # Dark Blue
-        "MANAGES": "#5352ED",       # Purple
-        "REPORTS_TO": "#8B4AE8",    # Light Purple
-        "LOCATED_IN": "#FFA502",    # Orange
-        "LIVES_IN": "#FF6348",      # Red Orange
-        "BELONGS_TO": "#2ED573",    # Green
-        "OWNS": "#1DD1A1",          # Teal
-        "CREATED": "#FFD32A",       # Yellow
-        "USES": "#FF9FF3",          # Pink
-        "ACTED_IN": "#54A0FF",      # Light Blue
-        "DIRECTED": "#5F27CD",      # Purple
-        "PRODUCED": "#00D2D3",      # Cyan
-        "LOVES": "#FF3838",         # Bright Red
-        "MARRIED_TO": "#FF6B9D",    # Pink
-        "CONNECTED": "#778CA3",     # Gray Blue
-        "RELATED": "#4B6584"        # Blue Gray
-    }
-    
-    return colors.get(rel_type, "#778CA3")
+For ANY user question, you MUST respond with a tool selection and appropriate query. Here are your tools:
 
-def safe_extract_node_name(node):
-    """Safely extract display name from node"""
-    try:
-        props = node.get("properties", {})
-        labels = node.get("labels", ["Unknown"])
-        node_id = str(node.get("id", ""))
-        
-        # Try different name properties
-        name_options = [
-            props.get("name"),
-            props.get("title"), 
-            props.get("displayName"),
-            props.get("username"),
-            props.get("fullName"),
-            props.get("firstName")
-        ]
-        
-        for name in name_options:
-            if name and str(name).strip():
-                return str(name).strip()[:25]
-        
-        # Fallback to label + ID
-        if labels and labels[0] != "Unknown":
-            short_id = node_id.split(":")[-1][-4:] if ":" in node_id else node_id[-4:]
-            return f"{labels[0]}_{short_id}"
-        
-        return f"Node_{node_id[-6:] if len(node_id) > 6 else node_id}"
-        
-    except Exception as e:
-        return f"Node_{hash(str(node)) % 10000}"
+**TOOLS AVAILABLE:**
+1. **read_neo4j_cypher** - For viewing, exploring, counting, finding data
+   - Use for: "show me", "find", "how many", "what are", "display", "list", "get"
+   - ALWAYS generates MATCH queries with RETURN statements
 
-def render_working_graph(graph_data: dict) -> bool:
-    """Render beautiful, clean graph with no settings - only pure visualization"""
+2. **write_neo4j_cypher** - For creating, updating, deleting data  
+   - Use for: "create", "add", "update", "delete", "remove", "insert"
+   - Generates CREATE, MERGE, SET, DELETE queries
+
+3. **get_neo4j_schema** - For database structure questions
+   - Use for: "schema", "structure", "what types", "what labels", "what properties"
+   - NO query needed - just returns database structure
+
+**RESPONSE FORMAT (REQUIRED):**
+```
+Tool: [tool_name]
+Query: [cypher_query_or_none_for_schema]
+```
+
+**EXAMPLES FOR COMMON QUESTIONS:**
+
+User: "What's in my database?"
+Tool: read_neo4j_cypher  
+Query: MATCH (n) RETURN labels(n) as NodeType, count(*) as Count ORDER BY Count DESC LIMIT 10
+
+User: "Show me some data"
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN n LIMIT 20
+
+User: "How many nodes do I have?"
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN count(n) as TotalNodes
+
+User: "What types of nodes exist?"
+Tool: get_neo4j_schema
+
+User: "Show me all people"
+Tool: read_neo4j_cypher
+Query: MATCH (n:Person) RETURN n LIMIT 30
+
+User: "Create a person named John"
+Tool: write_neo4j_cypher
+Query: CREATE (n:Person {name: "John"}) RETURN n
+
+User: "What can I explore?"
+Tool: read_neo4j_cypher
+Query: MATCH (n) RETURN DISTINCT labels(n) as AvailableNodeTypes LIMIT 20
+
+**IMPORTANT RULES:**
+- EVERY question gets a tool + query response
+- For vague questions, use read_neo4j_cypher with broad MATCH queries
+- ALWAYS include RETURN clause in read queries
+- Add LIMIT to prevent large results
+- If unsure, default to showing sample data with read_neo4j_cypher
+
+RESPOND NOW with Tool: and Query: for the user's question."""
+
+def enhanced_parse_llm_output(llm_output):
+    """Enhanced parsing with better fallback handling for general questions"""
+    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    trace = llm_output.strip()
+    tool = None
+    query = None
     
-    if not graph_data:
-        st.info("🔍 No graph data available.")
-        return False
+    logger.info(f"🔍 Enhanced parsing of LLM output (length: {len(llm_output)})")
+    logger.info(f"🔍 LLM output preview: {llm_output[:500]}...")
     
-    try:
-        nodes = graph_data.get("nodes", [])
-        relationships = graph_data.get("relationships", [])
+    # Try multiple tool extraction patterns
+    tool_patterns = [
+        r"Tool:\s*([\w_]+)",                    # Standard
+        r"**Tool:**\s*([\w_]+)",                # Bold
+        r"Tool\s*[:=]\s*([\w_]+)",              # Flexible separator
+        r"Selected tool:\s*([\w_]+)",           # Alternative phrasing
+        r"Using:\s*([\w_]+)",                   # Informal
+        r"I'll use\s*:\s*([\w_]+)",            # Natural language
+        r"(?:Tool|TOOL)\s*[:=]\s*([\w_]+)",    # Case insensitive
+    ]
+    
+    for pattern in tool_patterns:
+        tool_match = re.search(pattern, llm_output, re.I)
+        if tool_match:
+            tname = tool_match.group(1).strip()
+            logger.info(f"🎯 Found tool candidate: '{tname}' using pattern: {pattern}")
+            if tname in allowed_tools:
+                tool = tname
+                logger.info(f"✅ Valid tool found: {tool}")
+                break
+    
+    # Try multiple query extraction patterns
+    query_patterns = [
+        r"Query:\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",     # More flexible ending
+        r"**Query:**\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)", # Bold format
+        r"Query\s*[:=]\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)", # Flexible separator
+        r"Cypher:\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",    # Alternative
+        r"```cypher\s*(.+?)\s*```",                        # Code block
+        r"```\s*(.+?)\s*```",                              # Generic code block
+        r"MATCH\s+.+",                                     # Direct MATCH detection
+        r"CREATE\s+.+",                                    # Direct CREATE detection
+        r"MERGE\s+.+",                                     # Direct MERGE detection
+    ]
+    
+    for pattern in query_patterns:
+        query_match = re.search(pattern, llm_output, re.I | re.DOTALL)
+        if query_match:
+            query = query_match.group(1).strip() if query_match.groups() else query_match.group(0).strip()
+            logger.info(f"🎯 Found query using pattern: {pattern}")
+            logger.info(f"🎯 Query preview: {query[:100]}...")
+            if query and len(query) > 3:
+                # Clean up the query
+                query = re.sub(r'\s+', ' ', query.strip())
+                logger.info(f"✅ Valid query found and cleaned")
+                break
+    
+    # Enhanced fallback logic for common question types
+    if not tool or not query:
+        logger.warning("⚠️ Primary parsing failed, attempting intelligent fallback...")
         
-        if not nodes:
-            st.info("📊 No nodes found.")
-            return False
+        lower_output = llm_output.lower()
+        original_question = lower_output  # Assume the input contains the question
         
-        # Show what we're creating
-        st.markdown(f'<div class="success-box">🎨 <strong>Creating Beautiful Graph:</strong> {len(nodes)} nodes, {len(relationships)} relationships</div>', unsafe_allow_html=True)
-        
-        # Create clean Pyvis network - NO MENUS OR SETTINGS
-        net = Network(
-            height="700px",
-            width="100%", 
-            bgcolor="#FFFFFF",              # Pure white background
-            font_color="#2C3E50",          # Dark text
-            directed=True                   # Show direction arrows
-        )
-        
-        # Disable ALL menus and settings
-        net.show_buttons(filter_=['physics'])  # Only show physics button, then we'll hide it
-        
-        # Process nodes with beautiful styling
-        added_nodes = set()
-        
-        for i, node in enumerate(nodes):
-            try:
-                # Simple node ID
-                node_id = f"node_{i}"
-                raw_id = str(node.get("id", f"node_{i}"))
-                
-                # Get display name
-                display_name = safe_extract_node_name(node)
-                
-                # Get styling
-                labels = node.get("labels", ["Unknown"])
-                color = get_node_color(labels)
-                
-                # Create tooltip
-                props = node.get("properties", {})
-                tooltip_parts = [f"Type: {labels[0]}", f"Name: {display_name}"]
-                for key, value in list(props.items())[:3]:
-                    if key not in ['name', 'title', 'displayName']:
-                        tooltip_parts.append(f"{key}: {str(value)[:30]}")
-                tooltip = "\\n".join(tooltip_parts)
-                
-                # Add node with BEAUTIFUL styling
-                net.add_node(
-                    node_id,
-                    label=display_name,
-                    color={
-                        'background': color,
-                        'border': '#2C3E50',        # Dark border
-                        'highlight': {
-                            'background': color,
-                            'border': '#E74C3C'      # Red highlight
-                        }
-                    },
-                    size=45,                         # Large, consistent size
-                    title=tooltip,
-                    font={
-                        'size': 18,                  # BIG labels
-                        'color': '#FFFFFF',          # White text
-                        'face': 'Arial Black',       # Bold font
-                        'strokeWidth': 2,            # Text outline
-                        'strokeColor': '#2C3E50'     # Dark outline
-                    },
-                    borderWidth=3,                   # Thick border
-                    shadow={
-                        'enabled': True,
-                        'color': 'rgba(0,0,0,0.3)',
-                        'size': 10,
-                        'x': 3,
-                        'y': 3
-                    },
-                    margin=10                        # Space around label
-                )
-                
-                added_nodes.add((raw_id, node_id))
-                
-            except Exception as e:
-                continue
-        
-        # Process relationships with beautiful styling
-        id_mapping = dict(added_nodes)
-        simple_nodes = {node_id for _, node_id in added_nodes}
-        
-        added_edges = 0
-        for i, rel in enumerate(relationships):
-            try:
-                start_raw = str(rel.get("startNode", ""))
-                end_raw = str(rel.get("endNode", ""))
-                rel_type = str(rel.get("type", "CONNECTED"))
-                
-                start_id = id_mapping.get(start_raw)
-                end_id = id_mapping.get(end_raw)
-                
-                if start_id and end_id and start_id in simple_nodes and end_id in simple_nodes:
-                    color = get_relationship_color(rel_type)
-                    
-                    # Add beautiful relationship
-                    net.add_edge(
-                        start_id,
-                        end_id,
-                        label=rel_type,
-                        color={
-                            'color': color,
-                            'highlight': '#E74C3C'   # Red highlight
-                        },
-                        width=4,                     # Thick lines
-                        font={
-                            'size': 14,              # Big relationship labels
-                            'color': '#2C3E50',      # Dark text
-                            'face': 'Arial Bold',
-                            'strokeWidth': 2,
-                            'strokeColor': '#FFFFFF',
-                            'align': 'middle'
-                        },
-                        arrows={
-                            'to': {
-                                'enabled': True,
-                                'scaleFactor': 1.2   # Bigger arrows
-                            }
-                        },
-                        smooth={
-                            'enabled': True,
-                            'type': 'continuous',
-                            'roundness': 0.3         # Smooth curves
-                        }
-                    )
-                    
-                    added_edges += 1
-                    
-            except Exception as e:
-                continue
-        
-        # Set beautiful physics - no complex JSON, just clean settings
-        net.set_options("""
-        var options = {
-          "configure": {
-            "enabled": false
-          },
-          "edges": {
-            "color": {
-              "inherit": false
-            },
-            "smooth": {
-              "enabled": true,
-              "type": "continuous"
-            }
-          },
-          "physics": {
-            "enabled": true,
-            "stabilization": {
-              "enabled": true,
-              "iterations": 100
-            },
-            "barnesHut": {
-              "gravitationalConstant": -8000,
-              "centralGravity": 0.3,
-              "springLength": 100,
-              "springConstant": 0.04,
-              "damping": 0.09,
-              "avoidOverlap": 0.1
-            }
-          },
-          "interaction": {
-            "hover": true,
-            "selectConnectedEdges": false
-          }
+        # Analyze question intent
+        question_indicators = {
+            'read': ['show', 'display', 'find', 'get', 'what', 'how many', 'count', 'list', 'see', 'view', 'explore', 'tell me'],
+            'write': ['create', 'add', 'insert', 'make', 'new', 'update', 'set', 'change', 'delete', 'remove'],
+            'schema': ['schema', 'structure', 'types', 'labels', 'properties', 'what kind', 'what sorts']
         }
-        """)
         
-        st.write(f"✨ **Beautiful Graph Ready:** {len(simple_nodes)} highlighted nodes, {added_edges} styled relationships")
+        # Score each category
+        scores = {'read': 0, 'write': 0, 'schema': 0}
+        for category, keywords in question_indicators.items():
+            for keyword in keywords:
+                if keyword in lower_output:
+                    scores[category] += 1
         
-        # Generate and clean the HTML
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
-            net.save_graph(f.name)
-            html_file = f.name
+        # Determine tool based on highest score
+        if not tool:
+            if scores['schema'] > 0:
+                tool = "get_neo4j_schema"
+                logger.info(f"🔄 Fallback: Inferred schema tool (score: {scores['schema']})")
+            elif scores['write'] > 0:
+                tool = "write_neo4j_cypher" 
+                logger.info(f"🔄 Fallback: Inferred write tool (score: {scores['write']})")
+            else:
+                tool = "read_neo4j_cypher"  # Default to read
+                logger.info(f"🔄 Fallback: Defaulting to read tool (scores: {scores})")
         
-        # Read and modify HTML to remove settings
-        with open(html_file, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        
-        # Remove the settings/configuration panel by hiding it with CSS
-        clean_html = html_content.replace(
-            '<body>',
-            '''<body>
-            <style>
-                /* Hide all configuration panels and buttons */
-                .vis-configuration-wrapper,
-                .vis-configuration,
-                .vis-config-button,
-                .vis-config-item,
-                .vis-config-range,
-                #config,
-                .config,
-                [id*="config"],
-                [class*="config"] {
-                    display: none !important;
-                    visibility: hidden !important;
-                }
+        # Generate appropriate fallback query
+        if not query and tool != "get_neo4j_schema":
+            if tool == "read_neo4j_cypher":
+                # Generate smart read queries based on question content
+                if any(word in lower_output for word in ['count', 'how many', 'number']):
+                    query = "MATCH (n) RETURN count(n) as TotalNodes"
+                elif any(word in lower_output for word in ['person', 'people', 'user']):
+                    query = "MATCH (n:Person) RETURN n LIMIT 25"
+                elif any(word in lower_output for word in ['company', 'organization']):
+                    query = "MATCH (n:Company) RETURN n LIMIT 25"
+                elif any(word in lower_output for word in ['movie', 'film']):
+                    query = "MATCH (n:Movie) RETURN n LIMIT 25"
+                elif any(word in lower_output for word in ['relationship', 'connection', 'link']):
+                    query = "MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 20"
+                elif any(word in lower_output for word in ['all', 'everything', 'database', 'data']):
+                    query = "MATCH (n) RETURN n LIMIT 30"
+                elif any(word in lower_output for word in ['type', 'kind', 'category']):
+                    query = "MATCH (n) RETURN DISTINCT labels(n) as NodeTypes"
+                else:
+                    # Very general fallback
+                    query = "MATCH (n) RETURN n LIMIT 20"
                 
-                /* Make sure the network takes full space */
-                #mynetworkid {
-                    width: 100% !important;
-                    height: 700px !important;
-                    border: none !important;
-                }
+                logger.info(f"🔄 Generated fallback read query: {query}")
                 
-                /* Beautiful gradient background */
-                body {
-                    margin: 0;
-                    padding: 0;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                }
-                
-                /* Style the network container */
-                .vis-network {
-                    background: #FFFFFF !important;
-                    border-radius: 15px !important;
-                    box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important;
-                    margin: 10px !important;
-                }
-            </style>'''
-        )
+            elif tool == "write_neo4j_cypher":
+                # For write operations, we need more specific info
+                query = "// Unable to generate specific write query from the request"
+                logger.info(f"🔄 Write operation needs more specific instructions")
+    
+    # Final validation and cleanup
+    if query and tool != "get_neo4j_schema":
+        # Ensure query has proper structure
+        query = query.strip().rstrip(';')  # Remove trailing semicolon
+        if tool == "read_neo4j_cypher" and "RETURN" not in query.upper():
+            if query.upper().startswith("MATCH"):
+                query += " RETURN n LIMIT 25"
+            else:
+                query = f"MATCH (n) WHERE {query} RETURN n LIMIT 25"
         
-        # Beautiful wrapper
-        wrapped_html = f"""
-        <div style="
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 20px;
-            padding: 5px;
-            box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4);
-        ">
-            <div style="
-                background: linear-gradient(135deg, #2C3E50, #34495E);
-                color: white;
-                padding: 15px 25px;
-                border-radius: 15px 15px 0 0;
-                font-weight: bold;
-                text-align: center;
-                font-size: 18px;
-            ">
-                🎨 Beautiful Network Graph • {len(simple_nodes)} Nodes • {added_edges} Relationships
-            </div>
-            <div style="background: white; border-radius: 0 0 15px 15px; overflow: hidden;">
-                {clean_html}
-            </div>
-        </div>
-        """
+        # Add LIMIT if missing for read queries
+        if (tool == "read_neo4j_cypher" and 
+            "LIMIT" not in query.upper() and 
+            "count(" not in query.lower() and
+            "COUNT(" not in query):
+            query += " LIMIT 25"
+    
+    logger.info(f"🎯 Final parsing results - Tool: {tool}, Query: {query[:100] if query else 'None'}...")
+    
+    return tool, query, trace
+
+def enhanced_select_tool_node(state: AgentState) -> dict:
+    """Enhanced tool selection with better question handling"""
+    logger.info(f"🤔 Processing question: {state.question}")
+    
+    try:
+        # Call LLM with enhanced prompt
+        llm_output = cortex_llm(state.question, state.session_id)
+        logger.info(f"📥 LLM Response received (length: {len(llm_output)})")
         
-        # Display the clean, beautiful graph
-        components.html(wrapped_html, height=800, scrolling=False)
+        # Use enhanced parsing
+        tool, query, trace = enhanced_parse_llm_output(llm_output)
         
-        # Show legend in a beautiful way
-        st.markdown("### 🎨 Graph Legend")
+        # If still no tool/query, provide ultimate fallback
+        if not tool:
+            logger.warning("🚨 Ultimate fallback: No tool detected, defaulting to exploration")
+            tool = "read_neo4j_cypher"
+            query = "MATCH (n) RETURN n LIMIT 20"
+            trace = f"Fallback response for: {state.question}"
         
-        # Node types legend
-        node_types = {}
-        for node in nodes:
-            labels = node.get("labels", ["Unknown"])
-            if labels:
-                label = labels[0]
-                node_types[label] = get_node_color([label])
+        # Optimize query for visualization if needed
+        if query and tool == "read_neo4j_cypher":
+            query = optimize_query_for_visualization(query, state.node_limit)
         
-        if node_types:
-            legend_html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0;">'
-            for label, color in sorted(node_types.items()):
-                legend_html += f'''
-                <div style="
-                    background: {color}; 
-                    color: white; 
-                    padding: 8px 15px; 
-                    border-radius: 25px; 
-                    font-weight: bold;
-                    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-                    border: 2px solid #2C3E50;
-                ">
-                    {label}
-                </div>
-                '''
-            legend_html += '</div>'
-            st.markdown(legend_html, unsafe_allow_html=True)
+        logger.info(f"✅ Tool selection complete - Tool: {tool}, Query: {query[:100] if query else 'None'}")
         
-        # Relationship types legend
-        rel_types = {}
-        for rel in relationships:
-            rel_type = rel.get("type", "CONNECTED")
-            rel_types[rel_type] = get_relationship_color(rel_type)
-        
-        if rel_types:
-            st.markdown("**🔗 Relationship Types:**")
-            rel_legend_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0;">'
-            for rel_type, color in sorted(rel_types.items()):
-                rel_legend_html += f'''
-                <div style="
-                    background: {color}; 
-                    color: white; 
-                    padding: 6px 12px; 
-                    border-radius: 20px; 
-                    font-size: 12px;
-                    font-weight: bold;
-                    box-shadow: 0 3px 8px rgba(0,0,0,0.2);
-                ">
-                    {rel_type}
-                </div>
-                '''
-            rel_legend_html += '</div>'
-            st.markdown(rel_legend_html, unsafe_allow_html=True)
-        
-        # Cleanup
-        try:
-            os.unlink(html_file)
-        except:
-            pass
-            
-        return True
+        return {
+            "question": state.question,
+            "session_id": state.session_id,
+            "tool": tool or "",
+            "query": query or "",
+            "trace": trace or f"Enhanced processing of: {state.question}",
+            "answer": "",
+            "graph_data": None,
+            "node_limit": state.node_limit
+        }
         
     except Exception as e:
-        st.error(f"❌ Graph rendering failed: {str(e)}")
-        st.code(traceback.format_exc())
-        return False
+        logger.error(f"❌ Error in enhanced_select_tool_node: {e}")
+        
+        # Emergency fallback for any error
+        return {
+            "question": state.question,
+            "session_id": state.session_id,
+            "tool": "read_neo4j_cypher",
+            "query": "MATCH (n) RETURN n LIMIT 10",
+            "trace": f"Emergency fallback due to error: {str(e)}",
+            "answer": f"I'll show you some data from your database. Error details: {str(e)}",
+            "graph_data": None,
+            "node_limit": state.node_limit
+        }
+
+def smart_question_preprocessor(question: str) -> str:
+    """Preprocess questions to make them more specific and actionable"""
+    
+    # Common question mappings
+    question_mappings = {
+        # Very general questions
+        "what's in the database": "Show me a sample of all data in the database",
+        "what do you have": "Display different types of nodes and their counts", 
+        "show me something": "Show me sample data from the database",
+        "what can i see": "Show me the different types of data available",
+        "explore": "Show me a sample of nodes and relationships",
+        "anything": "Display sample data from the database",
+        
+        # Count questions
+        "how much data": "How many total nodes are in the database",
+        "size": "Count all nodes and relationships in the database",
+        
+        # Type questions  
+        "what kinds": "Show me the different types of nodes available",
+        "what sorts": "Display the database schema and available node types",
+        "categories": "Show me the categories of data in the database",
+    }
+    
+    # Normalize the question
+    normalized = question.lower().strip()
+    
+    # Check for direct mappings
+    for pattern, replacement in question_mappings.items():
+        if pattern in normalized:
+            logger.info(f"🔄 Preprocessed question: '{question}' → '{replacement}'")
+            return replacement
+    
+    # Expand abbreviated questions
+    if len(normalized) < 10:
+        if any(word in normalized for word in ['show', 'see', 'get']):
+            expanded = f"Show me sample data from the database: {question}"
+            logger.info(f"🔄 Expanded short question: '{question}' → '{expanded}'")
+            return expanded
+    
+    return question
+
+# Updated cortex_llm function with better error handling
+def enhanced_cortex_llm(prompt: str, session_id: str) -> str:
+    """Enhanced Cortex LLM call with preprocessing and error handling"""
+    
+    # Preprocess the question
+    processed_prompt = smart_question_preprocessor(prompt)
+    
+    headers = {
+        "Authorization": f'Snowflake Token="{API_KEY}"',
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "query": {
+            "aplctn_cd": "edagnai",
+            "app_id": "edadip",
+            "api_key": API_KEY,
+            "method": "cortex",
+            "model": MODEL,
+            "sys_msg": SYS_MSG,
+            "limit_convs": "0",
+            "prompt": {
+                "messages": [{"role": "user", "content": processed_prompt}]
+            },
+            "session_id": session_id
+        }
+    }
+    
+    try:
+        logger.info(f"🔄 Calling Enhanced Cortex LLM with processed prompt: {processed_prompt[:100]}...")
+        resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
+        resp.raise_for_status()
+        
+        raw_response = resp.text
+        logger.info(f"📥 Raw Cortex response length: {len(raw_response)}")
+        
+        # Enhanced response parsing
+        if "end_of_stream" in raw_response:
+            parsed_response = raw_response.partition("end_of_stream")[0].strip()
+        else:
+            parsed_response = raw_response.strip()
+        
+        # If response seems incomplete, try to fix it
+        if len(parsed_response) < 20:
+            logger.warning(f"⚠️ Short response detected, using fallback")
+            return f"Tool: read_neo4j_cypher\nQuery: MATCH (n) RETURN n LIMIT 20"
+        
+        logger.info(f"✅ Enhanced LLM response processed successfully")
+        return parsed_response
+        
+    except Exception as e:
+        logger.error(f"❌ Enhanced Cortex LLM API error: {e}")
+        
+        # Intelligent fallback based on original question
+        fallback_response = generate_fallback_response(prompt)
+        logger.info(f"🔄 Using intelligent fallback response")
+        return fallback_response
+
+def generate_fallback_response(original_question: str) -> str:
+    """Generate intelligent fallback response when LLM fails"""
+    
+    question_lower = original_question.lower()
+    
+    # Schema questions
+    if any(word in question_lower for word in ['schema', 'structure', 'types', 'labels']):
+        return "Tool: get_neo4j_schema"
+    
+    # Write operations  
+    elif any(word in question_lower for word in ['create', 'add', 'insert', 'new']):
+        return "Tool: write_neo4j_cypher\nQuery: // Please specify what you want to create"
+    
+    # Specific entity types
+    elif any(word in question_lower for word in ['person', 'people', 'user']):
+        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Person) RETURN n LIMIT 25"
+    
+    elif any(word in question_lower for word in ['company', 'organization']):
+        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Company) RETURN n LIMIT 25"
+    
+    elif any(word in question_lower for word in ['movie', 'film']):
+        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Movie) RETURN n LIMIT 25"
+    
+    # Count questions
+    elif any(word in question_lower for word in ['count', 'how many', 'number']):
+        return "Tool: read_neo4j_cypher\nQuery: MATCH (n) RETURN count(n) as TotalNodes"
+    
+    # Relationship questions
+    elif any(word in question_lower for word in ['relationship', 'connection', 'link']):
+        return "Tool: read_neo4j_cypher\nQuery: MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 20"
+    
+    # Default: show sample data
+    else:
+        return "Tool: read_neo4j_cypher\nQuery: MATCH (n) RETURN n LIMIT 20"
