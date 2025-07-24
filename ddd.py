@@ -23,6 +23,19 @@ st.markdown("""
     .main .block-container {
         padding-top: 1rem;
         max-width: 100%;
+    .suggestion-button {
+        background: linear-gradient(45deg, #a8edea, #fed6e3) !important;
+        color: #2c3e50 !important;
+        border: 1px solid #667eea !important;
+        font-size: 0.85rem !important;
+        padding: 0.5rem 0.75rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    .suggestion-button:hover {
+        background: linear-gradient(45deg, #fed6e3, #a8edea) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3) !important;
     }
     
     .main-header {
@@ -50,6 +63,21 @@ st.markdown("""
     .stButton button:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    
+    .suggestion-button {
+        background: linear-gradient(45deg, #a8edea, #fed6e3) !important;
+        color: #2c3e50 !important;
+        border: 1px solid #667eea !important;
+        font-size: 0.85rem !important;
+        padding: 0.5rem 0.75rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    .suggestion-button:hover {
+        background: linear-gradient(45deg, #fed6e3, #a8edea) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3) !important;
     }
     
     .metric-container {
@@ -779,28 +807,44 @@ def safe_extract_node_name(node):
         labels = node.get("labels", ["Unknown"])
         node_id = str(node.get("id", ""))
         
-        # Try different name properties
+        # Debug: Print what we're working with
+        print(f"🔍 Extracting name from node: {node}")
+        print(f"🔍 Properties: {props}")
+        
+        # Try different name properties in order of preference
         name_options = [
-            props.get("name"),
-            props.get("title"),
-            props.get("label"),
-            props.get("username"),
-            props.get("displayName")
+            props.get("name"),           # Most common
+            props.get("title"),          # For movies, books, etc.
+            props.get("displayName"),    # Alternative display name
+            props.get("username"),       # For user accounts
+            props.get("label"),          # Generic label
+            props.get("fullName"),       # Full name variant
+            props.get("firstName"),      # First name as fallback
         ]
         
         for name in name_options:
             if name and str(name).strip():
-                return str(name).strip()[:25]
+                extracted_name = str(name).strip()[:30]  # Increased length
+                print(f"✅ Found name: '{extracted_name}'")
+                return extracted_name
         
-        # Fallback to label + short ID
+        # If no name property found, try to create meaningful name from label
         if labels and labels[0] != "Unknown":
-            short_id = node_id.split(":")[-1][-6:] if ":" in node_id else node_id[-6:]
-            return f"{labels[0]}_{short_id}"
+            # Try to use label + part of ID for uniqueness
+            short_id = node_id.split(":")[-1][-4:] if ":" in node_id else node_id[-4:]
+            fallback_name = f"{labels[0]}_{short_id}"
+            print(f"⚠️ Using fallback name: '{fallback_name}'")
+            return fallback_name
         
-        return f"Node_{node_id[-6:]}"
+        # Last resort: use Node_ + short ID
+        final_fallback = f"Node_{node_id[-6:] if len(node_id) > 6 else node_id}"
+        print(f"❌ Using final fallback: '{final_fallback}'")
+        return final_fallback
         
     except Exception as e:
-        return f"Node_{hash(str(node)) % 10000}"
+        error_name = f"Node_{hash(str(node)) % 10000}"
+        print(f"💥 Error extracting name: {e}, using: '{error_name}'")
+        return error_name
 
 def create_simple_legend(nodes, relationships):
     """Create a simple legend"""
@@ -858,6 +902,17 @@ def render_working_graph(graph_data: dict) -> bool:
         # Show processing info
         st.markdown(f'<div class="success-box">🎨 <strong>Processing:</strong> {len(nodes)} nodes, {len(relationships)} relationships</div>', unsafe_allow_html=True)
         
+        # Debug: Show sample node data
+        if nodes:
+            debug_key = f"debug_nodes_{hash(str(nodes[0])) % 1000}"
+            show_debug = st.checkbox("🔍 Show Sample Node Data (Debug)", key=debug_key)
+            if show_debug:
+                st.write("**First node data:**")
+                st.json(nodes[0])
+                if len(nodes) > 1:
+                    st.write("**Second node data:**")
+                    st.json(nodes[1])
+        
         # Show relationship types
         if relationships:
             rel_types = list(set(rel.get('type', 'UNKNOWN') for rel in relationships))
@@ -879,26 +934,40 @@ def render_working_graph(graph_data: dict) -> bool:
             try:
                 # Create safe node ID
                 raw_id = str(node.get("id", f"node_{i}"))
-                node_id = f"node_{i}"  # Use simple sequential IDs
+                node_id = f"node_{i}"  # Use simple sequential IDs for internal reference
                 
-                # Extract name safely
+                # Extract name safely - this is the key fix
                 display_name = safe_extract_node_name(node)
                 node_details.append(display_name)
+                
+                # Debug: Show what names we're extracting
+                if i < 3:  # Show first 3 for debugging
+                    st.write(f"🔍 Debug: Node {i} → Name: '{display_name}' from {node.get('properties', {}).get('name', 'NO NAME FOUND')}")
                 
                 # Get colors
                 labels = node.get("labels", ["Unknown"])
                 color = get_node_color(labels)
                 
-                # Create simple tooltip
-                tooltip = f"{display_name}\\nType: {labels[0] if labels else 'Unknown'}"
+                # Create better tooltip with actual data
+                props = node.get("properties", {})
+                tooltip_parts = [f"Name: {display_name}"]
+                if labels:
+                    tooltip_parts.append(f"Type: {labels[0]}")
+                for key, value in list(props.items())[:3]:  # Show first 3 properties
+                    if key != 'name':  # Don't repeat name
+                        tooltip_parts.append(f"{key}: {value}")
+                tooltip = "\\n".join(tooltip_parts)
                 
-                # Add node with SIMPLE configuration
+                # Add node with the DISPLAY NAME as the label
                 net.add_node(
-                    node_id,
-                    label=display_name,
+                    node_id,                    # Internal ID for Pyvis
+                    label=display_name,         # This should show the actual name
                     color=color,
-                    size=25,
-                    title=tooltip
+                    size=30,                    # Slightly larger
+                    title=tooltip,
+                    font={'size': 14, 'color': '#000000'},  # Better font
+                    borderWidth=2,
+                    borderWidthSelected=4
                 )
                 
                 # Store mapping for relationships
@@ -1044,16 +1113,63 @@ with col1:
     status_colors = {"connected": "🟢", "disconnected": "🔴", "unknown": "⚪"}
     st.markdown(f'<div class="success-box"><strong>API Status:</strong> {status_colors.get(st.session_state.connection_status, "⚪")} {st.session_state.connection_status}</div>', unsafe_allow_html=True)
     
+    # Prompt suggestions
+    st.markdown("#### 💡 Quick Prompt Suggestions")
+    st.info("Click any suggestion to populate the search field below:")
+    
+    # Initialize selected_prompt in session state if not exists
+    if 'selected_prompt' not in st.session_state:
+        st.session_state.selected_prompt = ""
+    
+    # Create suggestion buttons in a grid
+    col_s1, col_s2 = st.columns(2)
+    
+    suggestions = [
+        "Show me all Person nodes",
+        "Display the database schema", 
+        "Find all relationships",
+        "Show network connections",
+        "Count all nodes in database",
+        "Show companies and employees",
+        "Find isolated nodes",
+        "Display node properties"
+    ]
+    
+    for i, suggestion in enumerate(suggestions):
+        if i % 2 == 0:
+            with col_s1:
+                if st.button(f"💭 {suggestion}", key=f"suggest_{i}", use_container_width=True, help="Click to use this prompt"):
+                    st.session_state.selected_prompt = suggestion
+                    st.rerun()
+        else:
+            with col_s2:
+                if st.button(f"💭 {suggestion}", key=f"suggest_{i}", use_container_width=True, help="Click to use this prompt"):
+                    st.session_state.selected_prompt = suggestion
+                    st.rerun()
+    
+    st.divider()
+    
 
     
     # Question input
     st.markdown("#### ✍️ Ask Your Question")
     st.info("💡 All queries are tracked with full details including Cypher queries and comprehensive analysis!")
     
+    # Clear button for selected prompt
+    if st.session_state.selected_prompt:
+        col_clear1, col_clear2 = st.columns([3, 1])
+        with col_clear1:
+            st.success(f"📝 Selected: {st.session_state.selected_prompt}")
+        with col_clear2:
+            if st.button("🗑️ Clear", key="clear_prompt"):
+                st.session_state.selected_prompt = ""
+                st.rerun()
+    
     with st.form("question_form", clear_on_submit=True):
         user_question = st.text_area(
-            "Your detailed question:",
-            placeholder="e.g., Analyze Person relationships, Study company networks, Show me database patterns...",
+            "Your question:",
+            value=st.session_state.selected_prompt,
+            placeholder="e.g., Show me all Person nodes, Display database schema, Find all relationships...",
             height=100
         )
         
@@ -1066,7 +1182,14 @@ with col1:
         
         submit_button = st.form_submit_button("🚀 Execute & Track Analysis", use_container_width=True)
     
+    # Clear selected prompt after form submission
+    if submit_button:
+        st.session_state.selected_prompt = ""
+    
     if submit_button and user_question.strip():
+        # Clear selected prompt when submitting
+        st.session_state.selected_prompt = ""
+        
         result = call_agent_api(user_question.strip(), node_limit)
         
         if result:
@@ -1118,6 +1241,13 @@ with col1:
                 {"startNode": "person3", "endNode": "project1", "type": "MANAGES", "properties": {"responsibility": "Budget and Timeline"}}
             ]
         }
+        
+        # Debug: Verify test data names
+        st.info("🔍 **Debug:** Test data loaded with the following names:")
+        for i, node in enumerate(test_data["nodes"]):
+            name = node["properties"].get("name", "NO NAME")
+            st.write(f"• Node {i}: **{name}** (Type: {node['labels'][0]})")
+        
         st.session_state.graph_data = test_data
         
         # Generate analysis for test data
@@ -1344,32 +1474,31 @@ with col2:
             st.error("❌ Graph rendering failed. Check the debug information above.")
     
     else:
-        # Enhanced welcome screen
+        # Welcome screen with fixed HTML
         st.markdown("""
-        <div style="
-            text-align: center; 
-            padding: 3rem; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-            color: white; 
-            border-radius: 15px; 
-            margin: 2rem 0;
-        ">
+        <div style="text-align: center; padding: 3rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 15px; margin: 2rem 0;">
             <h2>🎯 Neo4j Graph Explorer</h2>
             <p><strong>Complete Query Tracking & Analysis</strong></p>
-            
-            <div style="background: rgba(255,255,255,0.1); padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
-                <h3>📊 What's Tracked in History:</h3>
-                <div style="text-align: left; display: inline-block;">
-                    <p>🔧 <strong>Cypher Queries</strong> - Exact queries executed</p>
-                    <p>📊 <strong>Detailed Metrics</strong> - Nodes, relationships, connectivity</p>
-                    <p>🧠 <strong>AI Analysis</strong> - Comprehensive insights and recommendations</p>
-                    <p>⚡ <strong>Performance Data</strong> - Execution times and success rates</p>
-                    <p>🎯 <strong>Key Insights</strong> - Smart observations about patterns</p>
-                    <p>🔄 <strong>Repeatable Actions</strong> - Re-run or load any previous query</p>
-                </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #a8edea, #fed6e3); color: #2c3e50; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
+            <h3 style="text-align: center; margin-top: 0;">📊 What's Tracked in History:</h3>
+            <div style="text-align: left;">
+                <p>🔧 <strong>Cypher Queries</strong> - Exact queries executed</p>
+                <p>📊 <strong>Detailed Metrics</strong> - Nodes, relationships, connectivity</p>
+                <p>🧠 <strong>AI Analysis</strong> - Comprehensive insights and recommendations</p>
+                <p>⚡ <strong>Performance Data</strong> - Execution times and success rates</p>
+                <p>🎯 <strong>Key Insights</strong> - Smart observations about patterns</p>
+                <p>🔄 <strong>Repeatable Actions</strong> - Re-run or load any previous query</p>
             </div>
-            
-            <p><em>Click "Load Enhanced Test Dataset" to see complete tracking in action!</em></p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, #ffecd2, #fcb69f); color: #8b4513; border-radius: 10px; margin: 1rem 0;">
+            <p><em>Click "Load Test Dataset" to see complete tracking in action!</em></p>
         </div>
         """, unsafe_allow_html=True)
 
