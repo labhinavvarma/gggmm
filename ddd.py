@@ -590,106 +590,33 @@ def render_neo4j_graph(graph_data: dict) -> bool:
             }
             """)
         else:
-            net.set_options('{"physics": {"enabled": false}}')
+            net.set_options("""
+            var options = {
+              "physics": {
+                "enabled": false
+              }
+            }
+            """)
         
-        # Show processing results
-        st.markdown(f'<div class="success-box">✅ <strong>Graph created:</strong> {len(added_nodes)} nodes, {added_edges} relationships successfully rendered!</div>', unsafe_allow_html=True)
-        
-        # Generate HTML to a temporary file
-        import tempfile
-        import os
-        
-        # Create a temporary HTML file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.html', mode='w+', encoding='utf-8') as tmp:
-            # Save the graph to the temp file
-            net.save_graph(tmp.name)
-            
-            # Read the generated HTML
-            tmp.seek(0)
-            html_content = tmp.read()
-        
-        # Clean up the temp file
+        # Save and display the graph
         try:
-            os.unlink(tmp.name)
-        except:
-            pass
-            
-        # Create a unique ID for the HTML container to avoid conflicts
-        container_id = f'network-graph-{hash(str(nodes))}'
-        
-        # Create a simple wrapper with proper styling
-        wrapped_html = f"""
-        <div id="{container_id}" style="
-            width: 100%;
-            height: 700px;
-            border: 2px solid #667eea;
-            border-radius: 10px;
-            overflow: hidden;
-            background: white;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-            margin-bottom: 20px;
-        ">
-            <div style="
-                background: linear-gradient(90deg, #667eea, #764ba2);
-                color: white;
-                padding: 10px 20px;
-                font-weight: bold;
-                font-family: Arial, sans-serif;
-                font-size: 14px;
-            ">
-                🕸️ Network Graph | {len(added_nodes)} Nodes | {added_edges} Relationships
-            </div>
-            
-            <div id="network" style="width: 100%; height: 650px;">
-                {html_content}
-            </div>
-        </div>
-        
-        <script>
-        // Ensure the network is properly sized
-        function resizeNetwork() {{
-            var container = document.getElementById('{container_id}');
-            if (container) {{
-                var networkDiv = container.querySelector('#network');
-                if (networkDiv) {{
-                    networkDiv.style.height = '650px';
-                    networkDiv.style.width = '100%';
-                }}
-                
-                // Find the canvas and make it responsive
-                var canvas = container.querySelector('canvas');
-                if (canvas) {{
-                    canvas.style.width = '100%';
-                    canvas.style.height = '100%';
-                }}
-            }}
-        }}
-        
-        // Run on load and on window resize
-        window.addEventListener('load', resizeNetwork);
-        window.addEventListener('resize', resizeNetwork);
-        
-        // Also run after a short delay to catch any dynamic loading
-        setTimeout(resizeNetwork, 1000);
-        </script>
-        """
-        
-        # Display the HTML content
-        components.html(wrapped_html, height=700, scrolling=False)
-        
-        return True
-        
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
+                net.save_graph(tmp_file.name)
+                graph_html = tmp_file.read() if hasattr(tmp_file, "read") else None
+                components.html(open(tmp_file.name, "r").read(), height=700, scrolling=True)
+            return True
+        except Exception as e:
+            with st.expander("🔍 Debug Information", expanded=False):
+                st.write("**Error:**", str(e))
+                st.write("**Traceback:**")
+                st.code(traceback.format_exc())
+                if nodes:
+                    st.write("**Sample node:**")
+                    st.json(nodes[0])
+            return False
+
     except Exception as e:
-        st.error(f"❌ Graph rendering failed: {str(e)}")
-        
-        with st.expander("🔍 Debug Information", expanded=False):
-            st.write("**Error:**", str(e))
-            st.write("**Traceback:**")
-            st.code(traceback.format_exc())
-            if nodes:
-                st.write("**Sample node:**")
-                st.json(nodes[0])
-        
+        st.error(f"❌ Graph rendering error: {str(e)}")
         return False
 
 # Main layout
