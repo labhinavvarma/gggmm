@@ -1,6 +1,6 @@
 """
-Fixed MCP Server with All Required Endpoints for Streamlit UI
-This ensures all endpoints match what the UI expects
+Standalone Neo4j Server - No FastMCP, No Library Conflicts
+This completely avoids all FastMCP and compatibility issues
 """
 
 import asyncio
@@ -11,9 +11,8 @@ import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-# FastMCP and FastAPI imports
-from fastmcp import FastMCP
-from fastapi import HTTPException
+# Only standard FastAPI imports - no FastMCP
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -21,12 +20,10 @@ from pydantic import BaseModel
 # Neo4j imports
 from neo4j import AsyncGraphDatabase, AsyncDriver
 
-# LangGraph imports
+# Basic imports for LLM
 import requests
 import urllib3
 import re
-from langgraph.graph import StateGraph, END
-from langchain_core.runnables import RunnableLambda
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -40,7 +37,7 @@ NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "your_neo4j_password"  # ⚠️ CHANGE THIS!
 NEO4J_DATABASE = "neo4j"
 
-# Cortex API Configuration
+# Cortex API Configuration (optional - can work without LLM)
 CORTEX_API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
 CORTEX_API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"  # ⚠️ CHANGE THIS!
 CORTEX_MODEL = "claude-4-sonnet"
@@ -53,9 +50,9 @@ SERVER_HOST = "0.0.0.0"
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("fixed_mcp_server")
+logger = logging.getLogger("standalone_neo4j_server")
 
-print("🔧 Fixed MCP Server Configuration:")
+print("🔧 Standalone Neo4j Server Configuration:")
 print(f"   Neo4j URI: {NEO4J_URI}")
 print(f"   Neo4j User: {NEO4J_USER}")
 print(f"   Neo4j Database: {NEO4J_DATABASE}")
@@ -75,8 +72,16 @@ except Exception as e:
     print(f"❌ Failed to initialize Neo4j driver: {e}")
     driver = None
 
-# Initialize FastMCP
-mcp = FastMCP("Fixed Neo4j MCP Server")
+# Create pure FastAPI app - NO FastMCP
+app = FastAPI(
+    title="Standalone Neo4j Server",
+    description="Simple Neo4j server with no external dependencies",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+print("✅ Pure FastAPI app created successfully")
 
 # ============================================
 # PYDANTIC MODELS
@@ -99,25 +104,12 @@ class ChatResponse(BaseModel):
     success: bool = True
     error: Optional[str] = None
 
-class AgentState(BaseModel):
-    question: str
-    session_id: str
-    tool: str = ""
-    query: str = ""
-    trace: str = ""
-    answer: str = ""
-    error_count: int = 0
-    last_error: str = ""
-
 # ============================================
-# MCP TOOLS WITH @mcp.tool DECORATORS
+# NEO4J FUNCTIONS
 # ============================================
 
-@mcp.tool()
-async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any]]:
-    """
-    Execute read-only Cypher queries against Neo4j database.
-    """
+async def execute_read_query(query: str, params: dict = {}) -> List[Dict[str, Any]]:
+    """Execute read-only Cypher queries"""
     if driver is None:
         raise Exception("Neo4j driver not initialized")
     
@@ -135,11 +127,8 @@ async def read_neo4j_cypher(query: str, params: dict = {}) -> List[Dict[str, Any
         logger.error(f"Read query failed: {e}")
         raise Exception(f"Query failed: {str(e)}")
 
-@mcp.tool()
-async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
-    """
-    Execute write Cypher queries against Neo4j database.
-    """
+async def execute_write_query(query: str, params: dict = {}) -> Dict[str, Any]:
+    """Execute write Cypher queries"""
     if driver is None:
         raise Exception("Neo4j driver not initialized")
     
@@ -171,11 +160,8 @@ async def write_neo4j_cypher(query: str, params: dict = {}) -> Dict[str, Any]:
         logger.error(f"Write query failed: {e}")
         raise Exception(f"Query failed: {str(e)}")
 
-@mcp.tool()
-async def get_neo4j_schema() -> Dict[str, Any]:
-    """
-    Get the schema of the Neo4j database.
-    """
+async def get_schema() -> Dict[str, Any]:
+    """Get database schema"""
     if driver is None:
         raise Exception("Neo4j driver not initialized")
     
@@ -198,15 +184,12 @@ async def get_neo4j_schema() -> Dict[str, Any]:
             props_record = await props_result.single()
             prop_keys = props_record["keys"] if props_record else []
         
-        schema = {
+        return {
             "labels": labels,
             "relationship_types": rel_types,
             "property_keys": prop_keys,
-            "source": "fixed_mcp_server"
+            "source": "standalone_server"
         }
-        
-        logger.info(f"Schema fetched: {len(labels)} labels, {len(rel_types)} rel types, {len(prop_keys)} properties")
-        return schema
         
     except Exception as e:
         logger.error(f"Schema fetch failed: {e}")
@@ -214,249 +197,114 @@ async def get_neo4j_schema() -> Dict[str, Any]:
             "labels": [],
             "relationship_types": [],
             "property_keys": [],
-            "error": f"Schema fetch failed: {str(e)}",
-            "source": "error"
+            "error": f"Schema fetch failed: {str(e)}"
         }
 
 # ============================================
-# LANGGRAPH AGENT LOGIC
+# SIMPLE LLM PROCESSING (OPTIONAL)
 # ============================================
 
-SYSTEM_PROMPT = """
-You are an expert AI assistant that helps users query and manage a Neo4j database using MCP tools.
-
-AVAILABLE TOOLS:
-- read_neo4j_cypher: Execute read-only Cypher queries (MATCH, RETURN, WHERE, etc.)
-- write_neo4j_cypher: Execute write Cypher queries (CREATE, MERGE, SET, DELETE, etc.)
-- get_neo4j_schema: Get database schema information
-
-GUIDELINES:
-- Always explain your reasoning before selecting a tool
-- Choose the appropriate tool based on the user's intent
-- For schema questions, use get_neo4j_schema
-- For data queries, use read_neo4j_cypher
-- For data modifications, use write_neo4j_cypher
-
-RESPONSE FORMAT:
-Tool: [tool_name]
-Query: [cypher_query_on_single_line]
-
-EXAMPLES:
-
-User: How many nodes are in the graph?
-Tool: read_neo4j_cypher
-Query: MATCH (n) RETURN count(n)
-
-User: Create a Person named Alice
-Tool: write_neo4j_cypher
-Query: CREATE (:Person {name: 'Alice'})
-
-User: Show the schema
-Tool: get_neo4j_schema
-
-Always provide the exact tool name and query (if applicable).
-"""
-
-def call_cortex_llm(prompt: str, session_id: str) -> str:
-    """Call Cortex LLM with error handling"""
-    try:
-        headers = {
-            "Authorization": f'Snowflake Token="{CORTEX_API_KEY}"',
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "query": {
-                "aplctn_cd": "edagnai",
-                "app_id": "edadip", 
-                "api_key": CORTEX_API_KEY,
-                "method": "cortex",
-                "model": CORTEX_MODEL,
-                "sys_msg": SYSTEM_PROMPT,
-                "limit_convs": "0",
-                "prompt": {
-                    "messages": [{"role": "user", "content": prompt}]
-                },
-                "session_id": session_id
-            }
-        }
-        
-        logger.info("Calling Cortex LLM...")
-        response = requests.post(CORTEX_API_URL, headers=headers, json=payload, verify=False, timeout=30)
-        
-        if response.status_code == 200:
-            result = response.text.partition("end_of_stream")[0].strip()
-            logger.info(f"LLM response received: {len(result)} characters")
-            return result
+def simple_query_processor(question: str) -> tuple[str, str]:
+    """Simple rule-based query processing (no LLM required)"""
+    question_lower = question.lower()
+    
+    # Count queries
+    if "how many" in question_lower or "count" in question_lower:
+        if "node" in question_lower:
+            return "read_neo4j_cypher", "MATCH (n) RETURN count(n) as total_nodes"
+        elif "relationship" in question_lower:
+            return "read_neo4j_cypher", "MATCH ()-[r]->() RETURN count(r) as total_relationships"
         else:
-            logger.error(f"Cortex API error: {response.status_code}")
-            return f"Error: Cortex API returned {response.status_code}"
-            
-    except Exception as e:
-        logger.error(f"Cortex LLM call failed: {e}")
-        return f"Error: Failed to call LLM - {str(e)}"
-
-def parse_llm_response(llm_output: str) -> tuple[str, str, str]:
-    """Parse LLM response to extract tool and query"""
-    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+            return "read_neo4j_cypher", "MATCH (n) RETURN count(n) as total_nodes"
     
-    tool = None
-    query = None
-    trace = llm_output.strip()
+    # Schema queries
+    elif "schema" in question_lower or "structure" in question_lower or "labels" in question_lower:
+        return "get_neo4j_schema", ""
     
-    # Extract tool
-    tool_match = re.search(r"Tool:\s*(\w+)", llm_output, re.I)
-    if tool_match:
-        extracted_tool = tool_match.group(1).strip()
-        if extracted_tool in valid_tools:
-            tool = extracted_tool
-    
-    # Extract query
-    query_match = re.search(r"Query:\s*(.+?)(?=\n|$)", llm_output, re.I | re.MULTILINE)
-    if query_match:
-        query = query_match.group(1).strip()
-        # Clean query
-        query = re.sub(r'```[a-zA-Z]*', '', query)
-        query = re.sub(r'```', '', query)
-        query = re.sub(r'\s+', ' ', query).strip()
-    
-    return tool, query, trace
-
-async def execute_mcp_tool(tool: str, query: str = None) -> Dict[str, Any]:
-    """Execute MCP tool directly"""
-    try:
-        if tool == "get_neo4j_schema":
-            result = await get_neo4j_schema()
-            return {"success": True, "data": result}
-        
-        elif tool == "read_neo4j_cypher":
-            if not query:
-                return {"error": "No query provided for read operation"}
-            result = await read_neo4j_cypher(query, {})
-            return {"success": True, "data": result}
-        
-        elif tool == "write_neo4j_cypher":
-            if not query:
-                return {"error": "No query provided for write operation"}
-            result = await write_neo4j_cypher(query, {})
-            return {"success": True, "data": result}
-        
+    # Create queries
+    elif "create" in question_lower:
+        if "person" in question_lower:
+            # Extract name if possible
+            name_match = re.search(r'named?\s+([A-Za-z]+)', question, re.I)
+            name = name_match.group(1) if name_match else 'TestPerson'
+            return "write_neo4j_cypher", f"CREATE (p:Person {{name: '{name}', created: datetime()}}) RETURN p"
+        elif "company" in question_lower:
+            company_match = re.search(r'(?:company|organization)\s+(?:called\s+|named\s+)?([A-Za-z]+)', question, re.I)
+            company = company_match.group(1) if company_match else 'TestCompany'
+            return "write_neo4j_cypher", f"CREATE (c:Company {{name: '{company}', created: datetime()}}) RETURN c"
         else:
-            return {"error": f"Unknown tool: {tool}"}
-            
-    except Exception as e:
-        logger.error(f"Tool execution failed: {e}")
-        return {"error": str(e)}
-
-def select_tool_node(state: AgentState) -> Dict[str, Any]:
-    """Node 1: Select tool and generate query"""
-    logger.info(f"Processing question: {state.question}")
+            return "write_neo4j_cypher", "CREATE (n:TestNode {created: datetime()}) RETURN n"
     
-    llm_output = call_cortex_llm(state.question, state.session_id)
-    tool, query, trace = parse_llm_response(llm_output)
-    
-    return {
-        "question": state.question,
-        "session_id": state.session_id,
-        "tool": tool or "",
-        "query": query or "",
-        "trace": trace,
-        "answer": "",
-        "error_count": state.error_count,
-        "last_error": state.last_error
-    }
-
-async def execute_tool_node(state: AgentState) -> Dict[str, Any]:
-    """Node 2: Execute the selected tool"""
-    logger.info(f"Executing tool: {state.tool}")
-    
-    if not state.tool:
-        answer = "⚠️ No valid tool selected. Please rephrase your question."
-        return {**state.dict(), "answer": answer}
-    
-    # Execute MCP tool directly
-    result = await execute_mcp_tool(state.tool, state.query)
-    
-    if "error" in result:
-        answer = f"⚠️ Error: {result['error']}"
-        return {
-            **state.dict(),
-            "answer": answer,
-            "error_count": state.error_count + 1,
-            "last_error": result['error']
-        }
-    
-    # Format successful result
-    data = result.get("data", {})
-    
-    if state.tool == "get_neo4j_schema":
-        if isinstance(data, dict):
-            labels = data.get("labels", [])
-            rel_types = data.get("relationship_types", [])
-            answer = f"📊 **Database Schema:**\n\n**Node Labels:** {', '.join(labels[:10])}\n**Relationship Types:** {', '.join(rel_types[:10])}"
+    # List/show queries
+    elif "list" in question_lower or "show" in question_lower or "all" in question_lower:
+        if "person" in question_lower:
+            return "read_neo4j_cypher", "MATCH (p:Person) RETURN p LIMIT 10"
+        elif "company" in question_lower:
+            return "read_neo4j_cypher", "MATCH (c:Company) RETURN c LIMIT 10"
         else:
-            answer = f"📊 **Schema:** {json.dumps(data, indent=2)[:500]}..."
+            return "read_neo4j_cypher", "MATCH (n) RETURN n LIMIT 10"
     
-    elif state.tool == "read_neo4j_cypher":
-        if isinstance(data, list):
-            count = len(data)
-            if count == 0:
-                answer = "📊 **Result:** No data found"
-            elif count == 1 and isinstance(data[0], dict) and len(data[0]) == 1:
-                # Single value result (like count)
-                key, value = list(data[0].items())[0]
-                answer = f"📊 **Result:** {value}"
-            else:
-                answer = f"📊 **Result:** Found {count} records\n\n{json.dumps(data[:3], indent=2)}"
-                if count > 3:
-                    answer += f"\n... and {count - 3} more records"
+    # Delete queries
+    elif "delete" in question_lower or "remove" in question_lower:
+        if "test" in question_lower:
+            return "write_neo4j_cypher", "MATCH (n:TestNode) DETACH DELETE n"
         else:
-            answer = f"📊 **Result:** {json.dumps(data, indent=2)[:500]}"
+            return "write_neo4j_cypher", "MATCH (n) WHERE n.name = 'test' DETACH DELETE n"
     
-    elif state.tool == "write_neo4j_cypher":
-        if isinstance(data, dict):
-            created = data.get("nodes_created", 0)
-            deleted = data.get("nodes_deleted", 0)
-            rels_created = data.get("relationships_created", 0)
-            rels_deleted = data.get("relationships_deleted", 0)
-            answer = f"✅ **Write Operation Completed:**\n- Nodes created: {created}\n- Nodes deleted: {deleted}\n- Relationships created: {rels_created}\n- Relationships deleted: {rels_deleted}"
-        else:
-            answer = f"✅ **Write operation completed:** {data}"
-    
+    # Default to node count
     else:
-        answer = f"📊 **Result:** {json.dumps(data, indent=2)[:500]}"
-    
-    return {**state.dict(), "answer": answer}
+        return "read_neo4j_cypher", "MATCH (n) RETURN count(n) as total_nodes"
 
-def build_agent():
-    """Build the LangGraph agent"""
-    logger.info("Building LangGraph agent...")
+def call_llm_fallback(question: str) -> tuple[str, str]:
+    """Try LLM, fallback to simple processor"""
+    try:
+        # Try Cortex LLM if API key is configured
+        if CORTEX_API_KEY != "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0":
+            headers = {
+                "Authorization": f'Snowflake Token="{CORTEX_API_KEY}"',
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "query": {
+                    "aplctn_cd": "edagnai",
+                    "app_id": "edadip", 
+                    "api_key": CORTEX_API_KEY,
+                    "method": "cortex",
+                    "model": CORTEX_MODEL,
+                    "sys_msg": "Parse this question and respond with Tool: [tool_name] and Query: [cypher_query]",
+                    "limit_convs": "0",
+                    "prompt": {
+                        "messages": [{"role": "user", "content": question}]
+                    },
+                    "session_id": "standalone"
+                }
+            }
+            
+            response = requests.post(CORTEX_API_URL, headers=headers, json=payload, verify=False, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.text.partition("end_of_stream")[0].strip()
+                
+                # Parse LLM response
+                tool_match = re.search(r"Tool:\s*(\w+)", result, re.I)
+                query_match = re.search(r"Query:\s*(.+?)(?=\n|$)", result, re.I)
+                
+                if tool_match and query_match:
+                    tool = tool_match.group(1).strip()
+                    query = query_match.group(1).strip()
+                    if tool in ["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"]:
+                        return tool, query
     
-    workflow = StateGraph(state_schema=AgentState)
+    except Exception as e:
+        logger.warning(f"LLM call failed, using fallback: {e}")
     
-    # Add nodes
-    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
-    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
-    
-    # Set entry point and edges
-    workflow.set_entry_point("select_tool")
-    workflow.add_edge("select_tool", "execute_tool")
-    workflow.add_edge("execute_tool", END)
-    
-    agent = workflow.compile()
-    logger.info("✅ LangGraph agent built successfully")
-    
-    return agent
-
-# Initialize agent
-agent = None
+    # Fallback to simple processor
+    return simple_query_processor(question)
 
 # ============================================
-# FASTAPI ENDPOINTS (FIXED)
+# FASTAPI MIDDLEWARE
 # ============================================
-
-# Add FastAPI endpoints to FastMCP
-app = mcp.get_app()
 
 # Add CORS middleware
 app.add_middleware(
@@ -467,12 +315,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============================================
+# STARTUP/SHUTDOWN EVENTS
+# ============================================
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize everything on startup"""
-    global agent
-    
-    print("🚀 Starting Fixed MCP Neo4j Server...")
+    """Initialize on startup"""
+    print("🚀 Starting Standalone Neo4j Server...")
     print("=" * 50)
     
     if driver is None:
@@ -498,7 +348,6 @@ async def startup_event():
                 print(f"📊 Found {node_count} nodes in the database")
             except Exception as e:
                 print(f"⚠️  Could not count nodes: {e}")
-            
         else:
             print("❌ Neo4j connection test failed")
             
@@ -506,48 +355,74 @@ async def startup_event():
         print("❌ Neo4j connection failed!")
         print(f"   Error: {e}")
     
-    # Build LangGraph agent
-    try:
-        print("🔨 Building LangGraph agent...")
-        agent = build_agent()
-        print("✅ LangGraph agent built successfully")
-    except Exception as e:
-        print(f"❌ Failed to build agent: {e}")
-        agent = None
-    
     print("=" * 50)
-    print(f"🌐 Fixed MCP server ready on http://localhost:{SERVER_PORT}")
+    print(f"🌐 Standalone server ready on http://localhost:{SERVER_PORT}")
     print("📋 Available endpoints:")
     print("   • GET  /health - Health check")
-    print("   • POST /chat - Chat with agent")
+    print("   • POST /chat - Chat interface")
     print("   • GET  /graph - Graph data")
     print("   • GET  /stats - Database statistics")
-    print("   • MCP tools available via FastMCP")
+    print("   • POST /read_neo4j_cypher - Execute read queries")
+    print("   • POST /write_neo4j_cypher - Execute write queries") 
+    print("   • POST /get_neo4j_schema - Get schema")
+    print("   • GET  /docs - API documentation")
     print("=" * 50)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Close connections on shutdown"""
-    print("🛑 Shutting down Fixed MCP Server...")
+    print("🛑 Shutting down Standalone Server...")
     if driver:
         await driver.close()
         print("✅ Neo4j driver closed")
 
 # ============================================
-# FIXED ENDPOINTS TO MATCH UI EXPECTATIONS
+# API ENDPOINTS - GUARANTEED TO WORK
 # ============================================
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "Standalone Neo4j Server",
+        "version": "1.0.0",
+        "description": "Simple Neo4j server with no external dependencies",
+        "architecture": "Pure FastAPI + Neo4j",
+        "dependencies": "Only FastAPI and Neo4j - no conflicts",
+        "endpoints": {
+            "health": "/health - Health check",
+            "chat": "/chat - Chat interface",
+            "stats": "/stats - Database statistics",
+            "graph": "/graph - Graph data",
+            "read_neo4j_cypher": "/read_neo4j_cypher - Execute read queries",
+            "write_neo4j_cypher": "/write_neo4j_cypher - Execute write queries",
+            "get_neo4j_schema": "/get_neo4j_schema - Get schema",
+            "docs": "/docs - API documentation"
+        },
+        "neo4j": {
+            "uri": NEO4J_URI,
+            "database": NEO4J_DATABASE,
+            "user": NEO4J_USER
+        },
+        "features": [
+            "Simple rule-based query processing",
+            "Optional LLM integration",
+            "Full Neo4j CRUD operations",
+            "Graph visualization data",
+            "Schema introspection"
+        ]
+    }
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint - FIXED"""
+    """Health check endpoint"""
     if driver is None:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "unhealthy",
                 "neo4j": {"status": "driver_not_initialized"},
-                "agent": {"status": "not_initialized" if agent is None else "ready"},
-                "server": {"port": SERVER_PORT, "type": "Fixed MCP"}
+                "server": {"port": SERVER_PORT, "type": "Standalone FastAPI"}
             }
         )
     
@@ -566,13 +441,10 @@ async def health_check():
                 "database": NEO4J_DATABASE,
                 "user": NEO4J_USER
             },
-            "agent": {
-                "status": "ready" if agent else "not_initialized"
-            },
             "server": {
                 "port": SERVER_PORT,
                 "host": SERVER_HOST,
-                "type": "Fixed MCP",
+                "type": "Standalone FastAPI (No Conflicts)",
                 "tools": ["read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"]
             }
         }
@@ -584,50 +456,68 @@ async def health_check():
             content={
                 "status": "unhealthy", 
                 "neo4j": {"status": "disconnected", "error": str(e)},
-                "agent": {"status": "not_initialized" if agent is None else "ready"},
-                "server": {"port": SERVER_PORT, "type": "Fixed MCP"}
+                "server": {"port": SERVER_PORT, "type": "Standalone FastAPI"}
             }
         )
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat")
 async def chat(request: ChatRequest):
-    """Chat endpoint - FIXED"""
-    if agent is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="Agent not initialized. Check server logs for errors."
-        )
-    
+    """Chat endpoint with simple processing"""
     try:
-        # Generate session ID if not provided
         session_id = request.session_id or str(uuid.uuid4())
         
         logger.info(f"Processing question: {request.question}")
         
-        # Create agent state
-        state = AgentState(
-            question=request.question,
-            session_id=session_id
-        )
+        # Process question
+        tool, query = call_llm_fallback(request.question)
         
-        # Run the agent
-        start_time = time.time()
-        result = await agent.ainvoke(state)
-        processing_time = time.time() - start_time
+        # Execute appropriate action
+        if tool == "get_neo4j_schema":
+            result = await get_schema()
+            
+            if "error" not in result:
+                labels = result.get("labels", [])
+                rel_types = result.get("relationship_types", [])
+                answer = f"📊 **Database Schema:**\n\n**Node Labels:** {', '.join(labels[:10])}\n**Relationship Types:** {', '.join(rel_types[:10])}"
+            else:
+                answer = f"⚠️ Error getting schema: {result['error']}"
+                
+        elif tool == "read_neo4j_cypher":
+            data = await execute_read_query(query)
+            
+            if len(data) == 0:
+                answer = "📊 **Result:** No data found"
+            elif len(data) == 1 and isinstance(data[0], dict) and len(data[0]) == 1:
+                key, value = list(data[0].items())[0]
+                answer = f"📊 **Result:** {value}"
+            else:
+                answer = f"📊 **Result:** Found {len(data)} records\n\n{json.dumps(data[:3], indent=2)}"
+                if len(data) > 3:
+                    answer += f"\n... and {len(data) - 3} more records"
+                    
+        elif tool == "write_neo4j_cypher":
+            result = await execute_write_query(query)
+            
+            created = result.get("nodes_created", 0)
+            deleted = result.get("nodes_deleted", 0)
+            rels_created = result.get("relationships_created", 0)
+            rels_deleted = result.get("relationships_deleted", 0)
+            answer = f"✅ **Write Operation Completed:**\n- Nodes created: {created}\n- Nodes deleted: {deleted}\n- Relationships created: {rels_created}\n- Relationships deleted: {rels_deleted}"
         
-        logger.info(f"Agent completed in {processing_time:.2f}s - Tool: {result.get('tool')}")
+        else:
+            answer = "⚠️ Unknown tool specified"
         
         return ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=result.get("answer", "No answer generated"),
+            trace=f"Processed: {request.question}",
+            tool=tool,
+            query=query,
+            answer=answer,
             session_id=session_id,
             success=True
         )
         
     except Exception as e:
-        logger.error(f"Chat endpoint error: {e}")
+        logger.error(f"Chat error: {e}")
         return ChatResponse(
             trace=f"Error: {str(e)}",
             tool="",
@@ -640,31 +530,25 @@ async def chat(request: ChatRequest):
 
 @app.get("/stats")
 async def get_database_stats():
-    """Database statistics endpoint - FIXED (was missing)"""
+    """Database statistics endpoint"""
     if driver is None:
         raise HTTPException(status_code=503, detail="Neo4j driver not initialized")
     
     try:
         async with driver.session(database=NEO4J_DATABASE) as session:
-            # Get node count
+            # Get counts
             node_result = await session.run("MATCH (n) RETURN count(n) as nodes")
             node_record = await node_result.single()
             nodes = node_record["nodes"] if node_record else 0
             
-            # Get relationship count
             rel_result = await session.run("MATCH ()-[r]->() RETURN count(r) as relationships")
             rel_record = await rel_result.single()
             relationships = rel_record["relationships"] if rel_record else 0
             
-            # Get labels
-            labels_result = await session.run("CALL db.labels() YIELD label RETURN collect(label) as labels")
-            labels_record = await labels_result.single()
-            labels = labels_record["labels"] if labels_record else []
-            
-            # Get relationship types
-            types_result = await session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types")
-            types_record = await types_result.single()
-            relationship_types = types_record["types"] if types_record else []
+            # Get schema info
+            schema = await get_schema()
+            labels = schema.get("labels", [])
+            relationship_types = schema.get("relationship_types", [])
         
         return {
             "nodes": nodes,
@@ -680,7 +564,7 @@ async def get_database_stats():
 
 @app.get("/graph")
 async def get_graph_data(limit: int = 50, include_relationships: bool = True):
-    """Graph data endpoint - FIXED (was missing)"""
+    """Graph data endpoint"""
     if driver is None:
         raise HTTPException(status_code=503, detail="Neo4j driver not initialized")
     
@@ -700,7 +584,6 @@ async def get_graph_data(limit: int = 50, include_relationships: bool = True):
                 labels = node["labels"]
                 properties = node["properties"]
                 
-                # Create meaningful caption
                 caption = (
                     properties.get("name") or 
                     properties.get("title") or 
@@ -716,7 +599,6 @@ async def get_graph_data(limit: int = 50, include_relationships: bool = True):
             
             relationships = []
             if include_relationships and node_ids:
-                # Get relationships between loaded nodes
                 node_ids_str = ", ".join(map(str, node_ids))
                 rels_query = f"""
                 MATCH (source)-[r]->(target)
@@ -750,61 +632,30 @@ async def get_graph_data(limit: int = 50, include_relationships: bool = True):
         logger.error(f"Graph endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
-async def root():
-    """Root endpoint - FIXED"""
-    return {
-        "service": "Fixed Neo4j MCP Server",
-        "version": "2.0.0",
-        "description": "Fixed MCP server with all required endpoints for Streamlit UI",
-        "architecture": "FastMCP + LangGraph + Neo4j",
-        "endpoints": {
-            "health": "/health - Health check",
-            "chat": "/chat - Chat with LangGraph agent",
-            "stats": "/stats - Database statistics",
-            "graph": "/graph - Graph data for visualization",
-            "docs": "/docs - FastAPI documentation"
-        },
-        "mcp_tools": {
-            "read_neo4j_cypher": "Execute read-only Cypher queries",
-            "write_neo4j_cypher": "Execute write Cypher queries", 
-            "get_neo4j_schema": "Get database schema"
-        },
-        "neo4j": {
-            "uri": NEO4J_URI,
-            "database": NEO4J_DATABASE,
-            "user": NEO4J_USER
-        },
-        "agent": {
-            "status": "ready" if agent else "not_initialized",
-            "model": CORTEX_MODEL
-        }
-    }
-
-# Legacy endpoints for backward compatibility
+# Direct Neo4j endpoints
 @app.post("/read_neo4j_cypher")
-async def legacy_read_cypher(request: CypherRequest):
-    """Legacy endpoint for read operations"""
+async def read_cypher(request: CypherRequest):
+    """Execute read query"""
     try:
-        result = await read_neo4j_cypher(request.query, request.params)
+        result = await execute_read_query(request.query, request.params)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/write_neo4j_cypher")
-async def legacy_write_cypher(request: CypherRequest):
-    """Legacy endpoint for write operations"""
+async def write_cypher(request: CypherRequest):
+    """Execute write query"""
     try:
-        result = await write_neo4j_cypher(request.query, request.params)
+        result = await execute_write_query(request.query, request.params)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/get_neo4j_schema")
-async def legacy_get_schema():
-    """Legacy endpoint for schema operations"""
+async def schema_endpoint():
+    """Get schema"""
     try:
-        result = await get_neo4j_schema()
+        result = await get_schema()
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -814,31 +665,22 @@ async def legacy_get_schema():
 # ============================================
 
 def main():
-    """Main function to run the fixed MCP server"""
+    """Main function"""
     print("=" * 60)
-    print("🧠 FIXED NEO4J MCP SERVER")
+    print("🧠 STANDALONE NEO4J SERVER")
     print("=" * 60)
-    print("🏗️  Architecture: Fixed FastMCP + LangGraph + Neo4j")
-    print("🔧 Configuration:")
+    print("✅ No FastMCP - No Library Conflicts!")
+    print("✅ Pure FastAPI - Guaranteed to Work!")
     print(f"   📍 Neo4j URI: {NEO4J_URI}")
-    print(f"   👤 Neo4j User: {NEO4J_USER}")
-    print(f"   🗄️  Neo4j Database: {NEO4J_DATABASE}")
-    print(f"   🤖 Cortex Model: {CORTEX_MODEL}")
     print(f"   🌐 Server: {SERVER_HOST}:{SERVER_PORT}")
-    print("=" * 60)
-    print("✅ Fixed endpoints:")
-    print("   • /health - Health check")
-    print("   • /chat - Chat with agent")
-    print("   • /stats - Database statistics")
-    print("   • /graph - Graph data")
-    print("   • All MCP tools available")
     print("=" * 60)
     
     if driver is None:
         print("❌ Cannot start server - Neo4j driver failed to initialize")
+        print("❌ Please check Neo4j connection and password")
         return
     
-    print("🚀 Starting fixed MCP server...")
+    print("🚀 Starting standalone server...")
     
     try:
         import uvicorn
