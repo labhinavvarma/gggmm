@@ -1,6 +1,6 @@
 """
-Fixed Neo4j Streamlit UI with Stable NVL Graph Visualization
-This version properly connects to the backend and shows stable relationship lines
+Compatible Streamlit UI for Standalone Neo4j Server
+Perfectly matched to work with the standalone_server.py
 """
 
 import streamlit as st
@@ -13,33 +13,15 @@ from typing import Dict, Any, Optional
 import streamlit.components.v1 as components
 
 # ============================================
-# CONFIGURATION - FIXED PORTS AND ENDPOINTS
+# CONFIGURATION - MATCHED TO STANDALONE SERVER
 # ============================================
 
-# Backend server ports (make sure these match your running servers)
-MCP_SERVER_PORT = 8000  # MCP server with Neo4j tools
-FASTAPI_APP_PORT = 8081  # FastAPI app with LangGraph agent
-
-# Choose which backend to use (MCP server has more features)
-USE_MCP_SERVER = True  # Set to False to use FastAPI app instead
-
-if USE_MCP_SERVER:
-    BACKEND_PORT = MCP_SERVER_PORT
-    CHAT_ENDPOINT = "/chat"
-    HEALTH_ENDPOINT = "/health"
-    GRAPH_ENDPOINT = "/graph"
-    STATS_ENDPOINT = "/stats"
-else:
-    BACKEND_PORT = FASTAPI_APP_PORT
-    CHAT_ENDPOINT = "/chat"
-    HEALTH_ENDPOINT = "/health"
-    GRAPH_ENDPOINT = "/graph"  # May not exist in FastAPI app
-    STATS_ENDPOINT = "/stats"  # May not exist in FastAPI app
-
+# Backend server configuration (matches standalone_server.py)
+BACKEND_PORT = 8000
 BASE_URL = f"http://localhost:{BACKEND_PORT}"
 
-print(f"🔧 Streamlit UI Configuration:")
-print(f"   Backend: {'MCP Server' if USE_MCP_SERVER else 'FastAPI App'}")
+print(f"🔧 Compatible Streamlit UI Configuration:")
+print(f"   Backend: Standalone Neo4j Server")
 print(f"   Port: {BACKEND_PORT}")
 print(f"   Base URL: {BASE_URL}")
 
@@ -48,13 +30,13 @@ print(f"   Base URL: {BASE_URL}")
 # ============================================
 
 st.set_page_config(
-    page_title="Neo4j Chatbot with Stable Graph",
+    page_title="Neo4j Chatbot - Compatible UI",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Enhanced Custom CSS
+# Enhanced Custom CSS for compatibility
 st.markdown("""
 <style>
     .main { 
@@ -114,6 +96,7 @@ st.markdown("""
         border-left: 4px solid #50fa7b;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         margin: 0.5rem 0;
+        overflow-x: auto;
     }
     
     .result-display {
@@ -171,12 +154,15 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     
-    .prompt-section {
-        background: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #28a745;
+    .standalone-badge {
+        background: linear-gradient(90deg, #28a745 0%, #20c997 100%);
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+        display: inline-block;
+        margin: 0.2rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -199,27 +185,27 @@ if "last_update_time" not in st.session_state:
     st.session_state.last_update_time = None
 
 # ============================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS - COMPATIBLE WITH STANDALONE SERVER
 # ============================================
 
 @st.cache_data(ttl=10)
-def check_backend_health():
-    """Check health of the backend server with caching"""
+def check_standalone_server():
+    """Check health of the standalone server"""
     try:
-        response = requests.get(f"{BASE_URL}{HEALTH_ENDPOINT}", timeout=5)
+        response = requests.get(f"{BASE_URL}/health", timeout=5)
         if response.status_code == 200:
             return {"status": "healthy", "data": response.json()}
         else:
             return {"status": "error", "error": f"HTTP {response.status_code}"}
     except requests.exceptions.ConnectionError:
-        return {"status": "disconnected", "error": f"Server not running on port {BACKEND_PORT}"}
+        return {"status": "disconnected", "error": f"Standalone server not running on port {BACKEND_PORT}"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
 def get_database_stats():
-    """Get current database statistics"""
+    """Get current database statistics from standalone server"""
     try:
-        response = requests.get(f"{BASE_URL}{STATS_ENDPOINT}", timeout=10)
+        response = requests.get(f"{BASE_URL}/stats", timeout=10)
         if response.status_code == 200:
             return response.json()
         else:
@@ -228,9 +214,9 @@ def get_database_stats():
         return {"error": str(e)}
 
 def get_graph_data(limit: int = 50):
-    """Get graph data for visualization"""
+    """Get graph data for visualization from standalone server"""
     try:
-        response = requests.get(f"{BASE_URL}{GRAPH_ENDPOINT}?limit={limit}&include_relationships=true", timeout=15)
+        response = requests.get(f"{BASE_URL}/graph?limit={limit}&include_relationships=true", timeout=15)
         if response.status_code == 200:
             return response.json()
         else:
@@ -239,7 +225,7 @@ def get_graph_data(limit: int = 50):
         return {"error": str(e)}
 
 def send_chat_message(question: str):
-    """Send chat message to backend"""
+    """Send chat message to standalone server"""
     try:
         payload = {
             "question": question,
@@ -249,7 +235,7 @@ def send_chat_message(question: str):
         start_time = time.time()
         
         response = requests.post(
-            f"{BASE_URL}{CHAT_ENDPOINT}",
+            f"{BASE_URL}/chat",
             json=payload,
             timeout=30
         )
@@ -271,8 +257,8 @@ def send_chat_message(question: str):
     except requests.exceptions.ConnectionError:
         return {
             "success": False,
-            "error": "Cannot connect to backend server",
-            "answer": f"❌ Backend server not running on port {BACKEND_PORT}. Please start the server.",
+            "error": "Cannot connect to standalone server",
+            "answer": f"❌ Standalone server not running on port {BACKEND_PORT}. Please start: python standalone_server.py",
             "response_time": 0
         }
     except Exception as e:
@@ -283,8 +269,8 @@ def send_chat_message(question: str):
             "response_time": 0
         }
 
-def create_stable_nvl_visualization(graph_data, height=600):
-    """Create stable Neo4j Visualization Library component with proper relationships"""
+def create_compatible_graph_visualization(graph_data, height=600):
+    """Create D3.js graph visualization compatible with standalone server data"""
     
     nodes = graph_data.get("nodes", [])
     relationships = graph_data.get("relationships", [])
@@ -296,7 +282,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Stable Neo4j Graph</title>
+        <title>Compatible Neo4j Graph</title>
         <script src="https://unpkg.com/d3@7"></script>
         <style>
             body {{
@@ -307,7 +293,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
             }}
             
             .header {{
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
                 color: white;
                 padding: 1rem;
                 text-align: center;
@@ -326,7 +312,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
             }}
             
             .btn {{
-                background: #667eea;
+                background: #28a745;
                 color: white;
                 border: none;
                 padding: 0.5rem 1rem;
@@ -337,7 +323,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
             }}
             
             .btn:hover {{
-                background: #5a6fd8;
+                background: #218838;
             }}
             
             .stats {{
@@ -351,7 +337,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
                 background: #f8f9fa;
                 padding: 0.5rem;
                 border-radius: 4px;
-                border-left: 3px solid #667eea;
+                border-left: 3px solid #28a745;
                 font-weight: bold;
             }}
             
@@ -425,7 +411,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
     </head>
     <body>
         <div class="header">
-            🧠 Stable Neo4j Graph - D3.js Force Layout (Update #{update_key})
+            🧠 Compatible Neo4j Graph - Standalone Server (Update #{update_key})
         </div>
         
         <div class="controls">
@@ -440,19 +426,19 @@ def create_stable_nvl_visualization(graph_data, height=600):
         </div>
         
         <div id="graph-container">
-            {('<div class="loading">📝 No data in Neo4j database.<br>Create some nodes to see the graph!</div>' if len(nodes) == 0 else '<svg id="graph-svg"></svg>')}
+            {('<div class="loading">📝 No data in Neo4j database.<br>Try: "Create a Person named Alice"</div>' if len(nodes) == 0 else '<svg id="graph-svg"></svg>')}
         </div>
         
         <div class="tooltip" id="tooltip"></div>
 
         <script>
-            // Graph data from Neo4j
+            // Graph data from standalone server
             const graphData = {{
                 nodes: {json.dumps(nodes)},
                 relationships: {json.dumps(relationships)}
             }};
             
-            console.log('📊 Stable Graph Data:', {{
+            console.log('📊 Compatible Graph Data:', {{
                 nodes: graphData.nodes.length,
                 relationships: graphData.relationships.length
             }});
@@ -488,7 +474,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
                 
                 svg.call(zoom);
                 
-                // Process data for D3
+                // Process data for D3 (compatible with standalone server format)
                 const nodes = graphData.nodes.map(d => ({{
                     ...d,
                     id: d.id.toString(),
@@ -504,7 +490,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
                     label: d.type || 'RELATES_TO'
                 }}));
                 
-                console.log('🔗 Processed data:', {{ nodes: nodes.length, links: links.length }});
+                console.log('🔗 Processed compatible data:', {{ nodes: nodes.length, links: links.length }});
                 
                 // Create force simulation
                 simulation = d3.forceSimulation(nodes)
@@ -585,7 +571,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
                         .attr('y', d => d.y + 5);
                 }});
                 
-                console.log('✅ Stable graph initialized');
+                console.log('✅ Compatible graph initialized');
             }}
             
             // Event handlers
@@ -680,7 +666,7 @@ def create_stable_nvl_visualization(graph_data, height=600):
             
             // Initialize when page loads
             document.addEventListener('DOMContentLoaded', function() {{
-                console.log('🚀 Initializing stable graph visualization...');
+                console.log('🚀 Initializing compatible graph visualization...');
                 if (graphData.nodes.length > 0) {{
                     setTimeout(initializeGraph, 100);
                 }}
@@ -700,16 +686,16 @@ def create_stable_nvl_visualization(graph_data, height=600):
     return html_content
 
 def update_connection_status():
-    """Update connection status in session state"""
-    health = check_backend_health()
+    """Update connection status for standalone server"""
+    health = check_standalone_server()
     st.session_state.connection_status = health["status"]
     return health
 
 # ============================================
-# ENHANCED EXAMPLE PROMPTS
+# ENHANCED EXAMPLE PROMPTS FOR STANDALONE SERVER
 # ============================================
 
-EXAMPLE_PROMPTS = {
+COMPATIBLE_EXAMPLE_PROMPTS = {
     "🔍 Basic Queries": [
         "How many nodes are in the graph?",
         "How many relationships are in the graph?",
@@ -719,9 +705,9 @@ EXAMPLE_PROMPTS = {
     ],
     
     "👥 Create People & Companies": [
-        "Create a Person named Alice with age 30 and email alice@email.com",
-        "Create a Person named Bob with age 25 and city 'New York'",
-        "Create a Company named TechCorp with industry 'Technology'",
+        "Create a Person named Alice with age 30",
+        "Create a Person named Bob with age 25",
+        "Create a Company named TechCorp",
         "Create a Company named DataInc with employees 500",
         "Create a Person named Charlie who works at Microsoft"
     ],
@@ -735,43 +721,43 @@ EXAMPLE_PROMPTS = {
     ],
     
     "📊 Data Analysis": [
-        "Show me all Person nodes with their properties",
-        "Find all Company nodes and their details",
-        "List all WORKS_FOR relationships",
-        "Show me nodes with the most connections",
-        "Find people who work at technology companies"
+        "Show me all Person nodes",
+        "Find all Company nodes",
+        "List all relationships",
+        "Show me nodes with properties",
+        "Find all connected nodes"
     ],
     
     "🏗️ Create Networks": [
-        "Create a social network with 3 connected friends: Alice, Bob, and Charlie",
-        "Create a company hierarchy: CEO -> Manager -> Employee",
-        "Build a project team with 4 people and their roles",
+        "Create a social network with 3 connected friends",
+        "Create a company hierarchy with CEO and employees",
+        "Build a project team with 4 people",
         "Create a family tree with parents and children",
-        "Build a university structure with students and professors"
+        "Build a university structure"
     ],
     
     "🧹 Cleanup Operations": [
         "Delete all TestNode nodes",
-        "Remove all TEMPORARY relationships",
+        "Remove all test data",
         "Delete nodes with no relationships",
-        "Clean up duplicate Person nodes",
-        "Remove all nodes with label 'Demo'"
+        "Clean up old test nodes",
+        "Remove all temporary data"
     ],
     
     "🔄 Update Operations": [
-        "Update all Person nodes to add a 'status' property set to 'active'",
-        "Set the 'last_updated' property to current timestamp for all Company nodes",
+        "Update all Person nodes to add status active",
+        "Set the last_updated property for all nodes",
         "Update Alice's age to 31",
-        "Change all WORKS_FOR relationships to include a 'start_date' property",
-        "Add a 'department' property to all employees"
+        "Add department property to all employees",
+        "Update all nodes with current timestamp"
     ],
     
     "🎯 Advanced Queries": [
-        "Find the shortest path between Alice and any Company",
-        "Show me all people who work at companies with more than 100 employees",
-        "Find nodes that are connected to both Person and Company nodes",
-        "List all people who have friends working at the same company",
-        "Show me the most connected person in the network"
+        "Find nodes with the most connections",
+        "Show me all people and their companies",
+        "Find all nodes connected to Alice",
+        "List all paths between nodes",
+        "Show me the most connected person"
     ]
 }
 
@@ -782,9 +768,11 @@ EXAMPLE_PROMPTS = {
 # Header
 st.markdown("""
 <div class="header-container">
-    <h1>🧠 Neo4j Chatbot with Stable Graph Visualization</h1>
-    <p>Chat with your Neo4j database and see real-time updates with stable relationship lines</p>
-    <p><strong>✅ FIXED VERSION with Proper Backend Connection</strong></p>
+    <h1>🧠 Neo4j Chatbot - Compatible UI</h1>
+    <p>Perfectly matched to work with the standalone Neo4j server</p>
+    <div class="standalone-badge">
+        ✅ COMPATIBLE with standalone_server.py
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -795,28 +783,31 @@ health_status = update_connection_status()
 if health_status["status"] == "healthy":
     st.markdown(f"""
     <div class="connection-indicator connected">
-        ✅ Connected to {USE_MCP_SERVER and 'MCP Server' or 'FastAPI App'} on port {BACKEND_PORT}
+        ✅ Connected to Standalone Neo4j Server on port {BACKEND_PORT}
     </div>
     """, unsafe_allow_html=True)
     
     # Show server details
     if "data" in health_status:
         health_data = health_status["data"]
-        if USE_MCP_SERVER and "neo4j" in health_data:
+        if "neo4j" in health_data:
             neo4j_info = health_data["neo4j"]
             st.success(f"Neo4j Status: {neo4j_info.get('status', 'unknown')}")
+        if "server" in health_data:
+            server_info = health_data["server"]
+            st.info(f"Server Type: {server_info.get('type', 'unknown')}")
 else:
     st.markdown(f"""
     <div class="connection-indicator disconnected">
-        ❌ Cannot connect to backend server on port {BACKEND_PORT}
+        ❌ Cannot connect to standalone server on port {BACKEND_PORT}
         <br>Error: {health_status.get('error', 'Unknown error')}
     </div>
     """, unsafe_allow_html=True)
     
     st.error("**Please check:**")
-    st.error(f"1. {'MCP server' if USE_MCP_SERVER else 'FastAPI app'} is running on port {BACKEND_PORT}")
+    st.error(f"1. Standalone server is running: `python standalone_server.py`")
     st.error("2. Neo4j database is accessible")
-    st.error("3. All dependencies are installed")
+    st.error("3. Server started without errors")
     
     if st.button("🔄 Retry Connection"):
         st.cache_data.clear()
@@ -833,12 +824,12 @@ if health_status["status"] == "healthy":
     # ============================================
     
     with col1:
-        st.markdown("## 💬 Chat Interface")
+        st.markdown("## 💬 Compatible Chat Interface")
         
         # Display current database stats
         stats = get_database_stats()
         if "error" not in stats:
-            st.markdown("### 📊 Database Statistics")
+            st.markdown("### 📊 Live Database Statistics")
             
             col_a, col_b = st.columns(2)
             with col_a:
@@ -857,7 +848,7 @@ if health_status["status"] == "healthy":
                 if "error" not in new_graph_data:
                     st.session_state.graph_data = new_graph_data
                     st.session_state.last_update_time = datetime.now()
-                    st.success("✅ Data refreshed!")
+                    st.success("✅ Data refreshed from standalone server!")
                     st.rerun()
             except Exception as e:
                 st.error(f"Failed to refresh: {e}")
@@ -879,7 +870,7 @@ if health_status["status"] == "healthy":
                 
                 st.markdown(f"""
                 <div class="assistant-message">
-                    <strong>🤖 Neo4j Agent:</strong>
+                    <strong>🤖 Standalone Agent:</strong>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -913,27 +904,19 @@ if health_status["status"] == "healthy":
         # Chat input
         st.markdown("### ✍️ Ask Your Question")
         
-        with st.form("chat_form", clear_on_submit=True):
-            user_input = st.text_area(
-                "Ask about your Neo4j database:",
-                placeholder="e.g., How many nodes are in the graph?",
-                height=80
-            )
-            
-            submitted = st.form_submit_button("🚀 Send Query", use_container_width=True)
-        
-        if submitted and user_input:
+        # Chat input
+        if prompt := st.chat_input("Ask about your Neo4j database (e.g., 'How many nodes?', 'Create a Person named Alice')"):
             # Add user message
             user_message = {
                 "role": "user",
-                "content": user_input,
+                "content": prompt,
                 "timestamp": datetime.now().isoformat()
             }
             st.session_state.messages.append(user_message)
             
             # Process the request
-            with st.spinner("🧠 Processing with Neo4j agent..."):
-                result = send_chat_message(user_input)
+            with st.spinner("🧠 Processing with standalone server..."):
+                result = send_chat_message(prompt)
             
             # Add assistant message
             assistant_message = {
@@ -950,22 +933,22 @@ if health_status["status"] == "healthy":
                     if "error" not in new_graph_data:
                         st.session_state.graph_data = new_graph_data
                         st.session_state.last_update_time = datetime.now()
-                        st.success("🔄 Graph updated!")
+                        st.success("🔄 Graph updated automatically!")
                 except Exception as e:
                     st.warning(f"Could not refresh graph: {e}")
             
             st.rerun()
     
     # ============================================
-    # RIGHT COLUMN - STABLE GRAPH VISUALIZATION
+    # RIGHT COLUMN - COMPATIBLE GRAPH VISUALIZATION
     # ============================================
     
     with col2:
-        st.markdown("## 🎨 Stable Neo4j Graph")
+        st.markdown("## 🎨 Compatible Neo4j Graph")
         
         # Load graph data if not already loaded
         if st.session_state.graph_data is None:
-            with st.spinner("📊 Loading graph data..."):
+            with st.spinner("📊 Loading graph data from standalone server..."):
                 try:
                     graph_data = get_graph_data(50)
                     if "error" not in graph_data:
@@ -992,17 +975,17 @@ if health_status["status"] == "healthy":
             if st.session_state.last_update_time:
                 st.caption(f"Last updated: {st.session_state.last_update_time.strftime('%H:%M:%S')}")
             
-            # Create and display stable graph
+            # Create and display compatible graph
             if nodes:
-                stable_graph_html = create_stable_nvl_visualization(graph_data, height=600)
+                compatible_graph_html = create_compatible_graph_visualization(graph_data, height=600)
                 
                 components.html(
-                    stable_graph_html,
+                    compatible_graph_html,
                     height=600,
-                    key=f"stable_graph_{int(time.time())}"
+                    key=f"compatible_graph_{int(time.time())}"
                 )
             else:
-                st.info("📝 No nodes in database. Create some data to see the graph!")
+                st.info("📝 No nodes in database. Use the example prompts to create some data!")
         
         elif st.session_state.graph_data and "error" in st.session_state.graph_data:
             st.error(f"Graph error: {st.session_state.graph_data['error']}")
@@ -1010,22 +993,22 @@ if health_status["status"] == "healthy":
             st.info("📊 Click 'Refresh Data' to load the graph visualization")
 
 # ============================================
-# SIDEBAR - ENHANCED PROMPTS
+# SIDEBAR - COMPATIBLE PROMPTS
 # ============================================
 
 with st.sidebar:
-    st.markdown("## 🚀 Enhanced Example Prompts")
+    st.markdown("## 🚀 Compatible Example Prompts")
     
     # Server status
     if health_status["status"] == "healthy":
         st.markdown("### ✅ Server Status")
-        st.success(f"Connected to port {BACKEND_PORT}")
+        st.success(f"Connected to standalone server on port {BACKEND_PORT}")
     else:
         st.markdown("### ❌ Server Status")
         st.error(f"Not connected to port {BACKEND_PORT}")
     
-    # Enhanced example prompts organized by category
-    for category, prompts in EXAMPLE_PROMPTS.items():
+    # Compatible example prompts organized by category
+    for category, prompts in COMPATIBLE_EXAMPLE_PROMPTS.items():
         st.markdown(f"### {category}")
         
         for prompt in prompts:
@@ -1083,11 +1066,12 @@ with st.sidebar:
 st.markdown("---")
 st.markdown(f"""
 <div style="text-align: center; color: #666; padding: 2rem; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); border-radius: 0.5rem; margin-top: 2rem;">
-    <h3>🧠 Fixed Neo4j Chatbot v5.0</h3>
-    <p><strong>✅ STABLE CONNECTIONS:</strong> Properly connects to {'MCP Server' if USE_MCP_SERVER else 'FastAPI App'}</p>
-    <p><strong>🎨 STABLE GRAPH:</strong> D3.js force layout with visible relationship lines</p>
+    <h3>🧠 Compatible Neo4j Chatbot v1.0</h3>
+    <p><strong>✅ PERFECT COMPATIBILITY:</strong> Designed specifically for standalone_server.py</p>
+    <p><strong>🎨 STABLE GRAPH:</strong> D3.js visualization with visible relationship lines</p>
     <p><strong>🔄 REAL-TIME UPDATES:</strong> Graph refreshes automatically after changes</p>
-    <p><strong>💡 ENHANCED PROMPTS:</strong> {sum(len(prompts) for prompts in EXAMPLE_PROMPTS.values())} example queries</p>
-    <p><strong>📡 Backend:</strong> {USE_MCP_SERVER and 'MCP Server' or 'FastAPI App'} on port {BACKEND_PORT}</p>
+    <p><strong>💡 SMART PROMPTS:</strong> {sum(len(prompts) for prompts in COMPATIBLE_EXAMPLE_PROMPTS.values())} compatible examples</p>
+    <p><strong>🌐 Backend:</strong> Standalone Neo4j Server on port {BACKEND_PORT}</p>
+    <p><strong>📡 Connection:</strong> {health_status["status"].upper()}</p>
 </div>
 """, unsafe_allow_html=True)
