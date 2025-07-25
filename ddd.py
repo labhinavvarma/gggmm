@@ -1,581 +1,893 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional
-from langgraph_agent import build_schema_aware_agent, SchemaAwareAgentState, schema_manager
-import uuid
-import logging
-import uvicorn
-from datetime import datetime
+import streamlit as st
+import streamlit.components.v1 as components
+from pyvis.network import Network
 import requests
+import json
+import os
+import tempfile
+from datetime import datetime
+import uuid
+import traceback
+import hashlib
+import colorsys
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("schema_aware_neo4j_app")
-
-# Create FastAPI app with enhanced metadata
-app = FastAPI(
-    title="Schema-Aware Neo4j Graph Explorer API",
-    description="AI-powered Neo4j graph database agent with complete schema awareness and advanced visualization",
-    version="3.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
-# Enhanced CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Streamlit URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Page configuration
+st.set_page_config(
+    page_title="Neo4j Graph Explorer - Browser Experience", 
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Initialize schema-aware agent at startup
-agent = None
+# Enhanced CSS with Neo4j Browser styling
+st.markdown("""
+<style>
+    .main .block-container {
+        padding-top: 1rem;
+        max-width: 100%;
+    }
+    
+    .neo4j-header {
+        background: linear-gradient(135deg, #008cc1 0%, #0056d6 100%);
+        color: white;
+        padding: 1rem 2rem;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 12px rgba(0, 140, 193, 0.3);
+    }
+    
+    .schema-panel {
+        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+        border: 1px solid #008cc1;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
+    
+    .node-type-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        margin: 2px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        color: white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    
+    .relationship-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        margin: 2px;
+        border-radius: 15px;
+        font-size: 11px;
+        font-weight: 600;
+        color: white;
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+    }
+    
+    .graph-controls {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 0.5rem 0;
+    }
+    
+    .schema-stats {
+        background: linear-gradient(135deg, #4CAF50, #45a049);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 0.5rem 0;
+        text-align: center;
+    }
+    
+    .query-panel {
+        background: #f8f9fa;
+        border: 2px solid #008cc1;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
+    
+    .cypher-display {
+        background: #2d3748;
+        color: #68d391;
+        padding: 1rem;
+        border-radius: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        border-left: 4px solid #68d391;
+        margin: 0.5rem 0;
+    }
+    
+    .stButton button {
+        background: linear-gradient(45deg, #008cc1, #0056d6);
+        color: white;
+        border: none;
+        padding: 0.6rem 1.5rem;
+        border-radius: 25px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0, 140, 193, 0.3);
+    }
+    
+    .stButton button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(0, 140, 193, 0.4);
+        background: linear-gradient(45deg, #0056d6, #008cc1);
+    }
+    
+    .graph-wrapper {
+        border: 3px solid #008cc1;
+        border-radius: 15px;
+        overflow: hidden;
+        background: #ffffff;
+        box-shadow: 0 8px 32px rgba(0, 140, 193, 0.2);
+        margin: 1rem 0;
+    }
+    
+    .graph-header {
+        background: linear-gradient(90deg, #008cc1, #0056d6);
+        color: white;
+        padding: 12px 20px;
+        font-weight: bold;
+        font-size: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the Schema-Aware LangGraph agent when the server starts"""
-    global agent
+# Initialize session state with Neo4j Browser-like features
+def init_session_state():
+    defaults = {
+        "conversation_history": [],
+        "graph_data": None,
+        "last_response": None,
+        "session_id": str(uuid.uuid4()),
+        "connection_status": "unknown",
+        "schema_info": None,
+        "node_types": [],
+        "relationship_types": [],
+        "graph_layout": "physics",
+        "show_labels": True,
+        "show_relationships": True,
+        "node_size_mode": "degree",
+        "color_scheme": "smart",
+        "unlimited_display": True,
+        "schema_loaded": False
+    }
+    
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+init_session_state()
+
+# Neo4j Browser-like header
+st.markdown('''
+<div class="neo4j-header">
+    <h1>🗄️ Neo4j Graph Explorer</h1>
+    <p><strong>Complete Schema Visualization</strong> • <strong>Unlimited Graph Display</strong> • <strong>Neo4j Browser Experience</strong></p>
+</div>
+''', unsafe_allow_html=True)
+
+def get_schema_information():
+    """Fetch complete schema information from the API"""
     try:
-        logger.info("🚀 Starting Schema-Aware Neo4j Graph Explorer Agent...")
-        logger.info("📊 Loading complete database schema for intelligent query generation...")
+        response = requests.get("http://localhost:8020/schema/summary", timeout=10)
+        if response.ok:
+            return response.json()
+        return None
+    except Exception as e:
+        st.error(f"Schema fetch error: {str(e)}")
+        return None
+
+def generate_smart_colors(items, base_hue=0.6):
+    """Generate visually distinct colors for graph elements"""
+    colors = []
+    for i, item in enumerate(items):
+        # Use golden ratio for optimal color distribution
+        hue = (base_hue + i * 0.618033988749895) % 1
+        saturation = 0.7 + (i % 3) * 0.1  # Vary saturation
+        lightness = 0.5 + (i % 2) * 0.15   # Vary lightness
         
-        # Build schema-aware agent (this will auto-load schema)
-        agent = build_schema_aware_agent()
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        hex_color = '#{:02x}{:02x}{:02x}'.format(
+            int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
+        )
+        colors.append(hex_color)
+    
+    return colors
+
+def get_neo4j_style_node_color(labels, node_types=None):
+    """Get Neo4j Browser-style colors for nodes"""
+    if not labels:
+        return "#BDC3C7"
+    
+    label = labels[0] if isinstance(labels, list) else str(labels)
+    
+    # Neo4j Browser inspired color palette
+    neo4j_colors = {
+        "Person": "#DA7194",       # Pink
+        "User": "#4C8EDA",         # Blue  
+        "Employee": "#DA7194",     # Pink
+        "Customer": "#F79767",     # Orange
+        "Movie": "#8DCC93",        # Green
+        "Film": "#8DCC93",         # Green
+        "Actor": "#F25A29",        # Red-Orange
+        "Director": "#A29BFE",     # Purple
+        "Producer": "#6C5CE7",     # Deep Purple
+        "Company": "#00B894",      # Teal
+        "Organization": "#00B894", # Teal
+        "Department": "#FDCB6E",   # Yellow
+        "Product": "#E84393",      # Magenta
+        "Service": "#00CEC9",      # Cyan
+        "Location": "#A29BFE",     # Purple
+        "City": "#6C5CE7",         # Deep Purple
+        "Country": "#5F27CD",      # Dark Purple
+        "Event": "#FF7675",        # Light Red
+        "Project": "#74B9FF",      # Light Blue
+        "Database": "#00B894",     # Teal
+        "Server": "#636E72",       # Gray
+        "Network": "#2D3436",      # Dark Gray
+        "Group": "#00CEC9",        # Cyan
+        "Team": "#74B9FF",         # Light Blue
+        "Document": "#DDD",        # Light Gray
+        "File": "#B2BEC3",         # Gray
+        "Category": "#FDCB6E",     # Yellow
+        "Tag": "#A29BFE"           # Purple
+    }
+    
+    return neo4j_colors.get(label, "#95A5A6")
+
+def get_neo4j_style_relationship_color(rel_type):
+    """Get Neo4j Browser-style colors for relationships"""
+    colors = {
+        "KNOWS": "#DA7194",        # Pink
+        "FRIEND_OF": "#DA7194",    # Pink
+        "WORKS_FOR": "#4C8EDA",    # Blue
+        "WORKS_IN": "#4C8EDA",     # Blue
+        "MANAGES": "#6C5CE7",      # Purple
+        "REPORTS_TO": "#A29BFE",   # Light Purple
+        "LOCATED_IN": "#F79767",   # Orange
+        "LIVES_IN": "#F79767",     # Orange
+        "BELONGS_TO": "#8DCC93",   # Green
+        "OWNS": "#00B894",         # Teal
+        "CREATED": "#FDCB6E",      # Yellow
+        "USES": "#E84393",         # Magenta
+        "ACTED_IN": "#8DCC93",     # Green
+        "DIRECTED": "#6C5CE7",     # Purple
+        "PRODUCED": "#00CEC9",     # Cyan
+        "LOVES": "#E84393",        # Magenta
+        "MARRIED_TO": "#DA7194",   # Pink
+        "CONNECTED": "#95A5A6",    # Gray
+        "RELATED": "#95A5A6"       # Gray
+    }
+    
+    return colors.get(rel_type, "#95A5A6")
+
+def create_neo4j_browser_like_graph(graph_data: dict, unlimited_display: bool = True) -> bool:
+    """Create a Neo4j Browser-like graph visualization with unlimited display capability"""
+    
+    if not graph_data:
+        st.info("🔍 No graph data available for visualization.")
+        return False
+    
+    try:
+        nodes = graph_data.get("nodes", [])
+        relationships = graph_data.get("relationships", [])
         
-        # Get schema info for logging
-        schema_info = schema_manager.get_cached_schema()
-        if schema_info:
-            enhanced_info = schema_info.get("enhanced_info", {})
-            node_types = len(enhanced_info.get("node_labels", [[]])[0]) if enhanced_info.get("node_labels") else 0
-            rel_types = len(enhanced_info.get("relationship_types", [[]])[0]) if enhanced_info.get("relationship_types") else 0
-            logger.info(f"🧠 Schema loaded: {node_types} node types, {rel_types} relationship types")
+        if not nodes:
+            st.info("📊 No nodes found in the current dataset.")
+            return False
         
-        logger.info("✅ Schema-Aware LangGraph agent initialized successfully")
+        # Show comprehensive statistics
+        total_nodes = len(nodes)
+        total_relationships = len(relationships)
+        
+        st.markdown(f'''
+        <div class="schema-stats">
+            <h3>🕸️ Complete Graph Visualization</h3>
+            <p><strong>{total_nodes:,} Nodes</strong> • <strong>{total_relationships:,} Relationships</strong> • <strong>Unlimited Display</strong></p>
+        </div>
+        ''', unsafe_allow_html=True)
+        
+        # Create Neo4j-style network with enhanced settings
+        net = Network(
+            height="800px",  # Taller for better view
+            width="100%", 
+            bgcolor="#FFFFFF",
+            font_color="#2C3E50",
+            directed=True,
+            select_menu=False,  # Disable selection menu for cleaner look
+            filter_menu=False   # Disable filter menu
+        )
+        
+        # Process all nodes without artificial limits
+        added_nodes = set()
+        node_stats = {}
+        
+        st.info(f"🎨 Processing {total_nodes:,} nodes for Neo4j Browser-like visualization...")
+        
+        # Calculate node degrees for sizing
+        node_degrees = {}
+        for rel in relationships:
+            start_id = str(rel.get("startNode", ""))
+            end_id = str(rel.get("endNode", ""))
+            node_degrees[start_id] = node_degrees.get(start_id, 0) + 1
+            node_degrees[end_id] = node_degrees.get(end_id, 0) + 1
+        
+        for i, node in enumerate(nodes):
+            try:
+                node_id = f"node_{i}"
+                raw_id = str(node.get("id", f"node_{i}"))
+                
+                # Extract display information
+                display_name = safe_extract_node_name(node)
+                labels = node.get("labels", ["Unknown"])
+                primary_label = labels[0] if labels else "Unknown"
+                
+                # Track node types for statistics
+                node_stats[primary_label] = node_stats.get(primary_label, 0) + 1
+                
+                # Neo4j Browser-style sizing based on connectivity
+                base_size = 25
+                degree = node_degrees.get(raw_id, 0)
+                if degree > 10:
+                    size = base_size + 20  # Hub nodes
+                elif degree > 5:
+                    size = base_size + 10  # Well-connected nodes
+                elif degree > 2:
+                    size = base_size + 5   # Connected nodes
+                else:
+                    size = base_size       # Regular nodes
+                
+                # Neo4j Browser-style colors
+                color = get_neo4j_style_node_color(labels)
+                
+                # Enhanced tooltip with comprehensive information
+                props = node.get("properties", {})
+                tooltip_parts = [
+                    f"🏷️ Type: {primary_label}",
+                    f"📛 Name: {display_name}",
+                    f"🔗 Connections: {degree}"
+                ]
+                
+                # Add key properties
+                prop_count = 0
+                for key, value in props.items():
+                    if key not in ['name', 'title', 'displayName'] and prop_count < 5:
+                        tooltip_parts.append(f"📝 {key}: {str(value)[:50]}...")
+                        prop_count += 1
+                
+                if len(props) > prop_count + 3:
+                    tooltip_parts.append(f"📋 +{len(props) - prop_count - 3} more properties")
+                
+                tooltip = "\\n".join(tooltip_parts)
+                
+                # Add node with Neo4j Browser styling
+                net.add_node(
+                    node_id,
+                    label=display_name,
+                    color={
+                        'background': color,
+                        'border': '#2C3E50',
+                        'highlight': {
+                            'background': color,
+                            'border': '#E74C3C'
+                        },
+                        'hover': {
+                            'background': color,
+                            'border': '#F39C12'
+                        }
+                    },
+                    size=size,
+                    title=tooltip,
+                    font={
+                        'size': max(14, min(20, 12 + degree // 2)),  # Dynamic font size
+                        'color': '#FFFFFF',
+                        'face': 'Arial',
+                        'strokeWidth': 2,
+                        'strokeColor': '#2C3E50'
+                    },
+                    borderWidth=2,
+                    borderWidthSelected=4,
+                    shadow={
+                        'enabled': True,
+                        'color': 'rgba(0,0,0,0.3)',
+                        'size': 8,
+                        'x': 2,
+                        'y': 2
+                    },
+                    margin={
+                        'top': 8,
+                        'bottom': 8,
+                        'left': 8,
+                        'right': 8
+                    }
+                )
+                
+                added_nodes.add((raw_id, node_id))
+                
+            except Exception as e:
+                st.warning(f"⚠️ Skipped node {i}: {str(e)}")
+                continue
+        
+        # Process all relationships without limits
+        id_mapping = dict(added_nodes)
+        simple_nodes = {node_id for _, node_id in added_nodes}
+        
+        added_edges = 0
+        relationship_stats = {}
+        
+        for i, rel in enumerate(relationships):
+            try:
+                start_raw = str(rel.get("startNode", ""))
+                end_raw = str(rel.get("endNode", ""))
+                rel_type = str(rel.get("type", "CONNECTED"))
+                
+                # Track relationship types
+                relationship_stats[rel_type] = relationship_stats.get(rel_type, 0) + 1
+                
+                start_id = id_mapping.get(start_raw)
+                end_id = id_mapping.get(end_raw)
+                
+                if start_id and end_id and start_id in simple_nodes and end_id in simple_nodes:
+                    color = get_neo4j_style_relationship_color(rel_type)
+                    
+                    # Enhanced relationship properties
+                    rel_props = rel.get("properties", {})
+                    rel_tooltip_parts = [f"Type: {rel_type}"]
+                    for key, value in list(rel_props.items())[:3]:
+                        rel_tooltip_parts.append(f"{key}: {str(value)[:30]}")
+                    rel_tooltip = "\\n".join(rel_tooltip_parts)
+                    
+                    # Add relationship with Neo4j Browser styling
+                    net.add_edge(
+                        start_id,
+                        end_id,
+                        label=rel_type,
+                        color={
+                            'color': color,
+                            'highlight': '#E74C3C',
+                            'hover': '#F39C12'
+                        },
+                        width=3,
+                        title=rel_tooltip,
+                        font={
+                            'size': 12,
+                            'color': '#2C3E50',
+                            'face': 'Arial',
+                            'strokeWidth': 2,
+                            'strokeColor': '#FFFFFF',
+                            'align': 'middle'
+                        },
+                        arrows={
+                            'to': {
+                                'enabled': True,
+                                'scaleFactor': 1.0,
+                                'type': 'arrow'
+                            }
+                        },
+                        smooth={
+                            'enabled': True,
+                            'type': 'dynamic',
+                            'roundness': 0.2
+                        },
+                        shadow={
+                            'enabled': True,
+                            'color': 'rgba(0,0,0,0.1)',
+                            'size': 4,
+                            'x': 1,
+                            'y': 1
+                        }
+                    )
+                    
+                    added_edges += 1
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Skipped relationship {i}: {str(e)}")
+                continue
+        
+        # Neo4j Browser-like physics configuration for stability
+        net.set_options("""
+        var options = {
+          "configure": {
+            "enabled": false
+          },
+          "edges": {
+            "color": {
+              "inherit": false
+            },
+            "smooth": {
+              "enabled": true,
+              "type": "dynamic",
+              "roundness": 0.2
+            }
+          },
+          "physics": {
+            "enabled": true,
+            "stabilization": {
+              "enabled": true,
+              "iterations": 200,
+              "updateInterval": 25,
+              "onlyDynamicEdges": false,
+              "fit": true
+            },
+            "barnesHut": {
+              "theta": 0.5,
+              "gravitationalConstant": -8000,
+              "centralGravity": 0.3,
+              "springLength": 120,
+              "springConstant": 0.04,
+              "damping": 0.09,
+              "avoidOverlap": 0.1
+            },
+            "maxVelocity": 50,
+            "minVelocity": 0.75,
+            "timestep": 0.5
+          },
+          "interaction": {
+            "hover": true,
+            "hoverConnectedEdges": true,
+            "selectConnectedEdges": false,
+            "tooltipDelay": 200,
+            "zoomView": true,
+            "dragView": true
+          },
+          "layout": {
+            "improvedLayout": true,
+            "clusterThreshold": 150,
+            "hierarchical": false
+          }
+        }
+        """)
+        
+        st.success(f"✅ **Neo4j Browser-Like Graph Created:** {len(simple_nodes):,} nodes, {added_edges:,} relationships")
+        
+        # Display statistics
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📊 Node Type Distribution")
+            for node_type, count in sorted(node_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
+                color = get_neo4j_style_node_color([node_type])
+                st.markdown(f'''
+                <div class="node-type-badge" style="background-color: {color};">
+                    {node_type}: {count:,}
+                </div>
+                ''', unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("### 🔗 Relationship Type Distribution")
+            for rel_type, count in sorted(relationship_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
+                st.markdown(f'''
+                <div class="relationship-badge">
+                    {rel_type}: {count:,}
+                </div>
+                ''', unsafe_allow_html=True)
+        
+        # Generate and display the graph
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
+            net.save_graph(f.name)
+            html_file = f.name
+        
+        with open(html_file, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # Neo4j Browser-like wrapper with enhanced styling
+        wrapped_html = f"""
+        <div class="graph-wrapper">
+            <div class="graph-header">
+                <span>🕸️ Complete Neo4j Graph Visualization</span>
+                <span>{len(simple_nodes):,} Nodes • {added_edges:,} Relationships • Unlimited Display</span>
+            </div>
+            <div style="position: relative;">
+                {html_content}
+            </div>
+        </div>
+        """
+        
+        # Display with increased height for better viewing
+        components.html(wrapped_html, height=850, scrolling=False)
+        
+        # Cleanup
+        try:
+            os.unlink(html_file)
+        except:
+            pass
+        
+        return True
         
     except Exception as e:
-        logger.error(f"❌ Failed to initialize schema-aware agent: {e}")
-        raise e
+        st.error(f"❌ Neo4j Browser-like graph rendering failed: {str(e)}")
+        
+        with st.expander("🔍 Debug Information"):
+            st.code(str(e))
+            st.code(traceback.format_exc())
+        
+        return False
 
-# Enhanced request/response models
-class ChatRequest(BaseModel):
-    question: str
-    session_id: str = None
-    node_limit: int = 5000  # Default node limit for visualization
-
-class ChatResponse(BaseModel):
-    trace: str
-    tool: str
-    query: str
-    answer: str
-    graph_data: Optional[dict] = None
-    session_id: str
-    timestamp: str
-    node_limit: int
-    success: bool = True
-    error: Optional[str] = None
-    execution_time_ms: float = 0
-    schema_aware: bool = True  # New field to indicate schema awareness
-
-# Health check endpoint
-@app.get("/")
-async def health_check():
-    """Enhanced health check endpoint with schema awareness"""
-    schema_status = "unknown"
-    schema_info = {}
-    
+def safe_extract_node_name(node):
+    """Safely extract display name from node"""
     try:
-        cached_schema = schema_manager.get_cached_schema()
-        if cached_schema:
-            schema_status = "loaded"
-            enhanced_info = cached_schema.get("enhanced_info", {})
-            schema_info = {
-                "node_types": len(enhanced_info.get("node_labels", [[]])[0]) if enhanced_info.get("node_labels") else 0,
-                "relationship_types": len(enhanced_info.get("relationship_types", [[]])[0]) if enhanced_info.get("relationship_types") else 0,
-                "last_updated": cached_schema.get("last_updated", "unknown")
-            }
-        else:
-            schema_status = "not_loaded"
-    except Exception:
-        schema_status = "error"
-    
-    return {
-        "status": "healthy",
-        "service": "Schema-Aware Neo4j Graph Explorer API",
-        "version": "3.0.0",
-        "features": [
-            "schema_awareness", 
-            "intelligent_query_generation", 
-            "multi_tier_connections",
-            "query_validation",
-            "5000_node_support", 
-            "interactive_visualization"
-        ],
-        "timestamp": datetime.now().isoformat(),
-        "agent_ready": agent is not None,
-        "schema_status": schema_status,
-        "schema_info": schema_info
-    }
-
-@app.get("/health")
-async def detailed_health():
-    """Comprehensive health check with all service dependencies"""
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {},
-        "configuration": {
-            "max_node_limit": 5000,
-            "default_node_limit": 5000,
-            "interface_type": "schema_aware_split_screen",
-            "schema_aware": True
-        }
-    }
-    
-    # Check schema-aware agent status
-    health_status["services"]["schema_aware_agent"] = {
-        "status": "up" if agent is not None else "down",
-        "ready": agent is not None,
-        "features": [
-            "schema_awareness",
-            "intelligent_query_generation", 
-            "query_validation",
-            "multi_tier_support",
-            "visualization_optimization"
+        props = node.get("properties", {})
+        labels = node.get("labels", ["Unknown"])
+        node_id = str(node.get("id", ""))
+        
+        # Try different name properties
+        name_options = [
+            props.get("name"),
+            props.get("title"), 
+            props.get("displayName"),
+            props.get("username"),
+            props.get("fullName"),
+            props.get("firstName")
         ]
-    }
-    
-    # Check schema manager status
-    try:
-        cached_schema = schema_manager.get_cached_schema()
-        if cached_schema:
-            enhanced_info = cached_schema.get("enhanced_info", {})
-            health_status["services"]["schema_manager"] = {
-                "status": "up",
-                "node_types": len(enhanced_info.get("node_labels", [[]])[0]) if enhanced_info.get("node_labels") else 0,
-                "relationship_types": len(enhanced_info.get("relationship_types", [[]])[0]) if enhanced_info.get("relationship_types") else 0,
-                "last_updated": cached_schema.get("last_updated"),
-                "features": ["schema_caching", "auto_refresh", "validation"]
-            }
-        else:
-            health_status["services"]["schema_manager"] = {
-                "status": "down",
-                "error": "Schema not loaded"
-            }
+        
+        for name in name_options:
+            if name and str(name).strip():
+                return str(name).strip()[:30]
+        
+        # Fallback to label + ID
+        if labels and labels[0] != "Unknown":
+            short_id = node_id.split(":")[-1][-4:] if ":" in node_id else node_id[-4:]
+            return f"{labels[0]}_{short_id}"
+        
+        return f"Node_{node_id[-6:] if len(node_id) > 6 else node_id}"
+        
     except Exception as e:
-        health_status["services"]["schema_manager"] = {
-            "status": "error",
-            "error": str(e)
-        }
-    
-    # Check MCP server connectivity
-    try:
-        mcp_response = requests.get("http://localhost:8000/", timeout=5)
-        health_status["services"]["mcp_server"] = {
-            "status": "up" if mcp_response.status_code == 200 else "down",
-            "url": "http://localhost:8000",
-            "features": ["graph_extraction", "node_limiting", "optimization", "schema_queries"]
-        }
-    except Exception as e:
-        health_status["services"]["mcp_server"] = {
-            "status": "down",
-            "error": str(e),
-            "url": "http://localhost:8000"
-        }
-    
-    # Check Neo4j connectivity via MCP server
-    try:
-        neo4j_response = requests.post(
-            "http://localhost:8000/get_neo4j_schema", 
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
-        health_status["services"]["neo4j"] = {
-            "status": "up" if neo4j_response.status_code == 200 else "down",
-            "features": ["graph_database", "cypher_queries", "apoc_procedures", "schema_introspection"]
-        }
-    except Exception as e:
-        health_status["services"]["neo4j"] = {
-            "status": "down",
-            "error": str(e)
-        }
-    
-    # Determine overall status
-    all_up = all(
-        service.get("status") == "up" 
-        for service in health_status["services"].values()
-    )
-    health_status["status"] = "healthy" if all_up else "degraded"
-    
-    return health_status
+        return f"Node_{hash(str(node)) % 10000}"
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    Enhanced schema-aware chat endpoint
-    
-    Processes questions using complete database schema knowledge for
-    intelligent query generation and improved accuracy.
-    """
-    if agent is None:
-        logger.error("Schema-aware agent not initialized")
-        raise HTTPException(status_code=500, detail="Schema-aware agent not initialized")
-    
-    # Generate session_id if not provided
-    session_id = request.session_id or str(uuid.uuid4())
-    node_limit = min(request.node_limit, 10000)  # Cap at 10k for performance
-    
-    logger.info(f"🧠 Processing schema-aware chat request - Session: {session_id[:8]}...")
-    logger.info(f"📊 Question: {request.question[:100]} (Node limit: {node_limit})")
-    
-    start_time = datetime.now()
-    
+def call_agent_api(question: str, node_limit: int = None) -> dict:
+    """Enhanced API call with unlimited support"""
     try:
-        # Create schema-aware agent state
-        state = SchemaAwareAgentState(
-            question=request.question,
-            session_id=session_id,
-            node_limit=node_limit
-        )
+        api_url = "http://localhost:8020/chat"
         
-        # Run the schema-aware agent
-        logger.info(f"🔄 Running Schema-Aware LangGraph agent...")
-        result = await agent.ainvoke(state)
+        # Use very high limit for unlimited display
+        effective_limit = node_limit if node_limit else 50000
         
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds() * 1000
+        payload = {
+            "question": question,
+            "session_id": st.session_state.session_id,
+            "node_limit": effective_limit
+        }
         
-        logger.info(f"✅ Schema-aware agent completed - Tool: {result.get('tool')}")
-        logger.info(f"📈 Execution time: {execution_time:.2f}ms")
-        
-        # Check if we have graph data
-        has_graph_data = result.get('graph_data') and result.get('graph_data', {}).get('nodes')
-        if has_graph_data:
-            node_count = len(result['graph_data']['nodes'])
-            rel_count = len(result['graph_data'].get('relationships', []))
-            logger.info(f"🕸️ Graph data: {node_count} nodes, {rel_count} relationships")
-        
-        # Prepare enhanced response
-        response = ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=result.get("answer", ""),
-            graph_data=result.get("graph_data") if result.get("graph_data") else None,
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            node_limit=node_limit,
-            execution_time_ms=execution_time,
-            success=True,
-            schema_aware=True
-        )
-        
-        return response
-        
+        with st.spinner("🤖 Processing with unlimited graph capability..."):
+            response = requests.post(api_url, json=payload, timeout=120)  # Longer timeout
+            response.raise_for_status()
+            result = response.json()
+            
+            st.session_state.connection_status = "connected"
+            return result
+            
+    except requests.exceptions.ConnectionError:
+        st.session_state.connection_status = "disconnected"
+        st.error("❌ Cannot connect to agent API. Please ensure the server is running on port 8020.")
+        return None
     except Exception as e:
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds() * 1000
+        st.error(f"❌ API Error: {str(e)}")
+        return None
+
+# Main layout
+col1, col2 = st.columns([1, 3], gap="large")
+
+with col1:
+    st.markdown("### 🎛️ Neo4j Browser Controls")
+    
+    # Connection status
+    status_colors = {"connected": "🟢", "disconnected": "🔴", "unknown": "⚪"}
+    st.markdown(f'''
+    <div class="schema-panel">
+        <strong>Connection Status:</strong> {status_colors.get(st.session_state.connection_status, "⚪")} {st.session_state.connection_status}
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # Schema information panel
+    st.markdown("#### 📊 Database Schema")
+    schema_info = get_schema_information()
+    
+    if schema_info and schema_info.get("status") == "success":
+        schema_data = schema_info.get("schema_info", {})
         
-        logger.error(f"❌ Schema-aware chat request failed: {str(e)}")
+        st.markdown(f'''
+        <div class="schema-panel">
+            <h4>🧠 Schema Intelligence</h4>
+            <p><strong>Node Types:</strong> {schema_data.get("node_types", 0)}</p>
+            <p><strong>Relationship Types:</strong> {schema_data.get("relationship_types", 0)}</p>
+            <p><strong>Properties:</strong> {schema_data.get("property_keys", 0)}</p>
+            <p><strong>Status:</strong> ✅ Schema-Aware</p>
+        </div>
+        ''', unsafe_allow_html=True)
         
-        # Return enhanced error response
-        error_response = ChatResponse(
-            trace=f"Schema-aware processing error: {str(e)}",
-            tool="",
-            query="",
-            answer=f"❌ I encountered an error processing your request with schema awareness: {str(e)}",
-            graph_data=None,
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            node_limit=node_limit,
-            execution_time_ms=execution_time,
-            success=False,
-            error=str(e),
-            schema_aware=True
+        st.session_state.schema_loaded = True
+        
+        if st.button("🔄 Refresh Schema", use_container_width=True):
+            try:
+                refresh_response = requests.post("http://localhost:8020/schema/refresh", timeout=30)
+                if refresh_response.ok:
+                    st.success("✅ Schema refreshed successfully!")
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to refresh schema")
+            except Exception as e:
+                st.error(f"❌ Schema refresh error: {str(e)}")
+    else:
+        st.warning("⚠️ Schema information not available")
+    
+    st.divider()
+    
+    # Neo4j Browser-like query suggestions
+    st.markdown("#### 💡 Neo4j Browser-Style Queries")
+    st.info("✨ **Unlimited Display** - Show complete graphs without artificial limits")
+    
+    neo4j_queries = [
+        ("Complete Graph", "Show me the entire graph structure"),
+        ("Schema Overview", "Display the complete database schema"),
+        ("All Node Types", "Show me all different types of nodes"),
+        ("All Relationships", "Display all relationship types"),
+        ("Connected Components", "Find all connected components"),
+        ("Hub Nodes", "Show me the most connected nodes"),
+        ("Network Paths", "Display network paths and connections"),
+        ("Graph Statistics", "Show me comprehensive graph statistics")
+    ]
+    
+    for i, (name, query) in enumerate(neo4j_queries):
+        if st.button(f"🔍 {name}", key=f"neo4j_query_{i}", use_container_width=True):
+            result = call_agent_api(query)
+            if result:
+                if result.get("graph_data"):
+                    st.session_state.graph_data = result["graph_data"]
+                st.session_state.last_response = result
+                st.rerun()
+    
+    st.divider()
+    
+    # Custom query input
+    st.markdown("#### ✍️ Custom Cypher Query")
+    
+    with st.form("neo4j_query_form"):
+        user_question = st.text_area(
+            "Ask anything about your graph:",
+            placeholder="e.g., Show me all nodes connected to Person nodes through any relationship",
+            height=100
         )
         
-        return error_response
-
-# ============================================================================
-# SCHEMA MANAGEMENT ENDPOINTS
-# ============================================================================
-
-@app.get("/schema/summary")
-async def get_schema_summary():
-    """Get the current database schema summary"""
-    try:
-        summary = schema_manager.schema_summary
-        cached_schema = schema_manager.get_cached_schema()
-        
-        if not summary or not cached_schema:
-            logger.info("Schema not cached, fetching fresh schema...")
-            schema_manager.fetch_database_schema()
-            summary = schema_manager.schema_summary
-            cached_schema = schema_manager.get_cached_schema()
-        
-        schema_info = {}
-        if cached_schema:
-            enhanced_info = cached_schema.get("enhanced_info", {})
-            schema_info = {
-                "node_types": len(enhanced_info.get("node_labels", [[]])[0]) if enhanced_info.get("node_labels") else 0,
-                "relationship_types": len(enhanced_info.get("relationship_types", [[]])[0]) if enhanced_info.get("relationship_types") else 0,
-                "property_keys": len(enhanced_info.get("property_keys", [[]])[0]) if enhanced_info.get("property_keys") else 0
-            }
-        
-        return {
-            "summary": summary or "Schema summary not available",
-            "schema_info": schema_info,
-            "last_updated": schema_manager.last_schema_update.isoformat() if schema_manager.last_schema_update else None,
-            "status": "success"
-        }
-    except Exception as e:
-        logger.error(f"Error getting schema summary: {e}")
-        return {"error": str(e), "status": "error"}
-
-@app.post("/schema/refresh")
-async def refresh_schema():
-    """Manually refresh the database schema cache"""
-    try:
-        logger.info("🔄 Manually refreshing schema cache...")
-        schema_info = schema_manager.fetch_database_schema()
-        
-        if schema_info:
-            enhanced_info = schema_info.get("enhanced_info", {})
-            node_types = len(enhanced_info.get("node_labels", [[]])[0]) if enhanced_info.get("node_labels") else 0
-            rel_types = len(enhanced_info.get("relationship_types", [[]])[0]) if enhanced_info.get("relationship_types") else 0
-            prop_keys = len(enhanced_info.get("property_keys", [[]])[0]) if enhanced_info.get("property_keys") else 0
-            
-            logger.info(f"✅ Schema refreshed: {node_types} node types, {rel_types} relationship types")
-            
-            return {
-                "message": "Schema refreshed successfully",
-                "node_types": node_types,
-                "relationship_types": rel_types,
-                "property_keys": prop_keys,
-                "last_updated": schema_manager.last_schema_update.isoformat() if schema_manager.last_schema_update else None,
-                "status": "success"
-            }
-        else:
-            return {"error": "Failed to refresh schema", "status": "error"}
-            
-    except Exception as e:
-        logger.error(f"Error refreshing schema: {e}")
-        return {"error": str(e), "status": "error"}
-
-@app.get("/schema/validation")
-async def validate_query_endpoint(query: str):
-    """Validate a Cypher query against the current schema"""
-    try:
-        schema_info = schema_manager.get_cached_schema()
-        if not schema_info:
-            schema_info = schema_manager.fetch_database_schema()
-        
-        # Import validation function
-        from langgraph_agent import validate_query_against_schema
-        is_valid, message = validate_query_against_schema(query, schema_info)
-        
-        return {
-            "query": query,
-            "is_valid": is_valid,
-            "validation_message": message,
-            "timestamp": datetime.now().isoformat(),
-            "status": "success"
-        }
-    except Exception as e:
-        logger.error(f"Error validating query: {e}")
-        return {"error": str(e), "status": "error"}
-
-@app.get("/schema/details")
-async def get_detailed_schema():
-    """Get detailed schema information including counts and examples"""
-    try:
-        schema_info = schema_manager.get_cached_schema()
-        if not schema_info:
-            schema_info = schema_manager.fetch_database_schema()
-        
-        if not schema_info:
-            return {"error": "Schema not available", "status": "error"}
-        
-        enhanced_info = schema_info.get("enhanced_info", {})
-        
-        return {
-            "node_labels": enhanced_info.get("node_labels", []),
-            "relationship_types": enhanced_info.get("relationship_types", []),
-            "property_keys": enhanced_info.get("property_keys", []),
-            "node_counts": enhanced_info.get("node_counts", []),
-            "relationship_counts": enhanced_info.get("relationship_counts", []),
-            "raw_schema": schema_info.get("raw_schema", {}),
-            "last_updated": schema_info.get("last_updated"),
-            "status": "success"
-        }
-    except Exception as e:
-        logger.error(f"Error getting detailed schema: {e}")
-        return {"error": str(e), "status": "error"}
-
-# ============================================================================
-# ENHANCED AGENT ENDPOINTS
-# ============================================================================
-
-@app.post("/agent/invoke")
-async def invoke_agent(request: dict):
-    """
-    Direct schema-aware agent invocation endpoint
-    """
-    if agent is None:
-        raise HTTPException(status_code=500, detail="Schema-aware agent not initialized")
-    
-    try:
-        # Ensure required fields
-        if 'node_limit' not in request:
-            request['node_limit'] = 5000
-        if 'question' not in request:
-            raise HTTPException(status_code=400, detail="Question field required")
-        if 'session_id' not in request:
-            request['session_id'] = str(uuid.uuid4())
-            
-        # Create SchemaAwareAgentState from request
-        state = SchemaAwareAgentState(**request)
-        result = await agent.ainvoke(state)
-        return result
-    except Exception as e:
-        logger.error(f"Schema-aware agent invocation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/agent/status")
-async def agent_status():
-    """Get the current status of the Schema-Aware LangGraph agent"""
-    schema_status = {}
-    try:
-        cached_schema = schema_manager.get_cached_schema()
-        if cached_schema:
-            enhanced_info = cached_schema.get("enhanced_info", {})
-            schema_status = {
-                "loaded": True,
-                "node_types": len(enhanced_info.get("node_labels", [[]])[0]) if enhanced_info.get("node_labels") else 0,
-                "relationship_types": len(enhanced_info.get("relationship_types", [[]])[0]) if enhanced_info.get("relationship_types") else 0,
-                "last_updated": cached_schema.get("last_updated")
-            }
-        else:
-            schema_status = {"loaded": False}
-    except Exception:
-        schema_status = {"loaded": False, "error": "Schema check failed"}
-    
-    return {
-        "agent_initialized": agent is not None,
-        "agent_type": "Schema-Aware LangGraph Neo4j Graph Explorer Agent",
-        "interface_type": "schema_aware_split_screen",
-        "max_node_limit": 10000,
-        "default_node_limit": 5000,
-        "schema_status": schema_status,
-        "features": [
-            "schema_awareness",
-            "intelligent_query_generation",
-            "query_validation",
-            "multi_tier_connections",
-            "interactive_visualization",
-            "node_limiting",
-            "query_optimization", 
-            "split_screen_layout",
-            "real_time_updates"
-        ],
-        "timestamp": datetime.now().isoformat()
-    }
-
-# ============================================================================
-# LEGACY ENDPOINTS (for backward compatibility)
-# ============================================================================
-
-@app.get("/graph/sample/{node_limit}")
-async def get_sample_graph(node_limit: int = 5000):
-    """Get a sample graph with specified node limit"""
-    try:
-        capped_limit = min(node_limit, 5000)
-        
-        response = requests.get(
-            f"http://localhost:8000/sample_graph?node_limit={capped_limit}",
-            timeout=30
+        unlimited_mode = st.checkbox(
+            "🚀 Unlimited Display Mode", 
+            value=True,
+            help="Remove all limits and show the complete graph structure"
         )
         
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
-    except Exception as e:
-        logger.error(f"Error getting sample graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/graph/stats")
-async def get_graph_statistics():
-    """Get comprehensive graph statistics"""
-    try:
-        response = requests.get("http://localhost:8000/graph_stats", timeout=15)
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
-    except Exception as e:
-        logger.error(f"Error getting graph statistics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ============================================================================
-# ERROR HANDLERS
-# ============================================================================
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with enhanced error info"""
-    logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "timestamp": datetime.now().isoformat(),
-            "service": "Schema-Aware Neo4j Graph Explorer API",
-            "request_path": str(request.url.path),
-            "schema_aware": True
-        }
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle general exceptions with detailed logging"""
-    logger.error(f"Unexpected error: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "detail": str(exc),
-            "timestamp": datetime.now().isoformat(),
-            "service": "Schema-Aware Neo4j Graph Explorer API",
-            "request_path": str(request.url.path),
-            "schema_aware": True
-        }
-    )
-
-# Development server configuration
-if __name__ == "__main__":
-    logger.info("🚀 Starting Schema-Aware Neo4j Graph Explorer API...")
-    logger.info("🧠 Enhanced with complete database schema intelligence")
+        submit_button = st.form_submit_button("🚀 Execute Query", use_container_width=True)
     
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=8081,
-        reload=True,
-        log_level="info",
-        reload_includes=["*.py"],
-        reload_excludes=["test_*", "__pycache__"]
-    )
+    if submit_button and user_question.strip():
+        node_limit = None if unlimited_mode else 1000
+        result = call_agent_api(user_question.strip(), node_limit)
+        
+        if result:
+            if result.get("graph_data"):
+                st.session_state.graph_data = result["graph_data"]
+            st.session_state.last_response = result
+            st.success("✅ Query executed with unlimited display capability!")
+            st.rerun()
+    
+    st.divider()
+    
+    # Graph controls
+    st.markdown("#### 🎨 Visualization Controls")
+    
+    if st.button("🕸️ Load Complete Schema Graph", use_container_width=True):
+        result = call_agent_api("Show me the complete database structure with all nodes and relationships")
+        if result:
+            if result.get("graph_data"):
+                st.session_state.graph_data = result["graph_data"]
+            st.session_state.last_response = result
+            st.rerun()
+    
+    if st.button("📊 Load Sample Network", use_container_width=True):
+        result = call_agent_api("Show me a comprehensive sample of the network structure")
+        if result:
+            if result.get("graph_data"):
+                st.session_state.graph_data = result["graph_data"]
+            st.session_state.last_response = result
+            st.rerun()
+    
+    if st.button("🗑️ Clear Graph", use_container_width=True):
+        st.session_state.graph_data = None
+        st.session_state.last_response = None
+        st.success("🧹 Graph cleared!")
+        st.rerun()
 
-# Production server command:
-# uvicorn app:app --host 0.0.0.0 --port 8081 --workers 1
+with col2:
+    st.markdown("### 🕸️ Neo4j Browser-Like Visualization")
+    
+    # Show last response if available
+    if st.session_state.last_response:
+        answer = st.session_state.last_response.get("answer", "")
+        if answer:
+            st.markdown(f'''
+            <div class="query-panel">
+                <h4>🤖 Query Response</h4>
+                <p>{answer}</p>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Show executed query
+        query = st.session_state.last_response.get("query", "")
+        if query:
+            st.markdown(f'''
+            <div class="cypher-display">
+                <strong>Executed Cypher Query:</strong><br>
+                {query}
+            </div>
+            ''', unsafe_allow_html=True)
+    
+    # Render the graph
+    if st.session_state.graph_data:
+        success = create_neo4j_browser_like_graph(
+            st.session_state.graph_data, 
+            unlimited_display=True
+        )
+        
+        if success:
+            nodes_count = len(st.session_state.graph_data.get("nodes", []))
+            rels_count = len(st.session_state.graph_data.get("relationships", []))
+            
+            st.markdown(f'''
+            <div class="schema-stats">
+                🎉 <strong>Success!</strong> Neo4j Browser-like visualization created with {nodes_count:,} nodes and {rels_count:,} relationships!
+                <br><strong>✨ Unlimited Display Mode Active</strong> - Complete graph structure shown
+            </div>
+            ''', unsafe_allow_html=True)
+        else:
+            st.error("❌ Graph rendering failed. Check the debug information above.")
+    
+    else:
+        # Welcome screen with Neo4j styling
+        st.markdown("""
+        <div style="text-align: center; padding: 4rem; background: linear-gradient(135deg, #008cc1 0%, #0056d6 100%); color: white; border-radius: 15px; margin: 2rem 0; box-shadow: 0 8px 32px rgba(0, 140, 193, 0.3);">
+            <h2>🗄️ Neo4j Browser Experience</h2>
+            <p><strong>Complete Schema Visualization • Unlimited Graph Display • Enhanced Stability</strong></p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); color: #2c3e50; padding: 2rem; border-radius: 15px; margin: 1rem 0; border: 2px solid #008cc1;">
+            <h3 style="text-align: center; margin-top: 0; color: #008cc1;">🚀 Enhanced Features:</h3>
+            <div style="text-align: left;">
+                <p>🕸️ <strong>Unlimited Display</strong> - Show complete graphs without artificial limits</p>
+                <p>🎨 <strong>Neo4j Browser Styling</strong> - Authentic Neo4j look and feel</p>
+                <p>🧠 <strong>Schema Intelligence</strong> - Uses complete database schema for optimization</p>
+                <p>⚡ <strong>Enhanced Stability</strong> - Improved physics and layout algorithms</p>
+                <p>🔗 <strong>Smart Connectivity</strong> - Better relationship visualization and clustering</p>
+                <p>📊 <strong>Real-time Statistics</strong> - Live node and relationship type distribution</p>
+                <p>🎯 <strong>Intelligent Sizing</strong> - Node sizes based on connectivity (hub detection)</p>
+                <p>🌈 <strong>Smart Colors</strong> - Neo4j-inspired color palette for optimal distinction</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# Enhanced footer
+st.markdown("---")
+st.markdown("""
+<div style="
+    text-align: center; 
+    color: #6c757d; 
+    padding: 1.5rem;
+    background: linear-gradient(90deg, rgba(0, 140, 193, 0.1), rgba(0, 86, 214, 0.1));
+    border-radius: 15px;
+    margin-top: 2rem;
+    border: 1px solid #008cc1;
+">
+    <h4 style="margin: 0; background: linear-gradient(90deg, #008cc1, #0056d6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+        🗄️ Neo4j Graph Explorer - Browser Experience
+    </h4>
+    <p style="margin: 0.5rem 0;">🕸️ Unlimited Display • 🧠 Schema Intelligence • 🎨 Neo4j Styling • ⚡ Enhanced Performance</p>
+</div>
+""", unsafe_allow_html=True)
