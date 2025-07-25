@@ -1,1008 +1,801 @@
 """
-Stable Enhanced Neo4j UI with unlimited graph exploration and Neo4j-like visualization
-This version provides a stable chat interface with comprehensive graph visualization
+Enhanced LangGraph Agent with Schema Reading and Unlimited Query Capabilities
+This version automatically reads and uses the Neo4j schema for better query generation
 """
 
-import streamlit as st
-import streamlit.components.v1 as components
-from pyvis.network import Network
 import requests
+import urllib3
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableLambda
+import re
 import json
-import os
-import tempfile
+import logging
 from datetime import datetime
-import uuid
-import traceback
-import hashlib
-import time
 
-# Page configuration for optimal display
-st.set_page_config(
-    page_title="Neo4j Graph Explorer Pro", 
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': None,
-        'Report a bug': None,
-        'About': "Neo4j Graph Explorer Pro - Unlimited graph exploration with schema awareness"
-    }
-)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("enhanced_langgraph_agent")
 
-# Enhanced CSS with Neo4j-like styling
-st.markdown("""
-<style>
-    .main .block-container {
-        padding-top: 1rem;
-        max-width: 100%;
-    }
-    
-    .neo4j-header {
-        background: linear-gradient(135deg, #00857C 0%, #00BCD4 50%, #4CAF50 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.8rem;
-        font-weight: bold;
-        text-align: center;
-        margin-bottom: 1rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    .neo4j-subtitle {
-        text-align: center;
-        color: #00857C;
-        font-size: 1.1rem;
-        margin-bottom: 2rem;
-        font-weight: 500;
-    }
-    
-    .stButton button {
-        width: 100%;
-        background: linear-gradient(45deg, #00857C, #00BCD4);
-        color: white;
-        border: none;
-        padding: 0.7rem 1rem;
-        border-radius: 10px;
-        font-weight: 600;
-        margin-bottom: 0.3rem;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 6px rgba(0, 133, 124, 0.3);
-    }
-    
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 16px rgba(0, 133, 124, 0.4);
-        background: linear-gradient(45deg, #00BCD4, #4CAF50);
-    }
-    
-    .suggestion-btn {
-        background: linear-gradient(45deg, #E1F5FE, #B2EBF2) !important;
-        color: #00695C !important;
-        border: 2px solid #00BCD4 !important;
-        border-radius: 8px !important;
-        font-size: 0.9rem !important;
-        padding: 0.6rem 1rem !important;
-        margin: 0.2rem !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    .suggestion-btn:hover {
-        background: linear-gradient(45deg, #B2EBF2, #80DEEA) !important;
-        transform: translateY(-1px) !important;
-        box-shadow: 0 4px 12px rgba(0, 188, 212, 0.3) !important;
-    }
-    
-    .neo4j-metric {
-        background: linear-gradient(135deg, #00857C, #00BCD4);
-        color: white;
-        padding: 1.2rem;
-        border-radius: 12px;
-        text-align: center;
-        margin: 0.3rem 0;
-        box-shadow: 0 4px 12px rgba(0, 133, 124, 0.3);
-    }
-    
-    .success-box {
-        background: linear-gradient(135deg, #4CAF50, #8BC34A);
-        border: none;
-        color: white;
-        padding: 1.2rem;
-        border-radius: 12px;
-        margin: 0.8rem 0;
-        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-        font-weight: 500;
-    }
-    
-    .info-box {
-        background: linear-gradient(135deg, #00BCD4, #4FC3F7);
-        border: none;
-        color: white;
-        padding: 1.2rem;
-        border-radius: 12px;
-        margin: 0.8rem 0;
-        box-shadow: 0 4px 12px rgba(0, 188, 212, 0.3);
-    }
-    
-    .warning-box {
-        background: linear-gradient(135deg, #FF9800, #FFC107);
-        border: none;
-        color: white;
-        padding: 1.2rem;
-        border-radius: 12px;
-        margin: 0.8rem 0;
-        box-shadow: 0 4px 12px rgba(255, 152, 0, 0.3);
-    }
-    
-    .chat-container {
-        background: linear-gradient(135deg, #F5F5F5, #FAFAFA);
-        padding: 1.5rem;
-        border-radius: 15px;
-        margin: 1rem 0;
-        border: 2px solid #E0E0E0;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    
-    .response-container {
-        background: linear-gradient(135deg, #00857C, #00BCD4);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 15px;
-        margin: 1rem 0;
-        box-shadow: 0 6px 20px rgba(0, 133, 124, 0.3);
-    }
-    
-    .schema-box {
-        background: linear-gradient(135deg, #9C27B0, #E91E63);
-        color: white;
-        padding: 1.2rem;
-        border-radius: 12px;
-        margin: 0.8rem 0;
-        box-shadow: 0 4px 12px rgba(156, 39, 176, 0.3);
-    }
-    
-    .graph-controls {
-        background: linear-gradient(135deg, #37474F, #546E7A);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
-    }
-    
-    .cypher-query {
-        background: #263238;
-        color: #4CAF50;
-        padding: 1rem;
-        border-radius: 8px;
-        font-family: 'Courier New', monospace;
-        font-size: 0.95rem;
-        margin: 0.8rem 0;
-        border-left: 4px solid #00BCD4;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-    
-    .legend-container {
-        background: linear-gradient(135deg, #ECEFF1, #F5F5F5);
-        padding: 1.2rem;
-        border-radius: 12px;
-        margin: 1rem 0;
-        border: 2px solid #CFD8DC;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    
-    .status-connected {
-        color: #4CAF50;
-        font-weight: bold;
-        background: rgba(76, 175, 80, 0.1);
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-    }
-    
-    .status-disconnected {
-        color: #F44336;
-        font-weight: bold;
-        background: rgba(244, 67, 54, 0.1);
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-    }
-    
-    .graph-frame {
-        border: 3px solid #00BCD4;
-        border-radius: 15px;
-        overflow: hidden;
-        background: white;
-        box-shadow: 0 8px 24px rgba(0, 188, 212, 0.2);
-        margin: 1rem 0;
-    }
-    
-    .graph-header {
-        background: linear-gradient(90deg, #00857C, #00BCD4);
-        color: white;
-        padding: 1rem 1.5rem;
-        font-weight: bold;
-        font-size: 1.1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Initialize stable session state
-def init_stable_session_state():
-    """Initialize session state with stable defaults"""
-    defaults = {
-        "messages": [],
-        "graph_data": None,
-        "last_response": None,
-        "session_id": str(uuid.uuid4()),
-        "connection_status": "unknown",
-        "current_schema": {},
-        "processing": False,
-        "selected_suggestion": "",
-        "chat_history": [],
-        "graph_settings": {
-            "node_size": 25,
-            "edge_width": 2,
-            "physics_enabled": True,
-            "show_labels": True
-        }
-    }
-    
-    for key, default_value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default_value
+class AgentState(BaseModel):
+    question: str
+    session_id: str
+    tool: str = ""
+    query: str = ""
+    trace: str = ""
+    answer: str = ""
+    graph_data: Optional[dict] = None
+    schema_info: Optional[dict] = None
+    node_limit: int = 1000  # Default but can be overridden
 
-init_stable_session_state()
+# Global schema cache
+SCHEMA_CACHE = {
+    "labels": [],
+    "relationship_types": [],
+    "properties": {},
+    "schema_graph": {},
+    "last_updated": None
+}
 
-# Header with Neo4j styling
-st.markdown('<h1 class="neo4j-header">🕸️ Neo4j Graph Explorer Pro</h1>', unsafe_allow_html=True)
-st.markdown('<p class="neo4j-subtitle">🧠 Schema-Aware • 🚀 Unlimited Exploration • 📊 Real-time Visualization</p>', unsafe_allow_html=True)
+def clean_cypher_query(query: str) -> str:
+    """Clean and format Cypher queries for execution"""
+    query = re.sub(r'[\r\n]+', ' ', query)
+    keywords = [
+        "MATCH", "WITH", "RETURN", "ORDER BY", "UNWIND", "WHERE", "LIMIT",
+        "SKIP", "CALL", "YIELD", "CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
+    ]
+    for kw in keywords:
+        query = re.sub(rf'(?<!\s)({kw})', r' \1', query)
+        query = re.sub(rf'({kw})([^\s\(])', r'\1 \2', query)
+    query = re.sub(r'\s+', ' ', query)
+    return query.strip()
 
-def check_api_health():
-    """Check API health with detailed status"""
+def fetch_neo4j_schema() -> Dict[str, Any]:
+    """Fetch comprehensive Neo4j schema information with enhanced relationship extraction"""
     try:
-        response = requests.get("http://localhost:8081/health", timeout=5)
+        logger.info("🔍 Fetching comprehensive Neo4j schema...")
+        
+        # Get schema from MCP server
+        response = requests.post("http://localhost:8000/get_neo4j_schema", 
+                               headers={"Content-Type": "application/json"}, 
+                               timeout=30)
+        
         if response.status_code == 200:
-            health_data = response.json()
-            return {"status": "connected", "data": health_data}
-        else:
-            return {"status": "error", "error": f"HTTP {response.status_code}"}
-    except requests.exceptions.ConnectionError:
-        return {"status": "disconnected", "error": "Agent API not running on port 8081"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-def call_enhanced_agent_api(question: str, unlimited: bool = True) -> dict:
-    """Enhanced API call with better error handling and unlimited option"""
-    try:
-        api_url = "http://localhost:8081/chat"
-        
-        # Set high node limit for unlimited exploration
-        node_limit = 10000 if unlimited else 100
-        
-        payload = {
-            "question": question,
-            "session_id": st.session_state.session_id,
-            "node_limit": node_limit
-        }
-        
-        st.session_state.processing = True
-        
-        with st.spinner("🧠 Processing with schema-aware AI agent..."):
-            start_time = time.time()
-            response = requests.post(api_url, json=payload, timeout=120)  # Increased timeout
-            response.raise_for_status()
-            result = response.json()
-            processing_time = time.time() - start_time
+            schema_data = response.json()
             
-            result["processing_time"] = processing_time
-            st.session_state.connection_status = "connected"
-            st.session_state.processing = False
+            # Extract comprehensive schema information
+            schema = schema_data.get("schema", {})
+            raw_components = schema_data.get("raw_components", {})
             
-            return result
+            # Initialize collections
+            labels = []
+            relationship_types = []
+            properties = {}
+            relationship_patterns = {}
             
-    except requests.exceptions.ConnectionError:
-        st.session_state.connection_status = "disconnected"
-        st.session_state.processing = False
-        st.error("❌ Cannot connect to agent API. Please ensure the FastAPI server is running on port 8081.")
-        return None
-    except requests.exceptions.Timeout:
-        st.session_state.processing = False
-        st.error("⏰ Request timed out. The query might be very complex. Try a simpler query or check server status.")
-        return None
-    except Exception as e:
-        st.session_state.processing = False
-        st.error(f"❌ API Error: {str(e)}")
-        return None
-
-def get_neo4j_colors():
-    """Get Neo4j-inspired color palette"""
-    return {
-        "Person": "#FF6B6B",        # Red
-        "Movie": "#4ECDC4",         # Turquoise  
-        "Company": "#45B7D1",       # Blue
-        "Product": "#96CEB4",       # Green
-        "Location": "#FECA57",      # Yellow
-        "Event": "#FF9FF3",         # Pink
-        "User": "#A55EEA",          # Purple
-        "Order": "#26DE81",         # Emerald
-        "Category": "#FD79A8",      # Rose
-        "Department": "#6C5CE7",    # Indigo
-        "Project": "#FDCB6E",       # Orange
-        "Actor": "#00CEC9",         # Cyan
-        "Director": "#E84393",      # Magenta
-        "Producer": "#00B894",      # Teal
-        "Organization": "#74B9FF",  # Light Blue
-        "Country": "#A29BFE",       # Lavender
-        "Technology": "#FD79A8",    # Pink
-        "Language": "#FDCB6E",      # Gold
-        "default": "#95A5A6"        # Gray
-    }
-
-def get_relationship_colors():
-    """Get relationship colors"""
-    return {
-        "KNOWS": "#E74C3C",
-        "FRIEND_OF": "#E74C3C", 
-        "WORKS_FOR": "#3498DB",
-        "MANAGES": "#9B59B6",
-        "LOCATED_IN": "#F39C12",
-        "BELONGS_TO": "#27AE60",
-        "CREATED": "#E91E63",
-        "OWNS": "#673AB7",
-        "USES": "#009688",
-        "ACTED_IN": "#2196F3",
-        "DIRECTED": "#FF9800",
-        "PRODUCED": "#4CAF50",
-        "LOVES": "#E91E63",
-        "MARRIED_TO": "#FD79A8",
-        "REPORTS_TO": "#795548",
-        "MEMBER_OF": "#607D8B",
-        "LIVES_IN": "#FF5722",
-        "STUDIED_AT": "#3F51B5",
-        "default": "#666666"
-    }
-
-def extract_display_name(node):
-    """Enhanced name extraction with better fallbacks"""
-    try:
-        props = node.get("properties", {})
-        labels = node.get("labels", ["Node"])
-        node_id = str(node.get("id", ""))
-        
-        # Priority order for name extraction
-        name_fields = [
-            "name", "title", "fullName", "displayName", 
-            "username", "label", "firstName", "lastName",
-            "email", "id", "identifier"
-        ]
-        
-        for field in name_fields:
-            if field in props and props[field]:
-                name = str(props[field]).strip()
-                if name and len(name) > 0:
-                    return name[:40]  # Reasonable length for display
-        
-        # If no name found, create meaningful identifier
-        label = labels[0] if labels else "Node"
-        if node_id:
-            short_id = node_id.split(":")[-1][-6:] if ":" in node_id else node_id[-6:]
-            return f"{label}_{short_id}"
-        
-        return f"{label}_{hash(str(node)) % 10000}"
-        
-    except Exception as e:
-        return f"Node_{hash(str(node)) % 10000}"
-
-def create_enhanced_legend(nodes, relationships):
-    """Create comprehensive legend with Neo4j styling"""
-    try:
-        node_colors = get_neo4j_colors()
-        rel_colors = get_relationship_colors()
-        
-        # Analyze actual data
-        node_types = {}
-        rel_types = {}
-        
-        for node in nodes:
-            labels = node.get("labels", ["Unknown"])
-            if labels:
-                label = labels[0]
-                color = node_colors.get(label, node_colors["default"])
-                node_types[label] = color
-        
-        for rel in relationships:
-            rel_type = rel.get("type", "CONNECTED")
-            color = rel_colors.get(rel_type, rel_colors["default"])
-            rel_types[rel_type] = color
-        
-        legend_html = '<div class="legend-container">'
-        legend_html += '<h4 style="margin-top: 0; color: #00857C;">🎨 Network Legend</h4>'
-        
-        if node_types:
-            legend_html += '<p><strong>📊 Node Types:</strong><br>'
-            for label, color in sorted(node_types.items()):
-                legend_html += f'<span style="background: {color}; color: white; padding: 4px 12px; border-radius: 15px; margin: 3px; font-size: 13px; font-weight: 500;">{label}</span> '
-            legend_html += '</p>'
-        
-        if rel_types:
-            legend_html += '<p><strong>🔗 Relationship Types:</strong><br>'
-            for rel_type, color in sorted(rel_types.items()):
-                legend_html += f'<span style="background: {color}; color: white; padding: 4px 12px; border-radius: 15px; margin: 3px; font-size: 13px; font-weight: 500;">{rel_type}</span> '
-            legend_html += '</p>'
-        
-        legend_html += '</div>'
-        return legend_html
-        
-    except Exception as e:
-        return f'<div class="legend-container">Legend error: {str(e)}</div>'
-
-def render_neo4j_graph(graph_data: dict) -> bool:
-    """Render graph with Neo4j-like appearance and unlimited nodes"""
-    
-    if not graph_data:
-        st.info("🔍 No graph data available for visualization.")
-        return False
-    
-    try:
-        nodes = graph_data.get("nodes", [])
-        relationships = graph_data.get("relationships", [])
-        
-        if not nodes:
-            st.info("📊 No nodes found in the current result set.")
-            return False
-        
-        # Enhanced processing info
-        st.markdown(f'''
-        <div class="success-box">
-            🎨 <strong>Rendering Neo4j-style graph:</strong> {len(nodes)} nodes, {len(relationships)} relationships
-            <br>🚀 <strong>Mode:</strong> Unlimited exploration with schema awareness
-        </div>
-        ''', unsafe_allow_html=True)
-        
-        # Graph settings controls
-        with st.expander("🎛️ Graph Visualization Settings", expanded=False):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                node_size = st.slider("Node Size", 15, 50, st.session_state.graph_settings["node_size"])
-                st.session_state.graph_settings["node_size"] = node_size
-            with col2:
-                edge_width = st.slider("Edge Width", 1, 5, st.session_state.graph_settings["edge_width"])
-                st.session_state.graph_settings["edge_width"] = edge_width
-            with col3:
-                physics = st.checkbox("Enable Physics", st.session_state.graph_settings["physics_enabled"])
-                st.session_state.graph_settings["physics_enabled"] = physics
-        
-        # Create Pyvis network with Neo4j-like settings
-        net = Network(
-            height="700px",
-            width="100%", 
-            bgcolor="#F8F9FA",
-            font_color="#2C3E50",
-            neighborhood_highlight=True,
-            select_menu=True,
-            filter_menu=True
-        )
-        
-        # Enhanced node processing
-        added_nodes = set()
-        node_colors = get_neo4j_colors()
-        
-        for i, node in enumerate(nodes):
+            # Method 1: Extract from APOC schema (if available)
+            if isinstance(schema, dict) and schema:
+                logger.info("📊 Processing APOC schema data...")
+                for label, info in schema.items():
+                    if isinstance(info, dict):
+                        labels.append(label)
+                        
+                        # Extract properties
+                        if "properties" in info:
+                            properties[label] = list(info["properties"].keys())
+                        
+                        # Extract relationships
+                        if "relationships" in info:
+                            for rel_info in info["relationships"]:
+                                if isinstance(rel_info, dict):
+                                    rel_type = rel_info.get("type")
+                                    if rel_type and rel_type not in relationship_types:
+                                        relationship_types.append(rel_type)
+                                    
+                                    # Track relationship patterns
+                                    target = rel_info.get("target", rel_info.get("direction"))
+                                    if target:
+                                        pattern_key = f"{label}-{rel_type}-{target}"
+                                        relationship_patterns[pattern_key] = {
+                                            "from": label,
+                                            "type": rel_type,
+                                            "to": target,
+                                            "direction": rel_info.get("direction", "outgoing")
+                                        }
+            
+            # Method 2: Extract from raw components (fallback)
+            if raw_components:
+                logger.info("📊 Processing raw schema components...")
+                
+                # Get labels from raw components
+                if "labels" in raw_components:
+                    labels_data = raw_components["labels"]
+                    if isinstance(labels_data, list) and labels_data:
+                        component_labels = labels_data[0].get("labels", [])
+                        labels.extend([l for l in component_labels if l not in labels])
+                
+                # Get relationship types from raw components
+                if "relationship_types" in raw_components:
+                    rel_data = raw_components["relationship_types"]
+                    if isinstance(rel_data, list) and rel_data:
+                        component_rels = rel_data[0].get("types", [])
+                        relationship_types.extend([r for r in component_rels if r not in relationship_types])
+            
+            # Method 3: Direct database queries for relationships (enhanced)
             try:
-                node_id = f"node_{i}"
-                display_name = extract_display_name(node)
+                logger.info("🔗 Fetching relationship patterns directly...")
                 
-                # Get node styling
-                labels = node.get("labels", ["Unknown"])
-                main_label = labels[0] if labels else "Unknown"
-                color = node_colors.get(main_label, node_colors["default"])
+                # Query to get actual relationship patterns
+                rel_pattern_query = {
+                    "query": """
+                    MATCH (a)-[r]->(b) 
+                    WITH labels(a)[0] as from_label, type(r) as rel_type, labels(b)[0] as to_label
+                    WHERE from_label IS NOT NULL AND to_label IS NOT NULL
+                    RETURN DISTINCT from_label, rel_type, to_label
+                    LIMIT 100
+                    """,
+                    "params": {}
+                }
                 
-                # Create detailed tooltip
-                props = node.get("properties", {})
-                tooltip_parts = [f"<b>{display_name}</b>"]
-                tooltip_parts.append(f"Type: {main_label}")
-                
-                # Add key properties to tooltip
-                important_props = ["id", "name", "title", "description", "email", "age", "role"]
-                for prop in important_props:
-                    if prop in props and props[prop]:
-                        tooltip_parts.append(f"{prop}: {props[prop]}")
-                
-                tooltip = "<br>".join(tooltip_parts)
-                
-                # Add node with enhanced styling
-                net.add_node(
-                    node_id,
-                    label=display_name,
-                    color={
-                        'background': color,
-                        'border': '#2C3E50',
-                        'highlight': {'background': '#FFD700', 'border': '#FF6B6B'}
-                    },
-                    size=st.session_state.graph_settings["node_size"],
-                    title=tooltip,
-                    font={'size': 14, 'color': '#2C3E50', 'face': 'Arial'},
-                    borderWidth=2,
-                    borderWidthSelected=4,
-                    shape='dot'
+                rel_response = requests.post(
+                    "http://localhost:8000/read_neo4j_cypher",
+                    json=rel_pattern_query,
+                    headers={"Content-Type": "application/json"},
+                    timeout=20
                 )
                 
-                added_nodes.add((str(node.get("id", f"node_{i}")), node_id))
+                if rel_response.status_code == 200:
+                    rel_data = rel_response.json()
+                    if "data" in rel_data:
+                        for record in rel_data["data"]:
+                            from_label = record.get("from_label")
+                            rel_type = record.get("rel_type")
+                            to_label = record.get("to_label")
+                            
+                            if rel_type and rel_type not in relationship_types:
+                                relationship_types.append(rel_type)
+                            
+                            if from_label and to_label and rel_type:
+                                pattern_key = f"{from_label}-{rel_type}-{to_label}"
+                                relationship_patterns[pattern_key] = {
+                                    "from": from_label,
+                                    "type": rel_type,
+                                    "to": to_label,
+                                    "direction": "outgoing"
+                                }
+                        
+                        logger.info(f"🔗 Found {len(relationship_patterns)} relationship patterns")
                 
-            except Exception as e:
-                st.warning(f"⚠️ Skipped node {i}: {str(e)}")
-                continue
-        
-        # Enhanced relationship processing
-        id_mapping = dict(added_nodes)
-        rel_colors = get_relationship_colors()
-        added_edges = 0
-        
-        for i, rel in enumerate(relationships):
+            except Exception as rel_error:
+                logger.warning(f"⚠️ Could not fetch relationship patterns: {rel_error}")
+            
+            # Method 4: Get all relationship types directly
             try:
-                start_raw = str(rel.get("startNode", rel.get("start", "")))
-                end_raw = str(rel.get("endNode", rel.get("end", "")))
-                rel_type = str(rel.get("type", "CONNECTED"))
+                logger.info("🔗 Fetching all relationship types...")
                 
-                start_id = id_mapping.get(start_raw)
-                end_id = id_mapping.get(end_raw)
-                
-                if start_id and end_id:
-                    color = rel_colors.get(rel_type, rel_colors["default"])
-                    
-                    # Create relationship tooltip
-                    rel_props = rel.get("properties", {})
-                    rel_tooltip = f"<b>{rel_type}</b>"
-                    if rel_props:
-                        for key, value in list(rel_props.items())[:3]:
-                            rel_tooltip += f"<br>{key}: {value}"
-                    
-                    net.add_edge(
-                        start_id,
-                        end_id,
-                        label=rel_type,
-                        color={'color': color, 'highlight': '#FF6B6B'},
-                        width=st.session_state.graph_settings["edge_width"],
-                        title=rel_tooltip,
-                        font={'color': '#2C3E50', 'size': 12},
-                        arrows={'to': {'enabled': True, 'scaleFactor': 1.2}}
-                    )
-                    
-                    added_edges += 1
-                    
-            except Exception as e:
-                st.warning(f"⚠️ Skipped relationship {i}: {str(e)}")
-                continue
-        
-        # Configure physics
-        if st.session_state.graph_settings["physics_enabled"]:
-            net.set_options("""
-            var options = {
-              "physics": {
-                "enabled": true,
-                "stabilization": {"iterations": 100},
-                "barnesHut": {
-                  "gravitationalConstant": -8000,
-                  "centralGravity": 0.3,
-                  "springLength": 95,
-                  "springConstant": 0.04,
-                  "damping": 0.09,
-                  "avoidOverlap": 0.1
+                rel_types_query = {
+                    "query": "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+                    "params": {}
                 }
-              }
-            }
-            """)
+                
+                rel_types_response = requests.post(
+                    "http://localhost:8000/read_neo4j_cypher",
+                    json=rel_types_query,
+                    headers={"Content-Type": "application/json"},
+                    timeout=15
+                )
+                
+                if rel_types_response.status_code == 200:
+                    rel_types_data = rel_types_response.json()
+                    if "data" in rel_types_data:
+                        for record in rel_types_data["data"]:
+                            rel_type = record.get("relationshipType")
+                            if rel_type and rel_type not in relationship_types:
+                                relationship_types.append(rel_type)
+                        
+                        logger.info(f"🔗 Total relationship types found: {len(relationship_types)}")
+                
+            except Exception as rel_types_error:
+                logger.warning(f"⚠️ Could not fetch relationship types: {rel_types_error}")
+            
+            # Update global cache with enhanced relationship information
+            SCHEMA_CACHE.update({
+                "labels": list(set(labels)),  # Remove duplicates
+                "relationship_types": list(set(relationship_types)),  # Remove duplicates
+                "properties": properties,
+                "relationship_patterns": relationship_patterns,
+                "schema_graph": schema,
+                "raw_components": raw_components,
+                "last_updated": datetime.now().isoformat()
+            })
+            
+            logger.info(f"✅ Enhanced schema loaded:")
+            logger.info(f"   📊 Labels: {len(SCHEMA_CACHE['labels'])}")
+            logger.info(f"   🔗 Relationship types: {len(SCHEMA_CACHE['relationship_types'])}")
+            logger.info(f"   🔀 Relationship patterns: {len(relationship_patterns)}")
+            
+            # Log some examples for debugging
+            if SCHEMA_CACHE['labels']:
+                logger.info(f"   📋 Sample labels: {', '.join(SCHEMA_CACHE['labels'][:5])}")
+            if SCHEMA_CACHE['relationship_types']:
+                logger.info(f"   📋 Sample relationships: {', '.join(SCHEMA_CACHE['relationship_types'][:5])}")
+            
+            return SCHEMA_CACHE
+            
         else:
-            net.set_options('{"physics": {"enabled": false}}')
-        
-        # Show processing results
-        st.markdown(f'<div class="success-box">✅ <strong>Graph created:</strong> {len(added_nodes)} nodes, {added_edges} relationships successfully rendered!</div>', unsafe_allow_html=True)
-        
-        # Generate and display HTML
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
-            net.save_graph(f.name)
-            html_file = f.name
-        
-        with open(html_file, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        
-        # Enhanced wrapper with Neo4j styling
-        wrapped_html = f"""
-        <div class="graph-frame">
-            <div class="graph-header">
-                🕸️ Interactive Neo4j Graph | {len(added_nodes)} Nodes | {added_edges} Relationships | Schema-Aware Visualization
-            </div>
-            {html_content}
-        </div>
-        """
-        
-        # Display the graph
-        components.html(wrapped_html, height=750, scrolling=False)
-        
-        # Cleanup
-        try:
-            os.unlink(html_file)
-        except:
-            pass
-        
-        return True
-        
+            logger.error(f"❌ Schema fetch failed: {response.status_code}")
+            return {}
+            
     except Exception as e:
-        st.error(f"❌ Graph rendering failed: {str(e)}")
-        
-        with st.expander("🔍 Debug Information", expanded=False):
-            st.write("**Error:**", str(e))
-            st.write("**Traceback:**")
-            st.code(traceback.format_exc())
-            if nodes:
-                st.write("**Sample node:**")
-                st.json(nodes[0])
-        
-        return False
+        logger.error(f"❌ Error fetching enhanced schema: {e}")
+        return {}
 
-# Main layout
-col1, col2 = st.columns([1, 2], gap="large")
+def get_enhanced_system_prompt() -> str:
+    """Generate enhanced system prompt with comprehensive schema information including relationships"""
+    
+    # Fetch latest schema if needed
+    if not SCHEMA_CACHE.get("last_updated"):
+        fetch_neo4j_schema()
+    
+    labels = SCHEMA_CACHE.get("labels", [])
+    relationship_types = SCHEMA_CACHE.get("relationship_types", [])
+    properties = SCHEMA_CACHE.get("properties", {})
+    relationship_patterns = SCHEMA_CACHE.get("relationship_patterns", {})
+    
+    schema_context = ""
+    if labels:
+        schema_context += f"\nAVAILABLE NODE LABELS: {', '.join(labels)}\n"
+    
+    if relationship_types:
+        schema_context += f"AVAILABLE RELATIONSHIP TYPES: {', '.join(relationship_types)}\n"
+    
+    if relationship_patterns:
+        schema_context += "\nKNOWN RELATIONSHIP PATTERNS:\n"
+        # Group patterns by relationship type for better readability
+        patterns_by_type = {}
+        for pattern_key, pattern_info in relationship_patterns.items():
+            rel_type = pattern_info["type"]
+            if rel_type not in patterns_by_type:
+                patterns_by_type[rel_type] = []
+            patterns_by_type[rel_type].append(f"{pattern_info['from']} -> {pattern_info['to']}")
+        
+        for rel_type, patterns in patterns_by_type.items():
+            schema_context += f"- {rel_type}: {', '.join(patterns[:5])}{'...' if len(patterns) > 5 else ''}\n"
+    
+    if properties:
+        schema_context += "\nNODE PROPERTIES BY TYPE:\n"
+        for label, props in properties.items():
+            if props:
+                schema_context += f"- {label}: {', '.join(props[:10])}{'...' if len(props) > 10 else ''}\n"
+    
+    base_prompt = f"""You are an expert Neo4j database assistant with complete knowledge of the database schema, including all relationships and patterns.
 
-with col1:
-    st.markdown("### 💬 Enhanced Chat Interface")
-    
-    # API Status with enhanced display
-    health = check_api_health()
-    if health["status"] == "connected":
-        st.markdown('<div class="status-connected">🟢 API Connected & Ready</div>', unsafe_allow_html=True)
-        if health.get("data"):
-            agent_status = health["data"].get("agent_ready", False)
-            st.markdown(f'<div class="info-box">🧠 <strong>Agent Status:</strong> {"Ready" if agent_status else "Initializing"}</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="status-disconnected">🔴 API Disconnected</div>', unsafe_allow_html=True)
-        st.error(f"❌ {health.get('error', 'Unknown error')}")
-    
-    # Enhanced prompt suggestions
-    st.markdown("#### 💡 Smart Suggestions")
-    st.markdown('<div class="info-box">🚀 <strong>Schema-Aware Prompts</strong> - Click to explore your graph without limits!</div>', unsafe_allow_html=True)
-    
-    # Categorized suggestions
-    suggestion_categories = {
-        "🔍 Data Exploration": [
-            "Show me the complete network structure",
-            "Display all nodes and their relationships", 
-            "Show me all node types in the database",
-            "Find the most connected nodes"
-        ],
-        "🏗️ Schema & Structure": [
-            "Show me the database schema",
-            "What node types exist?",
-            "What relationship types are available?", 
-            "Show me the database structure"
-        ],
-        "📊 Analysis Queries": [
-            "Find communities in the network",
-            "Show connection patterns", 
-            "Analyze network density",
-            "Find central nodes"
-        ],
-        "✏️ Data Modification": [
-            "Create a new Person node",
-            "Add relationships between nodes",
-            "Update node properties",
-            "Create a company and employees"
-        ]
+{schema_context}
+
+ENHANCED RELATIONSHIP AWARENESS:
+- Use the relationship patterns above to generate accurate queries
+- When exploring connections, use the actual relationship types that exist
+- Consider bidirectional relationships (both directions may exist)
+- Use relationship types that match the actual database schema
+
+TOOL SELECTION RULES:
+1. read_neo4j_cypher - for ALL read operations (MATCH, RETURN, WHERE, COUNT, aggregations, reporting)
+2. write_neo4j_cypher - for ALL write operations (CREATE, MERGE, SET, DELETE, UPDATE)
+3. get_neo4j_schema - for schema exploration and database structure questions
+
+IMPORTANT GUIDELINES:
+- NEVER add arbitrary LIMIT clauses unless specifically requested
+- Use the actual node labels and relationship types from the schema above
+- Generate comprehensive queries that show the full network structure
+- For exploration queries, return complete relationship paths: MATCH (a)-[r]-(b) RETURN a, r, b
+- Use property names that exist in the schema
+- Always format your response exactly as: Tool: [tool_name] Query: [complete_query]
+
+ENHANCED QUERY PATTERNS WITH RELATIONSHIPS:
+
+Network Exploration (NO LIMITS):
+- "Show all connections": MATCH (n)-[r]->(m) RETURN n, r, m
+- "Show network structure": MATCH p=()-[]-() RETURN p
+- "Find relationship patterns": MATCH (a)-[r]-(b) RETURN labels(a), type(r), labels(b), count(*) GROUP BY labels(a), type(r), labels(b)
+
+Relationship-Aware Queries:
+- "Show Person relationships": MATCH (p:Person)-[r]-(other) RETURN p, r, other
+- "Find all KNOWS relationships": MATCH (a)-[r:KNOWS]-(b) RETURN a, r, b
+- "Show who works for companies": MATCH (p:Person)-[r:WORKS_FOR]->(c:Company) RETURN p, r, c
+
+Data Discovery with Relationships:
+- "Show all {label} nodes and connections": MATCH (n:{label}) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
+- "Find nodes with most connections": MATCH (n)-[r]-() RETURN n, count(r) as connections ORDER BY connections DESC
+- "Show relationship distribution": MATCH ()-[r]-() RETURN type(r), count(r) ORDER BY count(r) DESC
+
+Complex Network Patterns:
+- "Show communities": MATCH (n)-[r1]-(m)-[r2]-(o) WHERE n <> o RETURN n, r1, m, r2, o
+- "Show paths between types": MATCH path = (start:{StartLabel})-[*1..3]-(end:{EndLabel}) RETURN path
+- "Show network neighborhoods": MATCH (center)-[r]-(connected) RETURN center, collect(r), collect(connected)
+
+RELATIONSHIP QUERY EXAMPLES:
+{chr(10).join([f"- {rel}: MATCH ()-[r:{rel}]-() RETURN count(r) as {rel.lower()}_count" for rel in relationship_types[:5]])}
+
+NEVER use LIMIT unless the user specifically asks for "top N" or "first X" results.
+ALWAYS show complete network structures when exploring data.
+ALWAYS use the actual relationship types from the schema when generating queries.
+Generate queries that reveal the full graph structure and relationships.
+
+OUTPUT FORMAT:
+Tool: [exact_tool_name]
+Query: [complete_cypher_query_on_single_line]"""
+
+    return base_prompt
+
+# Cortex LLM configuration
+API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
+API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
+MODEL = "llama3.1-70b"
+
+def cortex_llm(prompt: str, session_id: str) -> str:
+    """Call the Cortex LLM API with enhanced schema context"""
+    headers = {
+        "Authorization": f'Snowflake Token="{API_KEY}"',
+        "Content-Type": "application/json"
     }
     
-    for category, suggestions in suggestion_categories.items():
-        with st.expander(category, expanded=False):
-            for suggestion in suggestions:
-                if st.button(f"💭 {suggestion}", key=f"sug_{hash(suggestion)}", use_container_width=True):
-                    st.session_state.selected_suggestion = suggestion
-                    st.rerun()
+    # Get enhanced system prompt with schema
+    system_prompt = get_enhanced_system_prompt()
     
-    st.divider()
-    
-    # Enhanced question input
-    st.markdown("#### ✍️ Ask Your Question")
-    
-    # Show selected suggestion
-    if st.session_state.selected_suggestion:
-        col_s1, col_s2 = st.columns([4, 1])
-        with col_s1:
-            st.success(f"📝 Selected: {st.session_state.selected_suggestion}")
-        with col_s2:
-            if st.button("🗑️", key="clear_suggestion"):
-                st.session_state.selected_suggestion = ""
-                st.rerun()
-    
-    with st.form("enhanced_question_form", clear_on_submit=True):
-        user_question = st.text_area(
-            "Your question:",
-            value=st.session_state.selected_suggestion,
-            placeholder="e.g., Show me the complete network structure with all relationships...",
-            height=120,
-            help="Ask anything about your Neo4j database - no limits on data exploration!"
-        )
-        
-        col_form1, col_form2 = st.columns(2)
-        with col_form1:
-            unlimited_mode = st.checkbox(
-                "🚀 Unlimited Mode", 
-                value=True,
-                help="Enable unlimited data exploration (recommended)"
-            )
-        
-        with col_form2:
-            show_schema = st.checkbox(
-                "📋 Include Schema", 
-                value=False,
-                help="Show database schema in the response"
-            )
-        
-        submit_button = st.form_submit_button(
-            "🧠 Execute Query", 
-            use_container_width=True,
-            disabled=st.session_state.processing
-        )
-    
-    # Clear selected suggestion after form submission
-    if submit_button:
-        st.session_state.selected_suggestion = ""
-    
-    if submit_button and user_question.strip() and not st.session_state.processing:
-        # Add schema request if enabled
-        final_question = user_question.strip()
-        if show_schema:
-            final_question += " Also show me the database schema."
-        
-        result = call_enhanced_agent_api(final_question, unlimited_mode)
-        
-        if result:
-            # Store result and graph data
-            st.session_state.last_response = result
-            if result.get("graph_data"):
-                st.session_state.graph_data = result["graph_data"]
-            
-            # Add to chat history
-            chat_entry = {
-                "timestamp": datetime.now().isoformat(),
-                "question": final_question,
-                "result": result,
-                "unlimited": unlimited_mode
-            }
-            st.session_state.chat_history.append(chat_entry)
-            
-            st.success(f"✅ Query executed in {result.get('processing_time', 0):.2f}s!")
-            st.rerun()
-    
-    st.divider()
-    
-    # Enhanced test data
-    if st.button("🧪 Load Enhanced Test Dataset", use_container_width=True):
-        enhanced_test_data = {
-            "nodes": [
-                {"id": "p1", "labels": ["Person"], "properties": {"name": "Alice Johnson", "age": 30, "role": "Senior Developer", "department": "Engineering", "email": "alice@techcorp.com"}},
-                {"id": "p2", "labels": ["Person"], "properties": {"name": "Bob Smith", "age": 25, "role": "Designer", "department": "Marketing", "email": "bob@techcorp.com"}},
-                {"id": "p3", "labels": ["Person"], "properties": {"name": "Carol Brown", "age": 35, "role": "Engineering Manager", "department": "Engineering", "email": "carol@techcorp.com"}},
-                {"id": "p4", "labels": ["Person"], "properties": {"name": "David Wilson", "age": 28, "role": "Sales Executive", "department": "Sales", "email": "david@techcorp.com"}},
-                {"id": "p5", "labels": ["Person"], "properties": {"name": "Emma Davis", "age": 32, "role": "Product Manager", "department": "Product", "email": "emma@techcorp.com"}},
-                {"id": "c1", "labels": ["Company"], "properties": {"name": "TechCorp Inc.", "industry": "Technology", "employees": 500, "founded": 2010, "revenue": "50M"}},
-                {"id": "c2", "labels": ["Company"], "properties": {"name": "InnovateAI", "industry": "Artificial Intelligence", "employees": 200, "founded": 2018, "revenue": "20M"}},
-                {"id": "l1", "labels": ["Location"], "properties": {"name": "New York", "country": "USA", "population": 8000000, "timezone": "EST"}},
-                {"id": "l2", "labels": ["Location"], "properties": {"name": "San Francisco", "country": "USA", "population": 900000, "timezone": "PST"}},
-                {"id": "pr1", "labels": ["Project"], "properties": {"name": "AI Innovation Platform", "status": "Active", "budget": 2000000, "duration": "12 months"}},
-                {"id": "pr2", "labels": ["Project"], "properties": {"name": "Mobile App Redesign", "status": "Completed", "budget": 500000, "duration": "6 months"}},
-                {"id": "t1", "labels": ["Technology"], "properties": {"name": "Neo4j", "category": "Database", "type": "Graph Database"}},
-                {"id": "t2", "labels": ["Technology"], "properties": {"name": "Python", "category": "Programming Language", "type": "High-level Language"}}
-            ],
-            "relationships": [
-                {"startNode": "p1", "endNode": "p2", "type": "KNOWS", "properties": {"since": "2020", "relationship": "colleague"}},
-                {"startNode": "p2", "endNode": "p4", "type": "FRIEND_OF", "properties": {"since": "2019", "closeness": "high"}},
-                {"startNode": "p3", "endNode": "p1", "type": "MANAGES", "properties": {"since": "2021", "team": "Backend"}},
-                {"startNode": "p3", "endNode": "p5", "type": "COLLABORATES_WITH", "properties": {"project": "AI Innovation"}},
-                {"startNode": "p1", "endNode": "c1", "type": "WORKS_FOR", "properties": {"position": "Senior Developer", "salary": 120000}},
-                {"startNode": "p2", "endNode": "c1", "type": "WORKS_FOR", "properties": {"position": "Designer", "salary": 85000}},
-                {"startNode": "p3", "endNode": "c1", "type": "WORKS_FOR", "properties": {"position": "Engineering Manager", "salary": 150000}},
-                {"startNode": "p4", "endNode": "c1", "type": "WORKS_FOR", "properties": {"position": "Sales Executive", "salary": 95000}},
-                {"startNode": "p5", "endNode": "c2", "type": "WORKS_FOR", "properties": {"position": "Product Manager", "salary": 110000}},
-                {"startNode": "c1", "endNode": "l1", "type": "LOCATED_IN", "properties": {"headquarters": True, "offices": 3}},
-                {"startNode": "c2", "endNode": "l2", "type": "LOCATED_IN", "properties": {"headquarters": True, "offices": 1}},
-                {"startNode": "p1", "endNode": "pr1", "type": "ASSIGNED_TO", "properties": {"role": "Technical Lead", "allocation": "100%"}},
-                {"startNode": "p2", "endNode": "pr2", "type": "ASSIGNED_TO", "properties": {"role": "UI/UX Designer", "allocation": "80%"}},
-                {"startNode": "p3", "endNode": "pr1", "type": "MANAGES", "properties": {"responsibility": "Budget and Timeline"}},
-                {"startNode": "p5", "endNode": "pr1", "type": "OWNS", "properties": {"responsibility": "Product Vision"}},
-                {"startNode": "pr1", "endNode": "t1", "type": "USES", "properties": {"purpose": "Data Storage"}},
-                {"startNode": "pr1", "endNode": "t2", "type": "USES", "properties": {"purpose": "Backend Development"}},
-                {"startNode": "c1", "endNode": "c2", "type": "PARTNER_WITH", "properties": {"type": "Strategic Alliance", "since": "2022"}}
-            ]
+    payload = {
+        "query": {
+            "aplctn_cd": "edagnai",
+            "app_id": "edadip",
+            "api_key": API_KEY,
+            "method": "cortex",
+            "model": MODEL,
+            "sys_msg": system_prompt,
+            "limit_convs": "0",
+            "prompt": {
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            "session_id": session_id
         }
-        
-        st.session_state.graph_data = enhanced_test_data
-        st.success("✅ Enhanced test dataset loaded!")
-        st.rerun()
+    }
     
-    # Chat history section
-    st.markdown("#### 📚 Recent Queries")
-    
-    if st.session_state.chat_history:
-        # Show recent queries with better formatting
-        recent_queries = st.session_state.chat_history[-5:]  # Last 5 queries
+    try:
+        logger.info(f"🔄 Calling Cortex LLM with schema-enhanced prompt...")
+        resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
+        resp.raise_for_status()
         
-        for i, entry in enumerate(reversed(recent_queries)):
-            with st.expander(f"🔍 Query {len(st.session_state.chat_history) - i}: {entry['question'][:50]}...", expanded=False):
-                st.write(f"**⏰ Time:** {entry['timestamp'][:19]}")
-                st.write(f"**🚀 Mode:** {'Unlimited' if entry['unlimited'] else 'Limited'}")
-                st.write(f"**❓ Question:** {entry['question']}")
-                
-                result = entry['result']
-                if result.get('tool'):
-                    st.write(f"**🔧 Tool Used:** {result['tool']}")
-                if result.get('query'):
-                    st.code(result['query'], language='cypher')
-                
-                col_h1, col_h2 = st.columns(2)
-                with col_h1:
-                    if st.button(f"🔄 Repeat", key=f"repeat_{i}_{hash(entry['question'])}"):
-                        result = call_enhanced_agent_api(entry['question'], entry['unlimited'])
-                        if result:
-                            st.session_state.last_response = result
-                            if result.get("graph_data"):
-                                st.session_state.graph_data = result["graph_data"]
-                            st.rerun()
-                
-                with col_h2:
-                    if entry['result'].get('graph_data') and st.button(f"📊 Load Graph", key=f"load_{i}_{hash(entry['question'])}"):
-                        st.session_state.graph_data = entry['result']['graph_data']
-                        st.success("Graph loaded!")
-                        st.rerun()
+        raw_response = resp.text
+        logger.info(f"📥 Raw response length: {len(raw_response)}")
         
-        if st.button("🗑️ Clear History", use_container_width=True):
-            st.session_state.chat_history = []
-            st.success("History cleared!")
-            st.rerun()
-    else:
-        st.info("💡 No queries yet. Ask a question to start exploring!")
-
-with col2:
-    st.markdown("### 🎨 Graph Visualization & Analysis")
-    
-    # Enhanced response display
-    if st.session_state.last_response:
-        answer = st.session_state.last_response.get("answer", "")
-        tool_used = st.session_state.last_response.get("tool", "")
-        query_used = st.session_state.last_response.get("query", "")
-        processing_time = st.session_state.last_response.get("processing_time", 0)
-        
-        if answer:
-            st.markdown("#### 🤖 AI Agent Response")
-            
-            # Response container with enhanced styling
-            st.markdown(f'''
-            <div class="response-container">
-                <h4>🧠 Schema-Aware Analysis</h4>
-                <p><strong>⚡ Processing Time:</strong> {processing_time:.2f}s</p>
-                <p><strong>🔧 Tool Used:</strong> {tool_used}</p>
-                <div style="margin-top: 1rem;">
-                    {answer.replace("**", "<strong>").replace("**", "</strong>")}
-                </div>
-            </div>
-            ''', unsafe_allow_html=True)
-            
-            # Show query if available
-            if query_used:
-                st.markdown("**🔧 Executed Cypher Query:**")
-                st.markdown(f'<div class="cypher-query">{query_used}</div>', unsafe_allow_html=True)
-    
-    # Graph visualization section
-    if st.session_state.graph_data:
-        nodes = st.session_state.graph_data.get("nodes", [])
-        relationships = st.session_state.graph_data.get("relationships", [])
-        
-        # Enhanced metrics display
-        col2_1, col2_2, col2_3 = st.columns(3)
-        with col2_1:
-            st.markdown(f'<div class="neo4j-metric"><h2>{len(nodes)}</h2><p>Nodes</p></div>', unsafe_allow_html=True)
-        with col2_2:
-            st.markdown(f'<div class="neo4j-metric"><h2>{len(relationships)}</h2><p>Relationships</p></div>', unsafe_allow_html=True)
-        with col2_3:
-            connectivity = len(relationships) / max(len(nodes), 1)
-            st.markdown(f'<div class="neo4j-metric"><h2>{connectivity:.1f}</h2><p>Connectivity</p></div>', unsafe_allow_html=True)
-        
-        # Enhanced legend
-        if nodes or relationships:
-            legend = create_enhanced_legend(nodes, relationships)
-            st.markdown(legend, unsafe_allow_html=True)
-        
-        # Network insights
-        if nodes:
-            node_types = {}
-            for node in nodes:
-                labels = node.get("labels", ["Unknown"])
-                if labels:
-                    label = labels[0]
-                    node_types[label] = node_types.get(label, 0) + 1
-            
-            if node_types:
-                st.markdown(f'''
-                <div class="schema-box">
-                    <h4>📊 Network Composition</h4>
-                    <p><strong>Node Types:</strong> {len(node_types)} different types</p>
-                    <p><strong>Distribution:</strong> {", ".join([f"{k}({v})" for k, v in sorted(node_types.items())])}</p>
-                </div>
-                ''', unsafe_allow_html=True)
-        
-        # Render the graph
-        st.markdown("#### 🕸️ Interactive Neo4j Graph")
-        st.markdown('<div class="info-box">🎯 <strong>Neo4j-Style Visualization</strong> - Drag nodes, zoom, and explore relationships!</div>', unsafe_allow_html=True)
-        
-        success = render_neo4j_graph(st.session_state.graph_data)
-        
-        if success:
-            if len(relationships) > 0:
-                st.markdown(f'''
-                <div class="success-box">
-                    🎉 <strong>Success!</strong> Interactive graph shows {len(nodes)} nodes connected by {len(relationships)} relationships!
-                    <br>🔍 <strong>Features:</strong> Click nodes for details, drag to rearrange, scroll to zoom
-                </div>
-                ''', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="warning-box">ℹ️ <strong>Isolated Nodes:</strong> No relationships found in current data</div>', unsafe_allow_html=True)
+        if "end_of_stream" in raw_response:
+            parsed_response = raw_response.partition("end_of_stream")[0].strip()
         else:
-            st.error("❌ Graph rendering failed. Check the debug information above.")
-    
-    else:
-        # Enhanced welcome screen
-        st.markdown("""
-        <div style="
-            text-align: center; 
-            padding: 3rem; 
-            background: linear-gradient(135deg, #00857C 0%, #00BCD4 50%, #4CAF50 100%); 
-            color: white; 
-            border-radius: 20px; 
-            margin: 2rem 0;
-            box-shadow: 0 8px 24px rgba(0, 133, 124, 0.3);
-        ">
-            <h2>🕸️ Neo4j Graph Explorer Pro</h2>
-            <p><strong>Schema-Aware • Unlimited Exploration • Real-time Visualization</strong></p>
-            <div style="margin-top: 2rem; font-size: 1.1rem;">
-                <p>🧠 AI agent reads your Neo4j schema automatically</p>
-                <p>🚀 No limits on data exploration</p>
-                <p>📊 Interactive Neo4j-style graph visualization</p>
-                <p>🔍 Smart suggestions based on your data structure</p>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            parsed_response = raw_response.strip()
         
-        st.markdown("""
-        <div class="info-box">
-            <h3 style="margin-top: 0;">🚀 Getting Started:</h3>
-            <ol style="text-align: left; margin: 1rem 0;">
-                <li><strong>Use Smart Suggestions</strong> - Click any suggestion to explore your data</li>
-                <li><strong>Ask Natural Questions</strong> - "Show me the network structure"</li>
-                <li><strong>Enable Unlimited Mode</strong> - Explore your entire graph without restrictions</li>
-                <li><strong>Try Schema Queries</strong> - "What types of nodes exist?"</li>
-            </ol>
-        </div>
-        """, unsafe_allow_html=True)
+        return parsed_response
+        
+    except Exception as e:
+        logger.error(f"❌ Cortex LLM API error: {e}")
+        return f"Error calling Cortex LLM: {str(e)}"
 
-# Enhanced footer
-st.markdown("---")
-st.markdown("""
-<div style="
-    text-align: center; 
-    padding: 2rem;
-    background: linear-gradient(90deg, rgba(0, 133, 124, 0.1), rgba(0, 188, 212, 0.1));
-    border-radius: 15px;
-    margin-top: 2rem;
-">
-    <h3 style="
-        margin: 0; 
-        background: linear-gradient(90deg, #00857C, #00BCD4); 
-        -webkit-background-clip: text; 
-        -webkit-text-fill-color: transparent;
-    ">
-        🚀 Neo4j Graph Explorer Pro
-    </h3>
-    <p style="margin: 1rem 0; color: #00695C; font-weight: 500;">
-        🧠 Schema-Aware AI Agent • 🕸️ Unlimited Graph Exploration • 📊 Real-time Visualization • 🔍 Smart Query Suggestions
-    </p>
-    <p style="margin: 0; color: #00857C; font-size: 0.9rem;">
-        Session ID: <code>{st.session_state.session_id[:8]}...</code> | 
-        Queries: <strong>{len(st.session_state.chat_history)}</strong> | 
-        Status: <strong>{"🟢 Connected" if st.session_state.connection_status == "connected" else "🔴 Disconnected"}</strong>
-    </p>
-</div>
-""", unsafe_allow_html=True)
+def parse_llm_output_enhanced(llm_output, question):
+    """Enhanced parsing with schema awareness"""
+    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    trace = llm_output.strip()
+    tool = None
+    query = None
+    
+    logger.info(f"🔍 Parsing enhanced LLM output...")
+    
+    # Enhanced tool extraction patterns
+    tool_patterns = [
+        r"Tool:\s*([\w_]+)",
+        r"**Tool:**\s*([\w_]+)",
+        r"Tool\s*=\s*([\w_]+)",
+        r"Selected tool:\s*([\w_]+)",
+        r"I'll use:\s*([\w_]+)",
+    ]
+    
+    for pattern in tool_patterns:
+        tool_match = re.search(pattern, llm_output, re.I)
+        if tool_match:
+            tname = tool_match.group(1).strip()
+            if tname in allowed_tools:
+                tool = tname
+                logger.info(f"✅ Tool found: {tool}")
+                break
+    
+    # Enhanced query extraction
+    query_patterns = [
+        r"Query:\s*(.+?)(?:\n\n|\n[A-Z]|$)",
+        r"**Query:**\s*(.+?)(?:\n\n|\n[A-Z]|$)",
+        r"Cypher:\s*(.+?)(?:\n\n|\n[A-Z]|$)",
+        r"```cypher\s*(.+?)\s*```",
+        r"```\s*(.+?)\s*```",
+    ]
+    
+    for pattern in query_patterns:
+        query_match = re.search(pattern, llm_output, re.I | re.DOTALL)
+        if query_match:
+            query = query_match.group(1).strip()
+            if query and len(query) > 3:
+                logger.info(f"✅ Query found: {query[:100]}...")
+                break
+    
+    # Schema-aware fallback logic
+    if not tool:
+        logger.warning("⚠️ No tool found, using schema-aware fallback...")
+        
+        q_lower = llm_output.lower()
+        if any(word in q_lower for word in ["schema", "structure", "labels", "relationships", "types"]):
+            tool = "get_neo4j_schema"
+        elif any(word in q_lower for word in ["create", "add", "insert", "update", "set", "delete", "merge"]):
+            tool = "write_neo4j_cypher"
+        else:
+            tool = "read_neo4j_cypher"
+        
+        logger.info(f"🔄 Fallback tool: {tool}")
+    
+    # Schema-aware query generation
+    if tool and not query and tool != "get_neo4j_schema":
+        if tool == "read_neo4j_cypher":
+            # Generate exploration query based on schema
+            labels = SCHEMA_CACHE.get("labels", [])
+            if "Person" in labels:
+                query = "MATCH (n:Person) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
+            elif labels:
+                query = f"MATCH (n:{labels[0]}) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
+            else:
+                query = "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
+        elif tool == "write_neo4j_cypher":
+            query = "CREATE (n:ExampleNode {name: 'Generated', created: datetime()}) RETURN n"
+        
+        logger.info(f"🔄 Schema-aware query generated: {query}")
+    
+    # Remove any unwanted LIMIT clauses unless specifically requested
+    if query and "LIMIT" in query.upper() and "limit" not in question.lower() and "first" not in question.lower() and "top" not in question.lower():
+        query = re.sub(r'\s+LIMIT\s+\d+', '', query, flags=re.I)
+        logger.info(f"🔧 Removed unnecessary LIMIT clause")
+    
+    return tool, query, trace
+
+def format_response_with_graph_enhanced(result_data, tool_type, question=""):
+    """Enhanced response formatting with better graph data handling"""
+    try:
+        if isinstance(result_data, str):
+            try:
+                result_data = json.loads(result_data)
+            except:
+                return str(result_data), None
+        
+        graph_data = None
+        
+        if tool_type == "write_neo4j_cypher" and isinstance(result_data, dict):
+            if "change_info" in result_data:
+                change_info = result_data["change_info"]
+                formatted_response = f"""
+🔄 **Database Update Completed Successfully**
+
+**⚡ Performance:** {change_info['execution_time_ms']}ms  
+**🕐 Timestamp:** {change_info['timestamp'][:19]}
+
+**📝 Changes Made:**
+{chr(10).join(f"  {change}" for change in change_info['changes'])}
+
+**🔧 Executed Query:** `{change_info['query']}`
+
+✅ **Database state updated** - Network graph will refresh to show current state
+                """.strip()
+                
+                if result_data.get("graph_data"):
+                    graph_data = result_data["graph_data"]
+                    node_count = len(graph_data.get('nodes', []))
+                    rel_count = len(graph_data.get('relationships', []))
+                    if node_count > 0 or rel_count > 0:
+                        formatted_response += f"\n\n🕸️ **Updated visualization** showing {node_count} nodes and {rel_count} relationships"
+                
+                return formatted_response, graph_data
+        
+        elif tool_type == "read_neo4j_cypher" and isinstance(result_data, dict):
+            if "data" in result_data and "metadata" in result_data:
+                data = result_data["data"]
+                metadata = result_data["metadata"]
+                graph_data = result_data.get("graph_data")
+                
+                formatted_response = f"""
+📊 **Neo4j Query Results**
+
+**🔢 Records Found:** {metadata['record_count']}  
+**⚡ Query Time:** {metadata['execution_time_ms']}ms  
+**🕐 Executed:** {metadata['timestamp'][:19]}
+                """.strip()
+                
+                # Enhanced data display
+                if not graph_data or not graph_data.get('nodes'):
+                    if isinstance(data, list) and len(data) > 0:
+                        # Show meaningful sample of data
+                        sample_size = min(len(data), 5)
+                        formatted_response += f"\n\n**📋 Data Preview (showing {sample_size} of {len(data)} records):**\n```json\n{json.dumps(data[:sample_size], indent=2, default=str)}\n```"
+                        
+                        if len(data) > sample_size:
+                            formatted_response += f"\n... and {len(data) - sample_size} more records"
+                    else:
+                        formatted_response += "\n\n**📋 Result:** No data found - try broader search criteria"
+                
+                if graph_data and graph_data.get('nodes'):
+                    node_count = len(graph_data['nodes'])
+                    rel_count = len(graph_data.get('relationships', []))
+                    
+                    formatted_response += f"\n\n🕸️ **Network Graph Generated**"
+                    formatted_response += f"\n📊 **Nodes:** {node_count} | **Relationships:** {rel_count}"
+                    
+                    if node_count > 0:
+                        # Analyze node types for better insight
+                        node_types = {}
+                        for node in graph_data['nodes']:
+                            for label in node.get('labels', ['Unknown']):
+                                node_types[label] = node_types.get(label, 0) + 1
+                        
+                        if len(node_types) > 0:
+                            type_summary = ", ".join([f"{label}({count})" for label, count in sorted(node_types.items())])
+                            formatted_response += f"\n🏷️ **Node Types:** {type_summary}"
+                        
+                        # Network density insight
+                        density = rel_count / node_count if node_count > 0 else 0
+                        if density > 2:
+                            formatted_response += f"\n🕸️ **Network:** Highly connected ({density:.1f} connections/node)"
+                        elif density > 1:
+                            formatted_response += f"\n🔗 **Network:** Well connected ({density:.1f} connections/node)"
+                        elif density > 0:
+                            formatted_response += f"\n📊 **Network:** Moderately connected ({density:.1f} connections/node)"
+                        else:
+                            formatted_response += f"\n📍 **Network:** Isolated nodes (no relationships found)"
+                
+                return formatted_response, graph_data
+        
+        elif tool_type == "get_neo4j_schema" and isinstance(result_data, dict):
+            if "schema" in result_data:
+                schema = result_data["schema"]
+                metadata = result_data.get("metadata", {})
+                
+                formatted_response = f"""
+🏗️ **Neo4j Database Schema**
+
+**⚡ Retrieved in:** {metadata.get('execution_time_ms', 'N/A')}ms
+**🕐 Timestamp:** {metadata.get('timestamp', '')[:19]}
+
+**📊 Database Structure Overview:**
+                """.strip()
+                
+                if isinstance(schema, dict):
+                    node_types = list(schema.keys())
+                    formatted_response += f"\n\n**🏷️ Node Types Found:** {len(node_types)}"
+                    
+                    for i, (label, info) in enumerate(schema.items()):
+                        if i < 10:  # Show first 10 in detail
+                            if isinstance(info, dict):
+                                props = info.get('properties', {})
+                                relationships = info.get('relationships', [])
+                                formatted_response += f"\n\n**{label}:**"
+                                formatted_response += f"\n  • Properties: {len(props)} ({', '.join(list(props.keys())[:5])}{'...' if len(props) > 5 else ''})"
+                                formatted_response += f"\n  • Relationships: {len(relationships)}"
+                        
+                    if len(node_types) > 10:
+                        formatted_response += f"\n\n... and {len(node_types) - 10} more node types"
+                
+                # Update schema cache
+                fetch_neo4j_schema()
+                
+                return formatted_response, None
+        
+        # Fallback formatting
+        formatted_text = json.dumps(result_data, indent=2, default=str) if isinstance(result_data, (dict, list)) else str(result_data)
+        return formatted_text, None
+    
+    except Exception as e:
+        error_msg = f"❌ **Error formatting response:** {str(e)}"
+        logger.error(error_msg)
+        return error_msg, None
+
+def select_tool_node_enhanced(state: AgentState) -> dict:
+    """Enhanced tool selection with schema awareness"""
+    logger.info(f"🤔 Processing question: {state.question}")
+    
+    try:
+        # Ensure schema is loaded
+        if not SCHEMA_CACHE.get("last_updated"):
+            fetch_neo4j_schema()
+        
+        llm_output = cortex_llm(state.question, state.session_id)
+        tool, query, trace = parse_llm_output_enhanced(llm_output, state.question)
+        
+        logger.info(f"✅ Enhanced tool selection - Tool: {tool}, Query: {query[:100] if query else 'None'}")
+        
+        return {
+            "question": state.question,
+            "session_id": state.session_id,
+            "tool": tool or "",
+            "query": query or "",
+            "trace": trace or "",
+            "answer": "",
+            "graph_data": None,
+            "schema_info": SCHEMA_CACHE,
+            "node_limit": state.node_limit
+        }
+    except Exception as e:
+        logger.error(f"❌ Error in enhanced select_tool_node: {e}")
+        return {
+            "question": state.question,
+            "session_id": state.session_id,
+            "tool": "",
+            "query": "",
+            "trace": f"Error selecting tool: {str(e)}",
+            "answer": f"❌ Error processing question: {str(e)}",
+            "graph_data": None,
+            "schema_info": None,
+            "node_limit": state.node_limit
+        }
+
+def execute_tool_node_enhanced(state: AgentState) -> dict:
+    """Enhanced tool execution with better error handling and unlimited queries"""
+    tool = state.tool
+    query = state.query
+    trace = state.trace
+    question = state.question
+    node_limit = state.node_limit
+    answer = ""
+    graph_data = None
+    
+    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    
+    logger.info(f"⚡ Executing enhanced tool: '{tool}'")
+    logger.info(f"🔧 Query: {query[:200] if query else 'None'}...")
+    
+    try:
+        if not tool:
+            logger.error("❌ No tool selected")
+            answer = "⚠️ I couldn't determine the right tool for your question. The schema suggests using read_neo4j_cypher for data exploration, write_neo4j_cypher for modifications, or get_neo4j_schema for structure information."
+        
+        elif tool not in valid_tools:
+            logger.error(f"❌ Invalid tool: {tool}")
+            answer = f"⚠️ Tool '{tool}' not recognized. Available tools: {', '.join(valid_tools)}"
+        
+        elif tool == "get_neo4j_schema":
+            logger.info("📋 Executing enhanced schema retrieval...")
+            result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers, timeout=30)
+            if result.ok:
+                # Also update local schema cache
+                fetch_neo4j_schema()
+                answer, graph_data = format_response_with_graph_enhanced(result.json(), tool, question)
+                logger.info("✅ Enhanced schema retrieval successful")
+            else:
+                logger.error(f"❌ Schema query failed: {result.status_code} - {result.text}")
+                answer = f"❌ Schema query failed: {result.text}"
+        
+        elif tool == "read_neo4j_cypher":
+            if not query or not query.strip():
+                logger.error("❌ No query provided for read operation")
+                # Generate default exploration query using schema
+                labels = SCHEMA_CACHE.get("labels", [])
+                if labels:
+                    query = f"MATCH (n:{labels[0]}) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
+                    logger.info(f"🔧 Generated default exploration query: {query}")
+                    answer = "⚠️ No specific query provided. Generated a schema-based exploration query."
+                else:
+                    query = "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
+                    answer = "⚠️ No specific query provided. Generated a general exploration query."
+            
+            if query:
+                logger.info("📖 Executing enhanced read query...")
+                query_clean = clean_cypher_query(query)
+                data = {
+                    "query": query_clean, 
+                    "params": {},
+                    "node_limit": node_limit * 10  # Allow more data for better visualization
+                }
+                result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=60)
+                if result.ok:
+                    answer, graph_data = format_response_with_graph_enhanced(result.json(), tool, question)
+                    logger.info("✅ Enhanced read query successful")
+                else:
+                    logger.error(f"❌ Read query failed: {result.status_code} - {result.text}")
+                    answer = f"❌ Query failed: {result.text}"
+        
+        elif tool == "write_neo4j_cypher":
+            if not query or not query.strip():
+                logger.error("❌ No query provided for write operation")
+                answer = "⚠️ I couldn't generate a valid modification query. Please be more specific about what you want to create, update, or delete. You can reference the available node types from the schema."
+            else:
+                logger.info("✏️ Executing enhanced write query...")
+                query_clean = clean_cypher_query(query)
+                data = {
+                    "query": query_clean, 
+                    "params": {},
+                    "node_limit": node_limit * 10
+                }
+                result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers, timeout=60)
+                if result.ok:
+                    answer, graph_data = format_response_with_graph_enhanced(result.json(), tool, question)
+                    logger.info("✅ Enhanced write query successful")
+                else:
+                    logger.error(f"❌ Write query failed: {result.status_code} - {result.text}")
+                    answer = f"❌ Update failed: {result.text}"
+        
+        else:
+            logger.error(f"❌ Unknown tool: {tool}")
+            answer = f"❌ Unknown tool: {tool}"
+    
+    except requests.exceptions.Timeout:
+        logger.error("⏰ Request timed out")
+        answer = "⚠️ Query timed out. The query might be complex or the database might be busy. Try again or simplify the query."
+    except requests.exceptions.ConnectionError:
+        logger.error("🔌 Connection error")
+        answer = "⚠️ Cannot connect to the database server. Please ensure the MCP server is running on port 8000."
+    except Exception as e:
+        logger.error(f"💥 Unexpected error in enhanced execute_tool_node: {e}")
+        answer = f"⚠️ Execution failed: {str(e)}"
+    
+    logger.info(f"🏁 Enhanced tool execution completed. Graph data: {'Yes' if graph_data else 'No'}")
+    
+    return {
+        "question": state.question,
+        "session_id": state.session_id,
+        "tool": tool,
+        "query": query,
+        "trace": trace,
+        "answer": answer,
+        "graph_data": graph_data,
+        "schema_info": SCHEMA_CACHE,
+        "node_limit": node_limit
+    }
+
+def build_enhanced_agent():
+    """Build enhanced LangGraph agent with schema awareness"""
+    
+    # Initialize schema on startup
+    logger.info("🚀 Building enhanced LangGraph agent with schema awareness...")
+    fetch_neo4j_schema()
+    
+    workflow = StateGraph(state_schema=AgentState)
+    
+    # Add enhanced nodes
+    workflow.add_node("select_tool", RunnableLambda(select_tool_node_enhanced))
+    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node_enhanced))
+    
+    # Set entry point
+    workflow.set_entry_point("select_tool")
+    
+    # Add edges
+    workflow.add_edge("select_tool", "execute_tool")
+    workflow.add_edge("execute_tool", END)
+    
+    # Compile and return
+    agent = workflow.compile()
+    logger.info("🚀 Enhanced LangGraph agent built successfully with schema integration!")
+    return agent
+
+# Export function for use in app.py
+def build_agent():
+    """Main function to build the enhanced agent"""
+    return build_enhanced_agent()
+
+# For testing purposes
+if __name__ == "__main__":
+    # Test the enhanced agent
+    agent = build_enhanced_agent()
+    test_state = AgentState(
+        question="Show me the complete network structure with all relationships",
+        session_id="test_session_enhanced",
+        node_limit=1000
+    )
+    
+    import asyncio
+    
+    async def test():
+        result = await agent.ainvoke(test_state)
+        print("Enhanced Test Result:", result)
+    
+    # asyncio.run(test())
