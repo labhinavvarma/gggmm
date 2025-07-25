@@ -1,387 +1,642 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Optional
-from langgraph_agent import build_agent, AgentState  # Fixed import
-import uuid
+import asyncio
+import json
 import logging
-import uvicorn
 from datetime import datetime
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
+
+# FastMCP and FastAPI imports
+from fastmcp import FastMCP, Context
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+# Neo4j imports
+from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("neo4j_agent_app")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mcp_neo4j_fastmcp")
 
-# Create FastAPI app with enhanced metadata
+# Neo4j Configuration
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "your_neo4j_password"
+NEO4J_DATABASE = "neo4j"
+
+# Initialize Neo4j driver
+driver: AsyncDriver = AsyncGraphDatabase.driver(
+    NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
+)
+
+# Create FastMCP instance
+mcp = FastMCP("Neo4j Graph Explorer MCP Server")
+
+# Create FastAPI instance for HTTP endpoints
 app = FastAPI(
-    title="Neo4j Graph Explorer API",
-    description="AI-powered Neo4j graph database agent with split-screen visualization support",
-    version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    title="Neo4j Graph Explorer MCP Server",
+    description="Modern MCP server with FastMCP tools and FastAPI endpoints",
+    version="3.0.0"
 )
 
-# Enhanced CORS middleware for split-screen UI
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Streamlit URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize agent at startup
-agent = None
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the LangGraph agent when the server starts"""
-    global agent
-    try:
-        logger.info("🚀 Starting Neo4j Graph Explorer Agent server...")
-        logger.info("🎨 Optimized for split-screen interface with 5000 node support")
-        agent = build_agent()
-        logger.info("✅ LangGraph agent initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize agent: {e}")
-        raise e
-
-# Enhanced request/response models
-class ChatRequest(BaseModel):
-    question: str
-    session_id: str = None
-    node_limit: int = 5000  # Default node limit for visualization
-
-class ChatResponse(BaseModel):
-    trace: str
-    tool: str
+# Pydantic models for FastAPI
+class CypherRequest(BaseModel):
     query: str
-    answer: str
-    graph_data: Optional[dict] = None
-    session_id: str
-    timestamp: str
-    node_limit: int
-    success: bool = True
-    error: Optional[str] = None
-    execution_time_ms: float = 0
+    params: dict = {}
+    node_limit: int = 5000
 
-# Health check endpoint
-@app.get("/")
-async def health_check():
-    """Enhanced health check endpoint"""
+class CypherResponse(BaseModel):
+    data: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+    graph_data: Optional[Dict[str, Any]] = None
+
+# Enhanced graph data extraction for unlimited display
+def extract_graph_data_unlimited(records, node_limit=None):
+    """
+    Extract nodes and relationships with unlimited display capability
+    Optimized for Neo4j Browser-like experience
+    """
+    nodes = {}
+    relationships = []
+    
+    # If no limit specified, process all data
+    effective_limit = node_limit if node_limit is not None else float('inf')
+    
+    logger.info(f"🕸️ Processing graph data with limit: {'unlimited' if node_limit is None else node_limit}")
+    
+    # Process records and extract graph objects
+    for record in records:
+        for key, value in record.items():
+            # Handle nodes
+            if hasattr(value, 'labels'):  # It's a node
+                node_id = str(value.element_id)
+                if len(nodes) < effective_limit:
+                    # Enhanced property extraction
+                    properties = dict(value)
+                    
+                    # Ensure we have a meaningful display name
+                    if not any(prop in properties for prop in ['name', 'title', 'displayName']):
+                        # Create a meaningful name based on properties
+                        labels = list(value.labels)
+                        if labels:
+                            # Use first significant property or create from label
+                            significant_props = [k for k, v in properties.items() 
+                                               if isinstance(v, str) and len(str(v)) < 50]
+                            if significant_props:
+                                properties['name'] = f"{labels[0]}_{properties[significant_props[0]]}"
+                            else:
+                                properties['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                        else:
+                            properties['name'] = f"Node_{len(nodes) + 1}"
+                    
+                    nodes[node_id] = {
+                        'id': node_id,
+                        'labels': list(value.labels),
+                        'properties': properties,
+                        'degree': 0  # Will be calculated later
+                    }
+            
+            # Handle relationships
+            elif hasattr(value, 'type'):  # It's a relationship
+                start_node_id = str(value.start_node.element_id)
+                end_node_id = str(value.end_node.element_id)
+                
+                rel = {
+                    'id': str(value.element_id),
+                    'type': value.type,
+                    'startNode': start_node_id,
+                    'endNode': end_node_id,
+                    'properties': dict(value)
+                }
+                relationships.append(rel)
+                
+                # Add connected nodes if not already present and within limit
+                for node_ref, node_id_key in [(value.start_node, start_node_id), (value.end_node, end_node_id)]:
+                    if node_id_key not in nodes and len(nodes) < effective_limit:
+                        node_props = dict(node_ref)
+                        if not any(prop in node_props for prop in ['name', 'title', 'displayName']):
+                            labels = list(node_ref.labels)
+                            if labels:
+                                node_props['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                            else:
+                                node_props['name'] = f"Node_{len(nodes) + 1}"
+                        
+                        nodes[node_id_key] = {
+                            'id': node_id_key,
+                            'labels': list(node_ref.labels),
+                            'properties': node_props,
+                            'degree': 0
+                        }
+            
+            # Handle lists (might contain nodes/relationships)
+            elif isinstance(value, list):
+                for item in value:
+                    if hasattr(item, 'labels') and len(nodes) < effective_limit:  # Node in list
+                        node_id = str(item.element_id)
+                        if node_id not in nodes:
+                            item_props = dict(item)
+                            if not any(prop in item_props for prop in ['name', 'title', 'displayName']):
+                                labels = list(item.labels)
+                                if labels:
+                                    item_props['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                                else:
+                                    item_props['name'] = f"Node_{len(nodes) + 1}"
+                            
+                            nodes[node_id] = {
+                                'id': node_id,
+                                'labels': list(item.labels),
+                                'properties': item_props,
+                                'degree': 0
+                            }
+                    elif hasattr(item, 'type'):  # Relationship in list
+                        rel = {
+                            'id': str(item.element_id),
+                            'type': item.type,
+                            'startNode': str(item.start_node.element_id),
+                            'endNode': str(item.end_node.element_id),
+                            'properties': dict(item)
+                        }
+                        relationships.append(rel)
+    
+    # Calculate node degrees for Neo4j Browser-like sizing
+    node_degrees = {}
+    visible_node_ids = set(nodes.keys())
+    
+    for rel in relationships:
+        start_id = rel['startNode']
+        end_id = rel['endNode']
+        if start_id in visible_node_ids and end_id in visible_node_ids:
+            node_degrees[start_id] = node_degrees.get(start_id, 0) + 1
+            node_degrees[end_id] = node_degrees.get(end_id, 0) + 1
+    
+    # Update node degrees
+    for node_id, node_data in nodes.items():
+        node_data['degree'] = node_degrees.get(node_id, 0)
+    
+    # Filter relationships to only include those between visible nodes
+    filtered_relationships = [
+        rel for rel in relationships 
+        if rel['startNode'] in visible_node_ids and rel['endNode'] in visible_node_ids
+    ]
+    
+    # Enhanced statistics
+    node_type_stats = {}
+    relationship_type_stats = {}
+    
+    for node in nodes.values():
+        labels = node.get('labels', ['Unknown'])
+        primary_label = labels[0] if labels else 'Unknown'
+        node_type_stats[primary_label] = node_type_stats.get(primary_label, 0) + 1
+    
+    for rel in filtered_relationships:
+        rel_type = rel.get('type', 'Unknown')
+        relationship_type_stats[rel_type] = relationship_type_stats.get(rel_type, 0) + 1
+    
+    logger.info(f"✅ Graph extraction complete: {len(nodes)} nodes, {len(filtered_relationships)} relationships")
+    
     return {
-        "status": "healthy",
-        "service": "Neo4j Graph Explorer API",
-        "version": "2.0.0",
-        "features": ["split_screen_ui", "5000_node_support", "interactive_visualization"],
-        "timestamp": datetime.now().isoformat(),
-        "agent_ready": agent is not None
+        'nodes': list(nodes.values()),
+        'relationships': filtered_relationships,
+        'total_nodes': len(nodes),
+        'total_relationships': len(filtered_relationships),
+        'limited': len(nodes) >= effective_limit if effective_limit != float('inf') else False,
+        'node_type_stats': node_type_stats,
+        'relationship_type_stats': relationship_type_stats,
+        'max_degree': max(node_degrees.values()) if node_degrees else 0,
+        'avg_degree': sum(node_degrees.values()) / len(node_degrees) if node_degrees else 0
     }
 
-@app.get("/health")
-async def detailed_health():
-    """Comprehensive health check with all service dependencies"""
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {},
-        "configuration": {
-            "max_node_limit": 5000,
-            "default_node_limit": 5000,
-            "interface_type": "split_screen"
-        }
+def format_change_summary(counters, query: str, execution_time: float):
+    """Format a detailed summary of what changed in Neo4j"""
+    timestamp = datetime.now().isoformat()
+    
+    changes = []
+    if counters.nodes_created > 0:
+        changes.append(f"✅ {counters.nodes_created} node(s) created")
+    if counters.nodes_deleted > 0:
+        changes.append(f"🗑️ {counters.nodes_deleted} node(s) deleted")
+    if counters.relationships_created > 0:
+        changes.append(f"🔗 {counters.relationships_created} relationship(s) created")
+    if counters.relationships_deleted > 0:
+        changes.append(f"💥 {counters.relationships_deleted} relationship(s) deleted")
+    if counters.properties_set > 0:
+        changes.append(f"📝 {counters.properties_set} property(ies) set")
+    if counters.labels_added > 0:
+        changes.append(f"🏷️ {counters.labels_added} label(s) added")
+    if counters.labels_removed > 0:
+        changes.append(f"🏷️ {counters.labels_removed} label(s) removed")
+    
+    if not changes:
+        changes.append("ℹ️ No changes detected")
+    
+    return {
+        "timestamp": timestamp,
+        "execution_time_ms": round(execution_time * 1000, 2),
+        "query": query,
+        "changes": changes,
+        "summary": f"🕐 {timestamp} | ⚡ {round(execution_time * 1000, 2)}ms | {' | '.join(changes)}"
     }
-    
-    # Check agent status
-    health_status["services"]["langgraph_agent"] = {
-        "status": "up" if agent is not None else "down",
-        "ready": agent is not None,
-        "features": ["visualization_optimization", "node_limiting", "split_screen_support"]
-    }
-    
-    # Check MCP server connectivity
-    try:
-        import requests
-        mcp_response = requests.get("http://localhost:8000/", timeout=5)
-        health_status["services"]["mcp_server"] = {
-            "status": "up" if mcp_response.status_code == 200 else "down",
-            "url": "http://localhost:8000",
-            "features": ["graph_extraction", "node_limiting", "optimization"]
-        }
-    except Exception as e:
-        health_status["services"]["mcp_server"] = {
-            "status": "down",
-            "error": str(e),
-            "url": "http://localhost:8000"
-        }
-    
-    # Check Neo4j connectivity via MCP server
-    try:
-        import requests
-        neo4j_response = requests.post(
-            "http://localhost:8000/get_neo4j_schema", 
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
-        health_status["services"]["neo4j"] = {
-            "status": "up" if neo4j_response.status_code == 200 else "down",
-            "features": ["graph_database", "cypher_queries", "apoc_procedures"]
-        }
-    except Exception as e:
-        health_status["services"]["neo4j"] = {
-            "status": "down",
-            "error": str(e)
-        }
-    
-    # Check graph statistics
-    try:
-        import requests
-        stats_response = requests.get("http://localhost:8000/graph_stats", timeout=10)
-        if stats_response.status_code == 200:
-            stats_data = stats_response.json()
-            health_status["graph_statistics"] = stats_data.get("stats", {})
-    except Exception:
-        health_status["graph_statistics"] = {"error": "Could not retrieve graph statistics"}
-    
-    # Determine overall status
-    all_up = all(
-        service.get("status") == "up" 
-        for service in health_status["services"].values()
-    )
-    health_status["status"] = "healthy" if all_up else "degraded"
-    
-    return health_status
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+# Database helper functions
+async def _read(tx: AsyncTransaction, query: str, params: dict):
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return json.dumps([r.data() for r in records.records], default=str)
+
+async def _read_for_viz(tx: AsyncTransaction, query: str, params: dict):
+    """Read query specifically for graph visualization"""
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return records.records  # Return raw records for graph extraction
+
+async def _write(tx: AsyncTransaction, query: str, params: dict):
+    return await tx.run(query, params)
+
+# =============================================================================
+# MCP TOOLS - Using @mcp.tool decorators
+# =============================================================================
+
+@mcp.tool()
+async def read_neo4j_cypher(
+    ctx: Context,
+    query: str,
+    params: Optional[Dict[str, Any]] = None,
+    node_limit: Optional[int] = 5000
+) -> Dict[str, Any]:
     """
-    Enhanced chat endpoint optimized for split-screen interface
+    Execute a read-only Cypher query against Neo4j database.
     
-    Processes questions and returns responses with graph visualization data
-    optimized for the split-screen UI layout.
+    Args:
+        query: Cypher query string (MATCH, RETURN, WHERE, etc.)
+        params: Optional query parameters as key-value pairs
+        node_limit: Maximum number of nodes to return for visualization (0 for unlimited)
+    
+    Returns:
+        Dictionary with query results, metadata, and optional graph visualization data
     """
-    if agent is None:
-        logger.error("Agent not initialized")
-        raise HTTPException(status_code=500, detail="Agent not initialized")
-    
-    # Generate session_id if not provided
-    session_id = request.session_id or str(uuid.uuid4())
-    node_limit = min(request.node_limit, 10000)  # Cap at 10k for performance
-    
-    logger.info(f"🤔 Processing chat request - Session: {session_id[:8]}...")
-    logger.info(f"📊 Question: {request.question[:100]} (Node limit: {node_limit})")
-    
-    start_time = datetime.now()
-    
     try:
-        # Create agent state
-        state = AgentState(
-            question=request.question,
-            session_id=session_id,
-            node_limit=node_limit
-        )
+        start_time = datetime.now()
         
-        # Run the agent
-        logger.info(f"🔄 Running LangGraph agent with visualization optimization...")
-        result = await agent.ainvoke(state)
+        # Support unlimited display
+        if node_limit == 0 or node_limit == -1:
+            node_limit = None
+        
+        params = params or {}
+        
+        logger.info(f"🔍 Executing read query with limit: {'unlimited' if node_limit is None else node_limit}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, query, params)
         
         end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds() * 1000
+        execution_time = (end_time - start_time).total_seconds()
         
-        logger.info(f"✅ Agent completed - Tool: {result.get('tool')}")
-        logger.info(f"📈 Execution time: {execution_time:.2f}ms")
+        result_data = json.loads(result)
+        
+        # Extract graph data for visualization
+        graph_data = None
+        try:
+            async with driver.session(database=NEO4J_DATABASE) as session:
+                viz_result = await session.execute_read(_read_for_viz, query, params)
+            graph_data = extract_graph_data_unlimited(viz_result, node_limit)
+        except Exception as e:
+            logger.warning(f"Could not extract graph data for visualization: {e}")
         
         # Check if we have graph data
-        has_graph_data = result.get('graph_data') and result.get('graph_data', {}).get('nodes')
-        if has_graph_data:
-            node_count = len(result['graph_data']['nodes'])
-            rel_count = len(result['graph_data'].get('relationships', []))
-            logger.info(f"🕸️ Graph data: {node_count} nodes, {rel_count} relationships")
+        has_graph_data = graph_data and (graph_data.get('nodes') or graph_data.get('relationships'))
         
-        # Prepare enhanced response
-        response = ChatResponse(
-            trace=result.get("trace", ""),
-            tool=result.get("tool", ""),
-            query=result.get("query", ""),
-            answer=result.get("answer", ""),
-            graph_data=result.get("graph_data") if result.get("graph_data") else None,
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            node_limit=node_limit,
-            execution_time_ms=execution_time,
-            success=True
-        )
+        return {
+            "data": result_data,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2),
+                "query": query,
+                "record_count": len(result_data),
+                "has_graph_data": has_graph_data,
+                "node_limit": "unlimited" if node_limit is None else node_limit,
+                "unlimited_mode": node_limit is None
+            },
+            "graph_data": graph_data if has_graph_data else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in read_neo4j_cypher: {e}")
+        raise Exception(f"Neo4j read query failed: {str(e)}")
+
+@mcp.tool()
+async def write_neo4j_cypher(
+    ctx: Context,
+    query: str,
+    params: Optional[Dict[str, Any]] = None,
+    node_limit: Optional[int] = 5000
+) -> Dict[str, Any]:
+    """
+    Execute a write Cypher query against Neo4j database.
+    
+    Args:
+        query: Cypher query string (CREATE, MERGE, SET, DELETE, etc.)
+        params: Optional query parameters as key-value pairs
+        node_limit: Maximum number of nodes to return for visualization
+    
+    Returns:
+        Dictionary with change information and optional graph visualization data
+    """
+    try:
+        start_time = datetime.now()
+        params = params or {}
+        
+        logger.info(f"✏️ Executing write query: {query[:100]}...")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_write(_write, query, params)
+        
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        # Format detailed change information
+        change_info = format_change_summary(result._summary.counters, query, execution_time)
+        
+        # Log the change
+        logger.info(f"Neo4j Write Operation: {change_info['summary']}")
+        
+        response = {
+            "result": "SUCCESS",
+            "change_info": change_info
+        }
+        
+        # If the write operation returns data (like MERGE or CREATE with RETURN), 
+        # try to get visualization data
+        graph_data = None
+        try:
+            if "RETURN" in query.upper():
+                async with driver.session(database=NEO4J_DATABASE) as session:
+                    viz_result = await session.execute_read(_read_for_viz, query, params)
+                graph_data = extract_graph_data_unlimited(viz_result, node_limit)
+                response["graph_data"] = graph_data
+        except Exception:
+            response["graph_data"] = None
         
         return response
         
     except Exception as e:
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds() * 1000
-        
-        logger.error(f"❌ Chat request failed: {str(e)}")
-        
-        # Return enhanced error response
-        error_response = ChatResponse(
-            trace=f"Error occurred: {str(e)}",
-            tool="",
-            query="",
-            answer=f"❌ I encountered an error processing your request: {str(e)}",
-            graph_data=None,
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            node_limit=node_limit,
-            execution_time_ms=execution_time,
-            success=False,
-            error=str(e)
-        )
-        
-        return error_response
+        logger.error(f"Error in write_neo4j_cypher: {e}")
+        raise Exception(f"Neo4j write query failed: {str(e)}")
 
-@app.post("/agent/invoke")
-async def invoke_agent(request: dict):
+@mcp.tool()
+async def get_neo4j_schema(ctx: Context) -> Dict[str, Any]:
     """
-    Direct agent invocation endpoint with node limit support
+    Get the Neo4j database schema including node labels, relationship types, and properties.
+    
+    Returns:
+        Dictionary with complete database schema information
     """
-    if agent is None:
-        raise HTTPException(status_code=500, detail="Agent not initialized")
+    get_schema_query = "CALL apoc.meta.schema();"
+    try:
+        start_time = datetime.now()
+        
+        logger.info("📋 Retrieving Neo4j database schema...")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, get_schema_query, {})
+        
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        schema = json.loads(result)[0].get('value')
+        
+        return {
+            "schema": schema,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2)
+            },
+            "graph_data": None
+        }
+    except Exception as e:
+        logger.error(f"Error in get_neo4j_schema: {e}")
+        raise Exception(f"Neo4j schema query failed: {str(e)}")
+
+@mcp.tool()
+async def get_graph_stats(ctx: Context) -> Dict[str, Any]:
+    """
+    Get comprehensive graph statistics including node counts, relationship counts, and types.
+    
+    Returns:
+        Dictionary with detailed graph statistics
+    """
+    stats_queries = [
+        ("total_nodes", "MATCH (n) RETURN count(n) as count"),
+        ("total_relationships", "MATCH ()-[r]->() RETURN count(r) as count"),
+        ("node_labels", "CALL db.labels() YIELD label RETURN collect(label) as labels"),
+        ("relationship_types", "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types"),
+        ("node_label_counts", "MATCH (n) RETURN labels(n)[0] as label, count(*) as count ORDER BY count DESC"),
+        ("relationship_type_counts", "MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC"),
+        ("connected_components", "MATCH (n) WHERE (n)--() RETURN count(DISTINCT n) as connected_nodes"),
+        ("isolated_nodes", "MATCH (n) WHERE NOT (n)--() RETURN count(n) as isolated"),
+    ]
+    
+    stats = {}
     
     try:
-        # Ensure node_limit is set
-        if 'node_limit' not in request:
-            request['node_limit'] = 5000
-            
-        # Create AgentState from request
-        state = AgentState(**request)
-        result = await agent.ainvoke(state)
-        return result
+        logger.info("📊 Collecting comprehensive graph statistics...")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            for stat_name, query in stats_queries:
+                try:
+                    result = await session.execute_read(_read, query, {})
+                    data = json.loads(result)
+                    stats[stat_name] = data
+                except Exception as e:
+                    logger.warning(f"Could not get {stat_name}: {e}")
+                    stats[stat_name] = []
+        
+        return {
+            "stats": stats,
+            "timestamp": datetime.now().isoformat(),
+            "unlimited_support": True
+        }
     except Exception as e:
-        logger.error(f"Agent invocation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting graph stats: {e}")
+        raise Exception(f"Graph statistics query failed: {str(e)}")
 
-@app.get("/agent/status")
-async def agent_status():
-    """Get the current status of the LangGraph agent with configuration info"""
+@mcp.tool()
+async def get_sample_graph(
+    ctx: Context,
+    node_limit: Optional[int] = 200
+) -> Dict[str, Any]:
+    """
+    Get a sample of the graph for visualization with configurable limit.
+    
+    Args:
+        node_limit: Maximum number of nodes to include (0 for unlimited)
+    
+    Returns:
+        Dictionary with sample graph data for visualization
+    """
+    # Support unlimited sampling
+    if node_limit == 0 or node_limit == -1:
+        node_limit = None
+    
+    if node_limit is None:
+        query = """
+        MATCH (n) 
+        OPTIONAL MATCH (n)-[r]-(m) 
+        RETURN n, r, m
+        """
+    else:
+        query = f"""
+        MATCH (n)-[r]->(m)
+        RETURN n, r, m
+        LIMIT {min(node_limit, 10000)}
+        """
+    
+    try:
+        logger.info(f"🎲 Getting sample graph with limit: {'unlimited' if node_limit is None else node_limit}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read_for_viz, query, {})
+        
+        graph_data = extract_graph_data_unlimited(result, node_limit)
+        
+        return {
+            "graph_data": graph_data,
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "node_limit": "unlimited" if node_limit is None else node_limit
+        }
+    except Exception as e:
+        logger.error(f"Error getting sample graph: {e}")
+        raise Exception(f"Sample graph query failed: {str(e)}")
+
+# =============================================================================
+# FASTAPI HTTP ENDPOINTS - For REST API access
+# =============================================================================
+
+@app.get("/")
+async def health_check():
+    """Health check endpoint"""
     return {
-        "agent_initialized": agent is not None,
-        "agent_type": "LangGraph Neo4j Graph Explorer Agent",
-        "interface_type": "split_screen",
-        "max_node_limit": 10000,
-        "default_node_limit": 5000,
-        "features": [
-            "interactive_visualization",
-            "node_limiting",
-            "query_optimization", 
-            "split_screen_layout",
-            "real_time_updates"
-        ],
+        "status": "healthy",
+        "service": "Neo4j Graph Explorer MCP Server",
+        "version": "3.0.0",
+        "features": ["fastmcp_tools", "unlimited_display", "enhanced_performance"],
         "timestamp": datetime.now().isoformat()
     }
 
-@app.get("/graph/sample/{node_limit}")
-async def get_sample_graph(node_limit: int = 5000):
-    """Get a sample graph with specified node limit"""
+@app.post("/read_neo4j_cypher", response_model=CypherResponse)
+async def http_read_neo4j_cypher(request: CypherRequest):
+    """HTTP endpoint for read queries"""
     try:
-        import requests
-        capped_limit = min(node_limit, 5000)
-        
-        response = requests.get(
-            f"http://localhost:8000/sample_graph?node_limit={capped_limit}",
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
+        from fastmcp import Context
+        ctx = Context()
+        result = await read_neo4j_cypher(ctx, request.query, request.params, request.node_limit)
+        return result
     except Exception as e:
-        logger.error(f"Error getting sample graph: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/graph/stats")
-async def get_graph_statistics():
-    """Get comprehensive graph statistics for the split-screen interface"""
+@app.post("/write_neo4j_cypher")
+async def http_write_neo4j_cypher(request: CypherRequest):
+    """HTTP endpoint for write queries"""
     try:
-        import requests
-        response = requests.get("http://localhost:8000/graph_stats", timeout=15)
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
+        from fastmcp import Context
+        ctx = Context()
+        result = await write_neo4j_cypher(ctx, request.query, request.params, request.node_limit)
+        return result
     except Exception as e:
-        logger.error(f"Error getting graph statistics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/query/optimize")
-async def optimize_query(query: str, node_limit: int = 5000):
-    """Optimize a Cypher query for better visualization performance"""
+@app.post("/get_neo4j_schema")
+async def http_get_neo4j_schema():
+    """HTTP endpoint for schema queries"""
     try:
-        import requests
-        response = requests.get(
-            f"http://localhost:8000/optimize_query/{node_limit}?query={query}",
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-            
+        from fastmcp import Context
+        ctx = Context()
+        result = await get_neo4j_schema(ctx)
+        return result
     except Exception as e:
-        logger.error(f"Error optimizing query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Enhanced error handlers
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with enhanced error info"""
-    logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "timestamp": datetime.now().isoformat(),
-            "service": "Neo4j Graph Explorer API",
-            "request_path": str(request.url.path)
-        }
-    )
+@app.get("/graph_stats")
+async def http_get_graph_stats():
+    """HTTP endpoint for graph statistics"""
+    try:
+        from fastmcp import Context
+        ctx = Context()
+        result = await get_graph_stats(ctx)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle general exceptions with detailed logging"""
-    logger.error(f"Unexpected error: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "detail": str(exc),
-            "timestamp": datetime.now().isoformat(),
-            "service": "Neo4j Graph Explorer API",
-            "request_path": str(request.url.path)
-        }
-    )
+@app.get("/sample_graph")
+async def http_get_sample_graph(node_limit: int = 200):
+    """HTTP endpoint for sample graph"""
+    try:
+        from fastmcp import Context
+        ctx = Context()
+        result = await get_sample_graph(ctx, node_limit)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Development server configuration
+@app.get("/mcp/tools")
+async def list_mcp_tools():
+    """List all available MCP tools"""
+    return {
+        "tools": [
+            {
+                "name": "read_neo4j_cypher",
+                "description": "Execute read-only Cypher queries",
+                "parameters": ["query", "params", "node_limit"]
+            },
+            {
+                "name": "write_neo4j_cypher", 
+                "description": "Execute write Cypher queries",
+                "parameters": ["query", "params", "node_limit"]
+            },
+            {
+                "name": "get_neo4j_schema",
+                "description": "Get database schema information",
+                "parameters": []
+            },
+            {
+                "name": "get_graph_stats",
+                "description": "Get comprehensive graph statistics", 
+                "parameters": []
+            },
+            {
+                "name": "get_sample_graph",
+                "description": "Get sample graph for visualization",
+                "parameters": ["node_limit"]
+            }
+        ],
+        "features": ["unlimited_display", "enhanced_performance", "mcp_protocol"],
+        "timestamp": datetime.now().isoformat()
+    }
+
+# Combine FastMCP with FastAPI
+app.mount("/mcp", mcp.create_app())
+
+# Run both servers
 if __name__ == "__main__":
-    logger.info("🚀 Starting Neo4j Graph Explorer API in development mode...")
-    logger.info("🎨 Optimized for split-screen interface with enhanced visualization")
+    import uvicorn
+    
+    logger.info("🚀 Starting Neo4j Graph Explorer MCP Server with FastMCP + FastAPI...")
+    logger.info("🛠️ MCP Tools: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema, get_graph_stats, get_sample_graph")
+    logger.info("🌐 HTTP API: Available at /docs for OpenAPI documentation")
+    logger.info("🔗 MCP Protocol: Available at /mcp for MCP client connections")
     
     uvicorn.run(
-        "app:app",
+        "mcpserver_fastmcp:app",
         host="0.0.0.0",
-        port=8020,
+        port=8000,
         reload=True,
-        log_level="info",
-        reload_includes=["*.py"],
-        reload_excludes=["test_*", "__pycache__"]
+        log_level="info"
     )
-
-# Production server command:
-# uvicorn app:app --host 0.0.0.0 --port 8020 --workers 1
