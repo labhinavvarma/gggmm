@@ -1,323 +1,1093 @@
 """
-Debug Streamlit UI with Detailed Error Reporting
-This version shows exactly what's happening with the connection
+Fixed Neo4j Streamlit UI with Stable NVL Graph Visualization
+This version properly connects to the backend and shows stable relationship lines
 """
 
 import streamlit as st
 import requests
-import json
+import uuid
 import time
+import json
 from datetime import datetime
-import traceback
+from typing import Dict, Any, Optional
+import streamlit.components.v1 as components
 
 # ============================================
-# CONFIGURATION
+# CONFIGURATION - FIXED PORTS AND ENDPOINTS
 # ============================================
 
-SERVER_PORT = 8000
-BASE_URL = f"http://localhost:{SERVER_PORT}"
+# Backend server ports (make sure these match your running servers)
+MCP_SERVER_PORT = 8000  # MCP server with Neo4j tools
+FASTAPI_APP_PORT = 8081  # FastAPI app with LangGraph agent
+
+# Choose which backend to use (MCP server has more features)
+USE_MCP_SERVER = True  # Set to False to use FastAPI app instead
+
+if USE_MCP_SERVER:
+    BACKEND_PORT = MCP_SERVER_PORT
+    CHAT_ENDPOINT = "/chat"
+    HEALTH_ENDPOINT = "/health"
+    GRAPH_ENDPOINT = "/graph"
+    STATS_ENDPOINT = "/stats"
+else:
+    BACKEND_PORT = FASTAPI_APP_PORT
+    CHAT_ENDPOINT = "/chat"
+    HEALTH_ENDPOINT = "/health"
+    GRAPH_ENDPOINT = "/graph"  # May not exist in FastAPI app
+    STATS_ENDPOINT = "/stats"  # May not exist in FastAPI app
+
+BASE_URL = f"http://localhost:{BACKEND_PORT}"
+
+print(f"🔧 Streamlit UI Configuration:")
+print(f"   Backend: {'MCP Server' if USE_MCP_SERVER else 'FastAPI App'}")
+print(f"   Port: {BACKEND_PORT}")
+print(f"   Base URL: {BASE_URL}")
+
+# ============================================
+# PAGE CONFIGURATION
+# ============================================
 
 st.set_page_config(
-    page_title="Debug Neo4j Chatbot",
-    page_icon="🔍",
-    layout="wide"
+    page_title="Neo4j Chatbot with Stable Graph",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# Enhanced Custom CSS
+st.markdown("""
+<style>
+    .main { 
+        padding-top: 1rem; 
+    }
+    
+    .header-container {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .status-healthy {
+        background: linear-gradient(90deg, #00d4aa 0%, #00b894 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        margin: 0.2rem;
+        display: inline-block;
+        font-weight: bold;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .status-error {
+        background: linear-gradient(90deg, #ff6b6b 0%, #ee5a52 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        margin: 0.2rem;
+        display: inline-block;
+        font-weight: bold;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .tool-badge {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+        display: inline-block;
+        margin: 0.2rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .query-display {
+        background: #1e1e1e;
+        color: #f8f8f2;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        font-family: 'Courier New', monospace;
+        border-left: 4px solid #50fa7b;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 0.5rem 0;
+    }
+    
+    .result-display {
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #00d4aa;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 0.5rem 0;
+    }
+    
+    .user-message {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .assistant-message {
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .connection-indicator {
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        font-weight: bold;
+        margin: 0.5rem 0;
+    }
+    
+    .connected {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    
+    .disconnected {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    
+    .metric-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #667eea;
+        margin: 0.5rem 0;
+    }
+    
+    .prompt-section {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+        border-left: 4px solid #28a745;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ============================================
-# DEBUG FUNCTIONS
+# SESSION STATE INITIALIZATION
 # ============================================
 
-def test_connection_detailed():
-    """Test connection with detailed debugging"""
-    debug_info = []
-    
-    debug_info.append(f"🔍 Testing connection to: {BASE_URL}")
-    debug_info.append(f"⏰ Test time: {datetime.now().strftime('%H:%M:%S')}")
-    
-    # Test basic connectivity
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+if "graph_data" not in st.session_state:
+    st.session_state.graph_data = None
+if "database_stats" not in st.session_state:
+    st.session_state.database_stats = {}
+if "connection_status" not in st.session_state:
+    st.session_state.connection_status = "checking"
+if "last_update_time" not in st.session_state:
+    st.session_state.last_update_time = None
+
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+
+@st.cache_data(ttl=10)
+def check_backend_health():
+    """Check health of the backend server with caching"""
     try:
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        result = sock.connect_ex(('localhost', SERVER_PORT))
-        sock.close()
-        
-        if result == 0:
-            debug_info.append(f"✅ Port {SERVER_PORT} is open and accepting connections")
+        response = requests.get(f"{BASE_URL}{HEALTH_ENDPOINT}", timeout=5)
+        if response.status_code == 200:
+            return {"status": "healthy", "data": response.json()}
         else:
-            debug_info.append(f"❌ Port {SERVER_PORT} is not accessible (error code: {result})")
-            return False, debug_info
-            
+            return {"status": "error", "error": f"HTTP {response.status_code}"}
+    except requests.exceptions.ConnectionError:
+        return {"status": "disconnected", "error": f"Server not running on port {BACKEND_PORT}"}
     except Exception as e:
-        debug_info.append(f"❌ Socket test failed: {e}")
-        return False, debug_info
-    
-    # Test each endpoint
-    endpoints = [
-        ("/", "GET", "Root"),
-        ("/health", "GET", "Health"),
-        ("/stats", "GET", "Stats"),
-        ("/graph?limit=5", "GET", "Graph")
-    ]
-    
-    for endpoint, method, name in endpoints:
-        try:
-            url = f"{BASE_URL}{endpoint}"
-            debug_info.append(f"\n🌐 Testing {name}: {url}")
-            
-            response = requests.get(url, timeout=10)
-            debug_info.append(f"   Status Code: {response.status_code}")
-            debug_info.append(f"   Content-Type: {response.headers.get('content-type', 'unknown')}")
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    debug_info.append(f"   ✅ JSON Response: {len(str(data))} characters")
-                    if isinstance(data, dict):
-                        for key in list(data.keys())[:5]:  # Show first 5 keys
-                            debug_info.append(f"      - {key}: {type(data[key]).__name__}")
-                except:
-                    debug_info.append(f"   ⚠️  Non-JSON Response: {response.text[:100]}...")
-            else:
-                debug_info.append(f"   ❌ Error Response: {response.text[:200]}...")
-                
-        except requests.exceptions.ConnectionError as e:
-            debug_info.append(f"   ❌ Connection Error: {e}")
-        except requests.exceptions.Timeout as e:
-            debug_info.append(f"   ❌ Timeout Error: {e}")
-        except Exception as e:
-            debug_info.append(f"   ❌ Unexpected Error: {e}")
-    
-    return True, debug_info
+        return {"status": "error", "error": str(e)}
 
-def test_chat_endpoint():
-    """Test the chat endpoint specifically"""
-    debug_info = []
-    
+def get_database_stats():
+    """Get current database statistics"""
     try:
-        chat_data = {
-            "question": "How many nodes are in the graph?",
-            "session_id": "debug_test"
+        response = requests.get(f"{BASE_URL}{STATS_ENDPOINT}", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"HTTP {response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_graph_data(limit: int = 50):
+    """Get graph data for visualization"""
+    try:
+        response = requests.get(f"{BASE_URL}{GRAPH_ENDPOINT}?limit={limit}&include_relationships=true", timeout=15)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"HTTP {response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def send_chat_message(question: str):
+    """Send chat message to backend"""
+    try:
+        payload = {
+            "question": question,
+            "session_id": st.session_state.session_id
         }
         
-        debug_info.append("🗣️ Testing chat endpoint...")
-        debug_info.append(f"   Request: {json.dumps(chat_data, indent=2)}")
+        start_time = time.time()
         
         response = requests.post(
-            f"{BASE_URL}/chat",
-            json=chat_data,
-            timeout=30,
-            headers={"Content-Type": "application/json"}
+            f"{BASE_URL}{CHAT_ENDPOINT}",
+            json=payload,
+            timeout=30
         )
         
-        debug_info.append(f"   Status Code: {response.status_code}")
-        debug_info.append(f"   Response Headers: {dict(response.headers)}")
+        response_time = time.time() - start_time
         
         if response.status_code == 200:
-            try:
-                result = response.json()
-                debug_info.append("   ✅ Chat Response:")
-                debug_info.append(f"      Success: {result.get('success', 'unknown')}")
-                debug_info.append(f"      Tool: {result.get('tool', 'none')}")
-                debug_info.append(f"      Query: {result.get('query', 'none')}")
-                debug_info.append(f"      Answer: {result.get('answer', 'none')[:100]}...")
-                return True, result, debug_info
-            except Exception as e:
-                debug_info.append(f"   ❌ JSON Parse Error: {e}")
-                debug_info.append(f"   Raw Response: {response.text[:500]}...")
+            result = response.json()
+            result["response_time"] = response_time
+            return result
         else:
-            debug_info.append(f"   ❌ HTTP Error: {response.text}")
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}: {response.text}",
+                "answer": f"❌ Server error: {response.status_code}",
+                "response_time": response_time
+            }
             
+    except requests.exceptions.ConnectionError:
+        return {
+            "success": False,
+            "error": "Cannot connect to backend server",
+            "answer": f"❌ Backend server not running on port {BACKEND_PORT}. Please start the server.",
+            "response_time": 0
+        }
     except Exception as e:
-        debug_info.append(f"❌ Chat Test Error: {e}")
-        debug_info.append(f"   Traceback: {traceback.format_exc()}")
+        return {
+            "success": False,
+            "error": str(e),
+            "answer": f"❌ Request failed: {str(e)}",
+            "response_time": 0
+        }
+
+def create_stable_nvl_visualization(graph_data, height=600):
+    """Create stable Neo4j Visualization Library component with proper relationships"""
     
-    return False, None, debug_info
+    nodes = graph_data.get("nodes", [])
+    relationships = graph_data.get("relationships", [])
+    
+    # Create unique key for forcing updates
+    update_key = int(time.time())
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Stable Neo4j Graph</title>
+        <script src="https://unpkg.com/d3@7"></script>
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: #f8f9fa;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 1rem;
+                text-align: center;
+                font-weight: bold;
+            }}
+            
+            .controls {{
+                background: white;
+                padding: 1rem;
+                border-bottom: 1px solid #eee;
+                display: flex;
+                gap: 1rem;
+                align-items: center;
+                flex-wrap: wrap;
+                justify-content: center;
+            }}
+            
+            .btn {{
+                background: #667eea;
+                color: white;
+                border: none;
+                padding: 0.5rem 1rem;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                transition: background 0.2s;
+            }}
+            
+            .btn:hover {{
+                background: #5a6fd8;
+            }}
+            
+            .stats {{
+                display: flex;
+                gap: 1rem;
+                align-items: center;
+                font-size: 14px;
+            }}
+            
+            .stat {{
+                background: #f8f9fa;
+                padding: 0.5rem;
+                border-radius: 4px;
+                border-left: 3px solid #667eea;
+                font-weight: bold;
+            }}
+            
+            #graph-container {{
+                height: {height - 120}px;
+                background: white;
+                border-top: 1px solid #eee;
+                position: relative;
+            }}
+            
+            #graph-svg {{
+                width: 100%;
+                height: 100%;
+            }}
+            
+            .node {{
+                cursor: pointer;
+                stroke: #fff;
+                stroke-width: 2px;
+            }}
+            
+            .link {{
+                stroke: #999;
+                stroke-opacity: 0.8;
+                stroke-width: 2px;
+                fill: none;
+            }}
+            
+            .node-label {{
+                font-size: 12px;
+                font-family: Arial, sans-serif;
+                fill: #333;
+                text-anchor: middle;
+                pointer-events: none;
+                user-select: none;
+            }}
+            
+            .link-label {{
+                font-size: 10px;
+                font-family: Arial, sans-serif;
+                fill: #666;
+                text-anchor: middle;
+                pointer-events: none;
+                user-select: none;
+            }}
+            
+            .tooltip {{
+                position: absolute;
+                padding: 8px;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                border-radius: 4px;
+                font-size: 12px;
+                pointer-events: none;
+                z-index: 1000;
+                opacity: 0;
+                transition: opacity 0.2s;
+            }}
+            
+            .loading {{
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100%;
+                font-size: 18px;
+                color: #666;
+                flex-direction: column;
+                gap: 1rem;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            🧠 Stable Neo4j Graph - D3.js Force Layout (Update #{update_key})
+        </div>
+        
+        <div class="controls">
+            <div class="stats">
+                <div class="stat">Nodes: {len(nodes)}</div>
+                <div class="stat">Relationships: {len(relationships)}</div>
+                <div class="stat">Updated: {datetime.now().strftime('%H:%M:%S')}</div>
+            </div>
+            <button class="btn" onclick="restartSimulation()">🔄 Restart</button>
+            <button class="btn" onclick="centerGraph()">🎯 Center</button>
+            <button class="btn" onclick="zoomToFit()">🔍 Fit</button>
+        </div>
+        
+        <div id="graph-container">
+            {('<div class="loading">📝 No data in Neo4j database.<br>Create some nodes to see the graph!</div>' if len(nodes) == 0 else '<svg id="graph-svg"></svg>')}
+        </div>
+        
+        <div class="tooltip" id="tooltip"></div>
+
+        <script>
+            // Graph data from Neo4j
+            const graphData = {{
+                nodes: {json.dumps(nodes)},
+                relationships: {json.dumps(relationships)}
+            }};
+            
+            console.log('📊 Stable Graph Data:', {{
+                nodes: graphData.nodes.length,
+                relationships: graphData.relationships.length
+            }});
+            
+            let svg, g, simulation, link, node, nodeLabels, linkLabels;
+            
+            // Color scale for node labels
+            const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+            
+            function initializeGraph() {{
+                if (graphData.nodes.length === 0) return;
+                
+                const container = d3.select('#graph-container');
+                const containerRect = container.node().getBoundingClientRect();
+                const width = containerRect.width;
+                const height = containerRect.height;
+                
+                // Clear any existing SVG
+                d3.select('#graph-svg').selectAll('*').remove();
+                
+                svg = d3.select('#graph-svg')
+                    .attr('width', width)
+                    .attr('height', height);
+                
+                g = svg.append('g');
+                
+                // Add zoom behavior
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 4])
+                    .on('zoom', function(event) {{
+                        g.attr('transform', event.transform);
+                    }});
+                
+                svg.call(zoom);
+                
+                // Process data for D3
+                const nodes = graphData.nodes.map(d => ({{
+                    ...d,
+                    id: d.id.toString(),
+                    label: d.caption || d.properties?.name || `Node ${{d.id}}`,
+                    color: colorScale(d.labels?.[0] || 'default'),
+                    size: 20 + (Object.keys(d.properties || {{}}).length * 2)
+                }}));
+                
+                const links = graphData.relationships.map(d => ({{
+                    ...d,
+                    source: d.source.toString(),
+                    target: d.target.toString(),
+                    label: d.type || 'RELATES_TO'
+                }}));
+                
+                console.log('🔗 Processed data:', {{ nodes: nodes.length, links: links.length }});
+                
+                // Create force simulation
+                simulation = d3.forceSimulation(nodes)
+                    .force('link', d3.forceLink(links).id(d => d.id).distance(100).strength(0.8))
+                    .force('charge', d3.forceManyBody().strength(-300))
+                    .force('center', d3.forceCenter(width / 2, height / 2))
+                    .force('collision', d3.forceCollide().radius(d => d.size + 5));
+                
+                // Create links
+                link = g.append('g')
+                    .selectAll('.link')
+                    .data(links)
+                    .enter().append('line')
+                    .attr('class', 'link')
+                    .style('stroke-width', 2)
+                    .style('stroke', '#999')
+                    .style('opacity', 0.8);
+                
+                // Create link labels
+                linkLabels = g.append('g')
+                    .selectAll('.link-label')
+                    .data(links)
+                    .enter().append('text')
+                    .attr('class', 'link-label')
+                    .text(d => d.label)
+                    .style('font-size', '10px')
+                    .style('fill', '#666')
+                    .style('text-anchor', 'middle');
+                
+                // Create nodes
+                node = g.append('g')
+                    .selectAll('.node')
+                    .data(nodes)
+                    .enter().append('circle')
+                    .attr('class', 'node')
+                    .attr('r', d => d.size)
+                    .style('fill', d => d.color)
+                    .style('stroke', '#fff')
+                    .style('stroke-width', 2)
+                    .on('mouseover', handleMouseOver)
+                    .on('mouseout', handleMouseOut)
+                    .on('click', handleClick)
+                    .call(d3.drag()
+                        .on('start', dragstarted)
+                        .on('drag', dragged)
+                        .on('end', dragended));
+                
+                // Create node labels
+                nodeLabels = g.append('g')
+                    .selectAll('.node-label')
+                    .data(nodes)
+                    .enter().append('text')
+                    .attr('class', 'node-label')
+                    .text(d => d.label)
+                    .style('font-size', '12px')
+                    .style('fill', '#333')
+                    .style('text-anchor', 'middle')
+                    .style('pointer-events', 'none');
+                
+                // Update positions on simulation tick
+                simulation.on('tick', () => {{
+                    link
+                        .attr('x1', d => d.source.x)
+                        .attr('y1', d => d.source.y)
+                        .attr('x2', d => d.target.x)
+                        .attr('y2', d => d.target.y);
+                    
+                    linkLabels
+                        .attr('x', d => (d.source.x + d.target.x) / 2)
+                        .attr('y', d => (d.source.y + d.target.y) / 2);
+                    
+                    node
+                        .attr('cx', d => d.x)
+                        .attr('cy', d => d.y);
+                    
+                    nodeLabels
+                        .attr('x', d => d.x)
+                        .attr('y', d => d.y + 5);
+                }});
+                
+                console.log('✅ Stable graph initialized');
+            }}
+            
+            // Event handlers
+            function handleMouseOver(event, d) {{
+                const tooltip = d3.select('#tooltip');
+                
+                let content = `<strong>${{d.label}}</strong><br/>`;
+                content += `<strong>Labels:</strong> ${{d.labels?.join(', ') || 'None'}}<br/>`;
+                
+                if (d.properties && Object.keys(d.properties).length > 0) {{
+                    content += '<strong>Properties:</strong><br/>';
+                    Object.entries(d.properties).forEach(([key, value]) => {{
+                        content += `  ${{key}}: ${{value}}<br/>`;
+                    }});
+                }}
+                
+                tooltip
+                    .html(content)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px')
+                    .style('opacity', 1);
+                
+                d3.select(event.target)
+                    .style('stroke', '#ff6b6b')
+                    .style('stroke-width', 3);
+            }}
+            
+            function handleMouseOut(event, d) {{
+                d3.select('#tooltip').style('opacity', 0);
+                
+                d3.select(event.target)
+                    .style('stroke', '#fff')
+                    .style('stroke-width', 2);
+            }}
+            
+            function handleClick(event, d) {{
+                console.log('🖱️ Node clicked:', d);
+            }}
+            
+            // Drag behavior
+            function dragstarted(event, d) {{
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }}
+            
+            function dragged(event, d) {{
+                d.fx = event.x;
+                d.fy = event.y;
+            }}
+            
+            function dragended(event, d) {{
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }}
+            
+            // Control functions
+            function restartSimulation() {{
+                if (simulation) {{
+                    simulation.alpha(1).restart();
+                }}
+            }}
+            
+            function centerGraph() {{
+                if (svg) {{
+                    const containerRect = d3.select('#graph-container').node().getBoundingClientRect();
+                    const transform = d3.zoomIdentity.translate(containerRect.width / 2, containerRect.height / 2).scale(1);
+                    svg.transition().duration(750).call(
+                        svg.__zoom__.transform,
+                        transform
+                    );
+                }}
+            }}
+            
+            function zoomToFit() {{
+                if (g && svg) {{
+                    const bounds = g.node().getBBox();
+                    const containerRect = d3.select('#graph-container').node().getBoundingClientRect();
+                    const width = containerRect.width;
+                    const height = containerRect.height;
+                    
+                    const scale = Math.min(width / bounds.width, height / bounds.height) * 0.8;
+                    const translate = [width / 2 - scale * (bounds.x + bounds.width / 2), height / 2 - scale * (bounds.y + bounds.height / 2)];
+                    
+                    svg.transition().duration(750).call(
+                        svg.__zoom__.transform,
+                        d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+                    );
+                }}
+            }}
+            
+            // Initialize when page loads
+            document.addEventListener('DOMContentLoaded', function() {{
+                console.log('🚀 Initializing stable graph visualization...');
+                if (graphData.nodes.length > 0) {{
+                    setTimeout(initializeGraph, 100);
+                }}
+            }});
+            
+            // Handle resize
+            window.addEventListener('resize', function() {{
+                if (simulation) {{
+                    setTimeout(initializeGraph, 250);
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    return html_content
+
+def update_connection_status():
+    """Update connection status in session state"""
+    health = check_backend_health()
+    st.session_state.connection_status = health["status"]
+    return health
 
 # ============================================
-# UI LAYOUT
+# ENHANCED EXAMPLE PROMPTS
 # ============================================
 
-st.title("🔍 Debug Neo4j Chatbot Connection")
-st.markdown("**Detailed debugging for connection issues**")
-
-# Configuration display
-st.markdown("### 🔧 Configuration")
-col1, col2 = st.columns(2)
-with col1:
-    st.text(f"Server Port: {SERVER_PORT}")
-    st.text(f"Base URL: {BASE_URL}")
-with col2:
-    st.text(f"Current Time: {datetime.now().strftime('%H:%M:%S')}")
-
-# Debug section
-st.markdown("### 🧪 Connection Tests")
-
-if st.button("🔍 Run Detailed Connection Test"):
-    with st.spinner("Testing connection..."):
-        success, debug_info = test_connection_detailed()
+EXAMPLE_PROMPTS = {
+    "🔍 Basic Queries": [
+        "How many nodes are in the graph?",
+        "How many relationships are in the graph?",
+        "Show me the database schema",
+        "List all node labels",
+        "List all relationship types"
+    ],
     
-    # Display results
-    if success:
-        st.success("✅ Basic connectivity test passed!")
-    else:
-        st.error("❌ Connection test failed!")
+    "👥 Create People & Companies": [
+        "Create a Person named Alice with age 30 and email alice@email.com",
+        "Create a Person named Bob with age 25 and city 'New York'",
+        "Create a Company named TechCorp with industry 'Technology'",
+        "Create a Company named DataInc with employees 500",
+        "Create a Person named Charlie who works at Microsoft"
+    ],
     
-    # Show debug info
-    st.markdown("#### Debug Information:")
-    for info in debug_info:
-        st.text(info)
-
-# Chat test section  
-st.markdown("### 💬 Chat Endpoint Test")
-
-if st.button("🗣️ Test Chat Endpoint"):
-    with st.spinner("Testing chat..."):
-        success, result, debug_info = test_chat_endpoint()
+    "🔗 Create Relationships": [
+        "Connect Alice to TechCorp with relationship WORKS_FOR",
+        "Create a FRIENDS_WITH relationship between Alice and Bob",
+        "Connect Bob to DataInc as an EMPLOYEE",
+        "Create a MANAGES relationship from Charlie to Alice",
+        "Connect TechCorp and DataInc with PARTNERS_WITH relationship"
+    ],
     
-    if success:
-        st.success("✅ Chat endpoint working!")
-        st.json(result)
-    else:
-        st.error("❌ Chat endpoint failed!")
+    "📊 Data Analysis": [
+        "Show me all Person nodes with their properties",
+        "Find all Company nodes and their details",
+        "List all WORKS_FOR relationships",
+        "Show me nodes with the most connections",
+        "Find people who work at technology companies"
+    ],
     
-    # Show debug info
-    st.markdown("#### Chat Debug Information:")
-    for info in debug_info:
-        st.text(info)
-
-# Manual endpoint testing
-st.markdown("### 🌐 Manual Endpoint Testing")
-
-endpoint = st.selectbox(
-    "Select endpoint to test:",
-    ["/", "/health", "/stats", "/graph?limit=5", "/docs"]
-)
-
-if st.button(f"Test {endpoint}"):
-    try:
-        url = f"{BASE_URL}{endpoint}"
-        st.text(f"Testing: {url}")
-        
-        response = requests.get(url, timeout=10)
-        
-        st.text(f"Status Code: {response.status_code}")
-        st.text(f"Content-Type: {response.headers.get('content-type')}")
-        
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                st.success("✅ Success!")
-                st.json(data)
-            except:
-                st.text("Non-JSON response:")
-                st.text(response.text)
-        else:
-            st.error(f"Error {response.status_code}")
-            st.text(response.text)
-            
-    except Exception as e:
-        st.error(f"Request failed: {e}")
-
-# Server status check
-st.markdown("### 📊 Quick Status Check")
-
-try:
-    response = requests.get(f"{BASE_URL}/health", timeout=5)
-    if response.status_code == 200:
-        health_data = response.json()
-        st.success("✅ Server is responding!")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Server Status", health_data.get("status", "unknown"))
-            if "neo4j" in health_data:
-                st.metric("Neo4j Status", health_data["neo4j"].get("status", "unknown"))
-        with col2:
-            if "agent" in health_data:
-                st.metric("Agent Status", health_data["agent"].get("status", "unknown"))
-            if "server" in health_data:
-                st.metric("Server Port", health_data["server"].get("port", "unknown"))
-    else:
-        st.error(f"❌ Server error: {response.status_code}")
-        
-except requests.exceptions.ConnectionError:
-    st.error("❌ Cannot connect to server!")
-    st.warning("**Possible causes:**")
-    st.text("• MCP server not running")
-    st.text("• Wrong port number")
-    st.text("• Firewall blocking connection")
-    st.text("• Neo4j database not accessible")
+    "🏗️ Create Networks": [
+        "Create a social network with 3 connected friends: Alice, Bob, and Charlie",
+        "Create a company hierarchy: CEO -> Manager -> Employee",
+        "Build a project team with 4 people and their roles",
+        "Create a family tree with parents and children",
+        "Build a university structure with students and professors"
+    ],
     
-except Exception as e:
-    st.error(f"❌ Connection error: {e}")
+    "🧹 Cleanup Operations": [
+        "Delete all TestNode nodes",
+        "Remove all TEMPORARY relationships",
+        "Delete nodes with no relationships",
+        "Clean up duplicate Person nodes",
+        "Remove all nodes with label 'Demo'"
+    ],
+    
+    "🔄 Update Operations": [
+        "Update all Person nodes to add a 'status' property set to 'active'",
+        "Set the 'last_updated' property to current timestamp for all Company nodes",
+        "Update Alice's age to 31",
+        "Change all WORKS_FOR relationships to include a 'start_date' property",
+        "Add a 'department' property to all employees"
+    ],
+    
+    "🎯 Advanced Queries": [
+        "Find the shortest path between Alice and any Company",
+        "Show me all people who work at companies with more than 100 employees",
+        "Find nodes that are connected to both Person and Company nodes",
+        "List all people who have friends working at the same company",
+        "Show me the most connected person in the network"
+    ]
+}
 
-# Troubleshooting guide
-st.markdown("### 🛠️ Troubleshooting Guide")
+# ============================================
+# MAIN UI LAYOUT
+# ============================================
 
+# Header
 st.markdown("""
-**If you see connection errors:**
+<div class="header-container">
+    <h1>🧠 Neo4j Chatbot with Stable Graph Visualization</h1>
+    <p>Chat with your Neo4j database and see real-time updates with stable relationship lines</p>
+    <p><strong>✅ FIXED VERSION with Proper Backend Connection</strong></p>
+</div>
+""", unsafe_allow_html=True)
 
-1. **Check if MCP server is running:**
-   ```bash
-   python fixed_mcp_server.py
-   ```
+# Check connection status
+health_status = update_connection_status()
 
-2. **Verify Neo4j is running:**
-   ```bash
-   neo4j status
-   ```
+# Display connection status
+if health_status["status"] == "healthy":
+    st.markdown(f"""
+    <div class="connection-indicator connected">
+        ✅ Connected to {USE_MCP_SERVER and 'MCP Server' or 'FastAPI App'} on port {BACKEND_PORT}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Show server details
+    if "data" in health_status:
+        health_data = health_status["data"]
+        if USE_MCP_SERVER and "neo4j" in health_data:
+            neo4j_info = health_data["neo4j"]
+            st.success(f"Neo4j Status: {neo4j_info.get('status', 'unknown')}")
+else:
+    st.markdown(f"""
+    <div class="connection-indicator disconnected">
+        ❌ Cannot connect to backend server on port {BACKEND_PORT}
+        <br>Error: {health_status.get('error', 'Unknown error')}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.error("**Please check:**")
+    st.error(f"1. {'MCP server' if USE_MCP_SERVER else 'FastAPI app'} is running on port {BACKEND_PORT}")
+    st.error("2. Neo4j database is accessible")
+    st.error("3. All dependencies are installed")
+    
+    if st.button("🔄 Retry Connection"):
+        st.cache_data.clear()
+        st.rerun()
 
-3. **Test server directly in browser:**
-   - http://localhost:8000/health
-   - http://localhost:8000/
+# Only show main interface if connected
+if health_status["status"] == "healthy":
+    
+    # Create main layout
+    col1, col2 = st.columns([1, 1.5])
+    
+    # ============================================
+    # LEFT COLUMN - CHAT INTERFACE
+    # ============================================
+    
+    with col1:
+        st.markdown("## 💬 Chat Interface")
+        
+        # Display current database stats
+        stats = get_database_stats()
+        if "error" not in stats:
+            st.markdown("### 📊 Database Statistics")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("Nodes", stats.get("nodes", 0))
+                st.metric("Relationships", stats.get("relationships", 0))
+            with col_b:
+                st.metric("Labels", len(stats.get("labels", [])))
+                st.metric("Rel Types", len(stats.get("relationship_types", [])))
+        
+        # Manual refresh button
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            # Refresh graph data
+            try:
+                new_graph_data = get_graph_data(50)
+                if "error" not in new_graph_data:
+                    st.session_state.graph_data = new_graph_data
+                    st.session_state.last_update_time = datetime.now()
+                    st.success("✅ Data refreshed!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to refresh: {e}")
+        
+        # Chat messages display
+        st.markdown("### 📝 Recent Messages")
+        
+        # Display recent messages
+        for message in st.session_state.messages[-6:]:
+            if message["role"] == "user":
+                st.markdown(f"""
+                <div class="user-message">
+                    <strong>🧑 You:</strong> {message["content"]}
+                    <br><small>⏰ {datetime.fromisoformat(message["timestamp"]).strftime("%H:%M:%S")}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                result = message["content"]
+                
+                st.markdown(f"""
+                <div class="assistant-message">
+                    <strong>🤖 Neo4j Agent:</strong>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Display response components
+                if result.get("tool"):
+                    st.markdown(f"""
+                    <div class="tool-badge">
+                        🔧 {result["tool"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if result.get("query"):
+                    st.markdown("**Query:**")
+                    st.markdown(f"""
+                    <div class="query-display">
+                        {result["query"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if result.get("answer"):
+                    st.markdown("**Result:**")
+                    st.markdown(f"""
+                    <div class="result-display">
+                        {result["answer"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if result.get("response_time"):
+                    st.caption(f"⏱️ {result['response_time']:.2f}s")
+        
+        # Chat input
+        st.markdown("### ✍️ Ask Your Question")
+        
+        with st.form("chat_form", clear_on_submit=True):
+            user_input = st.text_area(
+                "Ask about your Neo4j database:",
+                placeholder="e.g., How many nodes are in the graph?",
+                height=80
+            )
+            
+            submitted = st.form_submit_button("🚀 Send Query", use_container_width=True)
+        
+        if submitted and user_input:
+            # Add user message
+            user_message = {
+                "role": "user",
+                "content": user_input,
+                "timestamp": datetime.now().isoformat()
+            }
+            st.session_state.messages.append(user_message)
+            
+            # Process the request
+            with st.spinner("🧠 Processing with Neo4j agent..."):
+                result = send_chat_message(user_input)
+            
+            # Add assistant message
+            assistant_message = {
+                "role": "assistant",
+                "content": result,
+                "timestamp": datetime.now().isoformat()
+            }
+            st.session_state.messages.append(assistant_message)
+            
+            # Refresh graph if it was a write operation
+            if result.get("tool") == "write_neo4j_cypher" and result.get("success", True):
+                try:
+                    new_graph_data = get_graph_data(50)
+                    if "error" not in new_graph_data:
+                        st.session_state.graph_data = new_graph_data
+                        st.session_state.last_update_time = datetime.now()
+                        st.success("🔄 Graph updated!")
+                except Exception as e:
+                    st.warning(f"Could not refresh graph: {e}")
+            
+            st.rerun()
+    
+    # ============================================
+    # RIGHT COLUMN - STABLE GRAPH VISUALIZATION
+    # ============================================
+    
+    with col2:
+        st.markdown("## 🎨 Stable Neo4j Graph")
+        
+        # Load graph data if not already loaded
+        if st.session_state.graph_data is None:
+            with st.spinner("📊 Loading graph data..."):
+                try:
+                    graph_data = get_graph_data(50)
+                    if "error" not in graph_data:
+                        st.session_state.graph_data = graph_data
+                        st.session_state.last_update_time = datetime.now()
+                except Exception as e:
+                    st.error(f"Failed to load graph: {e}")
+        
+        # Display graph
+        if st.session_state.graph_data and "error" not in st.session_state.graph_data:
+            graph_data = st.session_state.graph_data
+            
+            # Show graph info
+            nodes = graph_data.get("nodes", [])
+            relationships = graph_data.get("relationships", [])
+            
+            st.markdown("### 📈 Graph Overview")
+            col_x, col_y = st.columns(2)
+            with col_x:
+                st.metric("Loaded Nodes", len(nodes))
+            with col_y:
+                st.metric("Loaded Relationships", len(relationships))
+            
+            if st.session_state.last_update_time:
+                st.caption(f"Last updated: {st.session_state.last_update_time.strftime('%H:%M:%S')}")
+            
+            # Create and display stable graph
+            if nodes:
+                stable_graph_html = create_stable_nvl_visualization(graph_data, height=600)
+                
+                components.html(
+                    stable_graph_html,
+                    height=600,
+                    key=f"stable_graph_{int(time.time())}"
+                )
+            else:
+                st.info("📝 No nodes in database. Create some data to see the graph!")
+        
+        elif st.session_state.graph_data and "error" in st.session_state.graph_data:
+            st.error(f"Graph error: {st.session_state.graph_data['error']}")
+        else:
+            st.info("📊 Click 'Refresh Data' to load the graph visualization")
 
-4. **Check firewall/ports:**
-   ```bash
-   netstat -an | grep 8000
-   ```
+# ============================================
+# SIDEBAR - ENHANCED PROMPTS
+# ============================================
 
-5. **Update configuration:**
-   - Change NEO4J_PASSWORD in fixed_mcp_server.py
-   - Change CORTEX_API_KEY in fixed_mcp_server.py
-
-**If endpoints return 404:**
-- Make sure you're using `fixed_mcp_server.py` (not the original)
-- Check that all required endpoints are implemented
-- Restart the server after making changes
-
-**If Neo4j connection fails:**
-- Verify Neo4j credentials
-- Check Neo4j is running on bolt://localhost:7687
-- Test connection with Neo4j Browser
-
-**Expected working state:**
-- ✅ Server Status: healthy
-- ✅ Neo4j Status: connected  
-- ✅ Agent Status: ready
-- ✅ All endpoints return 200 OK
-""")
-
-# Quick fixes
-st.markdown("### ⚡ Quick Fixes")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button("🔄 Refresh Page"):
+with st.sidebar:
+    st.markdown("## 🚀 Enhanced Example Prompts")
+    
+    # Server status
+    if health_status["status"] == "healthy":
+        st.markdown("### ✅ Server Status")
+        st.success(f"Connected to port {BACKEND_PORT}")
+    else:
+        st.markdown("### ❌ Server Status")
+        st.error(f"Not connected to port {BACKEND_PORT}")
+    
+    # Enhanced example prompts organized by category
+    for category, prompts in EXAMPLE_PROMPTS.items():
+        st.markdown(f"### {category}")
+        
+        for prompt in prompts:
+            if st.button(prompt, key=f"prompt_{hash(prompt)}", use_container_width=True):
+                # Add to chat
+                user_message = {
+                    "role": "user",
+                    "content": prompt,
+                    "timestamp": datetime.now().isoformat()
+                }
+                st.session_state.messages.append(user_message)
+                
+                # Process the query
+                with st.spinner("🧠 Processing..."):
+                    result = send_chat_message(prompt)
+                
+                assistant_message = {
+                    "role": "assistant",
+                    "content": result,
+                    "timestamp": datetime.now().isoformat()
+                }
+                st.session_state.messages.append(assistant_message)
+                
+                # Refresh graph if needed
+                if result.get("tool") == "write_neo4j_cypher" and result.get("success", True):
+                    try:
+                        new_graph_data = get_graph_data(50)
+                        if "error" not in new_graph_data:
+                            st.session_state.graph_data = new_graph_data
+                            st.session_state.last_update_time = datetime.now()
+                    except Exception:
+                        pass
+                
+                st.rerun()
+    
+    # Clear chat
+    st.markdown("---")
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
         st.rerun()
     
-    if st.button("🧹 Clear Cache"):
-        st.cache_data.clear()
-        st.success("Cache cleared!")
+    # Session info
+    st.markdown("### 📋 Session Info")
+    st.text(f"ID: {st.session_state.session_id[:8]}...")
+    st.text(f"Messages: {len(st.session_state.messages)}")
+    if st.session_state.graph_data:
+        nodes_count = len(st.session_state.graph_data.get("nodes", []))
+        rels_count = len(st.session_state.graph_data.get("relationships", []))
+        st.text(f"Graph: {nodes_count} nodes, {rels_count} rels")
 
-with col2:
-    st.markdown("**Recommended startup order:**")
-    st.text("1. Start Neo4j database")
-    st.text("2. Start fixed_mcp_server.py")
-    st.text("3. Test endpoints (this page)")
-    st.text("4. Start main Streamlit UI")
+# ============================================
+# FOOTER
+# ============================================
 
-# Footer
 st.markdown("---")
-st.markdown("🔍 **Debug UI v1.0** - Use this to identify and fix connection issues before using the main chatbot interface.")
+st.markdown(f"""
+<div style="text-align: center; color: #666; padding: 2rem; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); border-radius: 0.5rem; margin-top: 2rem;">
+    <h3>🧠 Fixed Neo4j Chatbot v5.0</h3>
+    <p><strong>✅ STABLE CONNECTIONS:</strong> Properly connects to {'MCP Server' if USE_MCP_SERVER else 'FastAPI App'}</p>
+    <p><strong>🎨 STABLE GRAPH:</strong> D3.js force layout with visible relationship lines</p>
+    <p><strong>🔄 REAL-TIME UPDATES:</strong> Graph refreshes automatically after changes</p>
+    <p><strong>💡 ENHANCED PROMPTS:</strong> {sum(len(prompts) for prompts in EXAMPLE_PROMPTS.values())} example queries</p>
+    <p><strong>📡 Backend:</strong> {USE_MCP_SERVER and 'MCP Server' or 'FastAPI App'} on port {BACKEND_PORT}</p>
+</div>
+""", unsafe_allow_html=True)
