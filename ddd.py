@@ -1,735 +1,483 @@
-import requests
-import urllib3
-from pydantic import BaseModel
-from typing import Optional
-from langgraph.graph import StateGraph, END
-from langchain_core.runnables import RunnableLambda
-import re
+import asyncio
 import json
 import logging
 from datetime import datetime
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("unlimited_langgraph_agent")
+logger = logging.getLogger("unlimited_mcp_neo4j")
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "your_neo4j_password"
+NEO4J_DATABASE = "neo4j"
 
-class AgentState(BaseModel):
-    question: str
-    session_id: str
-    tool: str = ""
-    query: str = ""
-    trace: str = ""
-    answer: str = ""
-    graph_data: Optional[dict] = None
-    node_limit: int = None  # Changed to None for unlimited by default
+driver: AsyncDriver = AsyncGraphDatabase.driver(
+    NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
+)
 
-def clean_cypher_query(query: str) -> str:
-    """Clean and format Cypher queries for execution"""
-    query = re.sub(r'[\r\n]+', ' ', query)
-    keywords = [
-        "MATCH", "WITH", "RETURN", "ORDER BY", "UNWIND", "WHERE", "LIMIT",
-        "SKIP", "CALL", "YIELD", "CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
-    ]
-    for kw in keywords:
-        query = re.sub(rf'(?<!\s)({kw})', r' \1', query)
-        query = re.sub(rf'({kw})([^\s\(])', r'\1 \2', query)
-    query = re.sub(r'\s+', ' ', query)
-    return query.strip()
+app = FastAPI(title="Unlimited Neo4j MCP Server - No Artificial Limits")
 
-def optimize_query_for_unlimited_visualization(query: str) -> str:
+class CypherRequest(BaseModel):
+    query: str
+    params: dict = {}
+    node_limit: int = None  # None means unlimited
+
+def extract_unlimited_graph_data(records):
     """
-    Enhanced query optimization that REMOVES limits and optimizes for unlimited display
+    Extract ALL nodes and relationships without any artificial limits
+    This function processes the complete result set as specified by the query
     """
-    query = query.strip()
+    nodes = {}
+    relationships = []
     
-    # REMOVE any existing LIMIT clauses - we want unlimited display
-    query = re.sub(r'\s+LIMIT\s+\d+', '', query, flags=re.IGNORECASE)
+    logger.info(f"🚀 Processing UNLIMITED graph data - extracting ALL results")
     
-    # Enhance queries for better unlimited visualization by adding relationship context
-    if "MATCH (n)" in query and "RETURN n" == query.split("RETURN")[-1].strip():
-        # Add relationships for better graph visualization
-        query = query.replace("RETURN n", "OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m")
-        logger.info("🚀 Enhanced query with relationships for unlimited display")
-    
-    # For entity-specific queries, ensure we get relationships too
-    entity_patterns = [
-        (r"MATCH \(n:(\w+)\) RETURN n$", r"MATCH (n:\1) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"),
-        (r"MATCH \((\w+):(\w+)\) RETURN \1$", r"MATCH (\1:\2) OPTIONAL MATCH (\1)-[r]-(m) RETURN \1, r, m")
-    ]
-    
-    for pattern, replacement in entity_patterns:
-        if re.search(pattern, query, re.IGNORECASE):
-            query = re.sub(pattern, replacement, query, flags=re.IGNORECASE)
-            logger.info("🔗 Enhanced entity query with relationships")
-            break
-    
-    logger.info(f"🚀 Optimized query for UNLIMITED display: {query}")
-    
-    return query
-
-def smart_question_preprocessor(question: str) -> str:
-    """Preprocess questions to make them more specific and actionable for unlimited display"""
-    
-    # Common question mappings for vague or general questions
-    question_mappings = {
-        # Very general questions - now optimized for unlimited display
-        "what's in the database": "Show me all data in the database with relationships",
-        "what do you have": "Display all types of nodes and their relationships", 
-        "show me something": "Show me all data from the database",
-        "what can i see": "Show me all the data available",
-        "explore": "Show me all nodes and relationships",
-        "anything": "Display all data from the database",
-        "what's there": "Show me all data in the database",
-        "database content": "Display all contents of the database",
-        "what's here": "Show me all data available in the database",
-        "tell me about this database": "Show me complete database structure and all content",
-        
-        # Count and size questions
-        "how much data": "How many total nodes are in the database",
-        "size": "Count all nodes and relationships in the database",
-        "data size": "Count all nodes in the database",
-        "how big": "Show me the size of the database",
-        "database size": "Count all nodes and relationships",
-        
-        # Type and structure questions  
-        "what kinds": "Show me all different types of nodes available",
-        "what sorts": "Display the database schema and all available node types",
-        "categories": "Show me all categories of data in the database",
-        "what types": "Show me all different node types in the database",
-        "structure": "Show me the complete database schema and structure",
-        "schema": "Display the complete database schema",
-        
-        # Network and relationship questions - enhanced for unlimited display
-        "connections": "Show me all connections between nodes in the database",
-        "network": "Display the complete network structure of the database",
-        "relationships": "Show me all relationships between all nodes",
-        "graph": "Display the complete graph structure",
-        
-        # Exploration questions - enhanced for unlimited display
-        "overview": "Give me a complete overview of all database content",
-        "summary": "Show me a complete summary of everything in the database",
-        "tour": "Give me a complete tour of the entire database",
-        "walkthrough": "Show me all different parts of the database"
-    }
-    
-    # Normalize the question
-    normalized = question.lower().strip()
-    
-    # Check for direct mappings first
-    for pattern, replacement in question_mappings.items():
-        if pattern in normalized:
-            logger.info(f"🔄 Preprocessed question for unlimited display: '{question}' → '{replacement}'")
-            return replacement
-    
-    # Enhanced entity-specific preprocessing - keep specific entity requests intact
-    entity_patterns = {
-        r'\beda\b.*\b(group|team|department)\b': question,
-        r'\beda\b.*\b(relationship|connection|network)\b': question,
-        r'\b(person|people|user)\b.*\b(relationship|connection|network)\b': question,
-        r'\b(company|organization)\b.*\b(relationship|connection|network)\b': question,
-        r'\b(department|dept)\b.*\b(relationship|connection|network)\b': question,
-        r'\b(group|team)\b.*\b(relationship|connection|network)\b': question,
-    }
-    
-    # Check if this is a specific entity request that should NOT be preprocessed
-    for pattern, keep_original in entity_patterns.items():
-        if re.search(pattern, normalized, re.IGNORECASE):
-            logger.info(f"🎯 Keeping specific entity request unchanged: '{question}'")
-            return question
-    
-    # Expand abbreviated questions for unlimited display
-    if len(normalized) < 10:
-        if any(word in normalized for word in ['show', 'see', 'get', 'tell', 'what']):
-            # Check if it mentions specific entities
-            if any(entity in normalized for entity in ['eda', 'person', 'company', 'user', 'group', 'team']):
-                logger.info(f"🎯 Keeping short specific entity request: '{question}'")
-                return question
-            else:
-                expanded = f"Show me all data from the database: {question}"
-                logger.info(f"🔄 Expanded short question for unlimited display: '{question}' → '{expanded}'")
-                return expanded
-    
-    # Handle single word questions - enhanced for unlimited display
-    single_word_mappings = {
-        "nodes": "Show me all types of nodes in the database with their relationships",
-        "data": "Show me all data from the database",
-        "graph": "Display the complete graph structure with all nodes and relationships",
-        "schema": "Show me the complete database schema",
-        "structure": "Display the complete database structure with all relationships",
-        "overview": "Give me a complete overview of all database content",
-        "summary": "Show me a complete summary of all database content"
-    }
-    
-    if normalized in single_word_mappings:
-        expanded = single_word_mappings[normalized]
-        logger.info(f"🔄 Expanded single word for unlimited display: '{question}' → '{expanded}'")
-        return expanded
-    
-    # If it's a specific request mentioning entities, keep it unchanged
-    if any(entity in normalized for entity in ['eda', 'person', 'people', 'company', 'user', 'group', 'team', 'department']):
-        logger.info(f"🎯 Preserving specific entity request: '{question}'")
-        return question
-    
-    logger.info(f"✅ Question unchanged: '{question}'")
-    return question
-
-def generate_fallback_response(original_question: str) -> str:
-    """Generate intelligent fallback response when LLM fails - optimized for unlimited display"""
-    
-    question_lower = original_question.lower()
-    
-    # Schema questions
-    if any(word in question_lower for word in ['schema', 'structure', 'types', 'labels', 'what kinds', 'what types', 'properties']):
-        return "Tool: get_neo4j_schema"
-    
-    # Write operations  
-    elif any(word in question_lower for word in ['create', 'add', 'insert', 'new', 'make', 'build']):
-        return "Tool: write_neo4j_cypher\nQuery: // Please specify what you want to create"
-    
-    # Specific entity types with relationships (NO LIMITS)
-    elif any(word in question_lower for word in ['person', 'people', 'user', 'users', 'individual', 'human']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Person) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-    
-    elif any(word in question_lower for word in ['company', 'organization', 'companies', 'business', 'corporation']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Company) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-    
-    elif any(word in question_lower for word in ['eda', 'eda group', 'eda team']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:EDA) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-    
-    elif any(word in question_lower for word in ['movie', 'film', 'movies', 'films', 'cinema']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Movie) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-    
-    elif any(word in question_lower for word in ['product', 'products', 'item', 'items']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n:Product) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-    
-    # Count questions
-    elif any(word in question_lower for word in ['count', 'how many', 'number', 'total', 'size', 'amount']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n) RETURN count(n) as TotalNodes"
-    
-    # Relationship questions (NO LIMITS)
-    elif any(word in question_lower for word in ['relationship', 'connection', 'link', 'connected', 'relationships', 'network', 'connections']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (a)-[r]->(b) RETURN a, r, b"
-    
-    # General exploration (NO LIMITS - show everything)
-    elif any(word in question_lower for word in ['explore', 'show', 'display', 'see', 'view', 'what', 'database', 'data', 'tell', 'overview', 'all', 'everything']):
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-    
-    # Default: show all data with relationships
-    else:
-        return "Tool: read_neo4j_cypher\nQuery: MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-
-# Enhanced system message for UNLIMITED display
-SYS_MSG = """You are a Neo4j database expert assistant optimized for UNLIMITED graph visualization. Your job is to help users explore their entire graph database without any artificial limits.
-
-**CRITICAL: NO NODE LIMITS** - Do NOT add LIMIT clauses unless specifically requested by the user. Show ALL data according to the command.
-
-For ANY user question, you MUST respond with a tool selection and appropriate query. Here are your tools:
-
-**TOOLS AVAILABLE:**
-1. **read_neo4j_cypher** - For viewing, exploring, counting, finding data
-   - Use for: "show me", "find", "how many", "what are", "display", "list", "get", "explore", "tell me about"
-   - ALWAYS generates MATCH queries with RETURN statements
-   - Include relationships when users want to see connections
-   - DO NOT ADD LIMIT CLAUSES - show everything
-
-2. **write_neo4j_cypher** - For creating, updating, deleting data  
-   - Use for: "create", "add", "update", "delete", "remove", "insert", "make", "build"
-   - Generates CREATE, MERGE, SET, DELETE queries
-   - Include RETURN clauses to show created/modified data
-
-3. **get_neo4j_schema** - For database structure questions
-   - Use for: "schema", "structure", "what types", "what labels", "what properties"
-   - NO query needed - just returns database structure
-
-**RESPONSE FORMAT (REQUIRED):**
-Tool: [tool_name]
-Query: [cypher_query_or_none_for_schema]
-
-**UNLIMITED DISPLAY EXAMPLES:**
-
-User: "Show me EDA group with relationships"
-Tool: read_neo4j_cypher
-Query: MATCH (n:EDA) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-
-User: "Display all nodes"
-Tool: read_neo4j_cypher
-Query: MATCH (n) RETURN n
-
-User: "Show me everything"
-Tool: read_neo4j_cypher
-Query: MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-
-User: "Display all Person nodes with their relationships"
-Tool: read_neo4j_cypher
-Query: MATCH (p:Person) OPTIONAL MATCH (p)-[r]-(other) RETURN p, r, other
-
-User: "Show me the complete network"
-Tool: read_neo4j_cypher
-Query: MATCH (a)-[r]->(b) RETURN a, r, b
-
-User: "Find all connections"
-Tool: read_neo4j_cypher
-Query: MATCH (a)-[r]-(b) RETURN a, r, b
-
-User: "Explore the database"
-Tool: read_neo4j_cypher
-Query: MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-
-User: "Display Company network"
-Tool: read_neo4j_cypher
-Query: MATCH (c:Company) OPTIONAL MATCH (c)-[r]-(connected) RETURN c, r, connected
-
-User: "Show all people"
-Tool: read_neo4j_cypher
-Query: MATCH (n:Person) RETURN n
-
-User: "What's in my database?"
-Tool: read_neo4j_cypher  
-Query: MATCH (n) RETURN labels(n) as NodeType, count(*) as Count ORDER BY Count DESC
-
-**IMPORTANT RULES FOR UNLIMITED DISPLAY:**
-- NEVER add LIMIT clauses unless the user specifically asks for a limit
-- When showing entities, include their relationships: OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-- For "show all" or "display everything" commands, return complete data sets
-- For specific entity queries, show ALL instances of that entity type
-- For network/relationship queries, show ALL connections
-- For exploration queries, show complete graph structure
-- Only use count() for counting queries, not for limiting display
-
-**ENTITY-SPECIFIC UNLIMITED PATTERNS:**
-- "EDA" mentions → MATCH (n:EDA) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-- "Person/People" → MATCH (n:Person) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-- "Company/Companies" → MATCH (n:Company) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-- "All/Everything" → MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
-- "Network/Connections" → MATCH (a)-[r]-(b) RETURN a, r, b
-
-RESPOND NOW with Tool: and Query: for UNLIMITED display according to the user's command."""
-
-# Cortex LLM configuration
-API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-MODEL = "llama3.1-70b"
-
-def enhanced_cortex_llm(prompt: str, session_id: str) -> str:
-    """Enhanced Cortex LLM call optimized for unlimited display"""
-    
-    # Preprocess the question for unlimited display
-    processed_prompt = smart_question_preprocessor(prompt)
-    
-    headers = {
-        "Authorization": f'Snowflake Token="{API_KEY}"',
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "query": {
-            "aplctn_cd": "edagnai",
-            "app_id": "edadip",
-            "api_key": API_KEY,
-            "method": "cortex",
-            "model": MODEL,
-            "sys_msg": SYS_MSG,
-            "limit_convs": "0",
-            "prompt": {
-                "messages": [{"role": "user", "content": processed_prompt}]
-            },
-            "session_id": session_id
-        }
-    }
-    
-    try:
-        logger.info(f"🔄 Calling Cortex LLM for unlimited display: {processed_prompt[:100]}...")
-        resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
-        resp.raise_for_status()
-        
-        raw_response = resp.text
-        logger.info(f"📥 Raw Cortex response length: {len(raw_response)}")
-        
-        if "end_of_stream" in raw_response:
-            parsed_response = raw_response.partition("end_of_stream")[0].strip()
-        else:
-            parsed_response = raw_response.strip()
-        
-        if len(parsed_response) < 20:
-            logger.warning(f"⚠️ Short response detected, using unlimited fallback")
-            return generate_fallback_response(prompt)
-        
-        logger.info(f"✅ LLM response processed for unlimited display")
-        return parsed_response
-        
-    except Exception as e:
-        logger.error(f"❌ Cortex LLM error: {e}")
-        return generate_fallback_response(prompt)
-
-def enhanced_parse_llm_output(llm_output):
-    """Enhanced parsing optimized for unlimited display - removes any LIMIT additions"""
-    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    trace = llm_output.strip()
-    tool = None
-    query = None
-    
-    logger.info(f"🔍 Parsing LLM output for unlimited display")
-    
-    # Extract tool
-    tool_patterns = [
-        r"Tool:\s*([\w_]+)",
-        r"**Tool:**\s*([\w_]+)",
-        r"Tool\s*[:=]\s*([\w_]+)",
-        r"Selected tool:\s*([\w_]+)",
-        r"Using:\s*([\w_]+)",
-        r"I'll use\s*:\s*([\w_]+)",
-        r"(?:Tool|TOOL)\s*[:=]\s*([\w_]+)",
-        r"The tool is:\s*([\w_]+)",
-        r"Choose tool:\s*([\w_]+)",
-        r"Tool selection:\s*([\w_]+)"
-    ]
-    
-    for pattern in tool_patterns:
-        tool_match = re.search(pattern, llm_output, re.I)
-        if tool_match:
-            tname = tool_match.group(1).strip()
-            if tname in allowed_tools:
-                tool = tname
-                logger.info(f"✅ Valid tool found: {tool}")
-                break
-    
-    # Extract query
-    query_patterns = [
-        r"Query:\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",
-        r"**Query:**\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",
-        r"Query\s*[:=]\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",
-        r"Cypher:\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",
-        r"```cypher\s*(.+?)\s*```",
-        r"```\s*(.+?)\s*```",
-        r"The query is:\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",
-        r"Query to execute:\s*(.+?)(?:\n\n|\nTool|\nNote|\n$|$)",
-        r"MATCH\s+.+?(?=\n[A-Z]|\n\n|$)",
-        r"CREATE\s+.+?(?=\n[A-Z]|\n\n|$)",
-        r"MERGE\s+.+?(?=\n[A-Z]|\n\n|$)",
-        r"CALL\s+.+?(?=\n[A-Z]|\n\n|$)"
-    ]
-    
-    for pattern in query_patterns:
-        query_match = re.search(pattern, llm_output, re.I | re.DOTALL)
-        if query_match:
-            query = query_match.group(1).strip() if query_match.groups() else query_match.group(0).strip()
-            if query and len(query) > 3:
-                query = re.sub(r'\s+', ' ', query.strip())
-                query = re.sub(r'\s*(Note:|Explanation:|This query)', '', query, flags=re.I)
-                logger.info(f"✅ Query found: {query[:100]}...")
-                break
-    
-    # Fallback if parsing failed
-    if not tool or not query:
-        logger.warning("⚠️ Primary parsing failed, using unlimited fallback...")
-        fallback_response = generate_fallback_response(llm_output)
-        tool_match = re.search(r"Tool:\s*([\w_]+)", fallback_response)
-        query_match = re.search(r"Query:\s*(.+)", fallback_response, re.DOTALL)
-        
-        if tool_match:
-            tool = tool_match.group(1)
-        if query_match:
-            query = query_match.group(1).strip()
-    
-    # CRITICAL: Remove any LIMIT clauses that might have been added
-    if query and tool == "read_neo4j_cypher":
-        # Remove LIMIT clauses for unlimited display
-        original_query = query
-        query = re.sub(r'\s+LIMIT\s+\d+', '', query, flags=re.IGNORECASE)
-        if original_query != query:
-            logger.info(f"🚀 REMOVED LIMIT clause for unlimited display")
-        
-        # Ensure we have RETURN clause
-        if "RETURN" not in query.upper():
-            if query.upper().startswith("MATCH"):
-                query += " RETURN n"
-        
-        # Clean up formatting
-        query = re.sub(r'\s+', ' ', query.strip())
-    
-    logger.info(f"🎯 Final unlimited parsing - Tool: {tool}, Query: {query[:100] if query else 'None'}...")
-    
-    return tool, query, trace
-
-def format_response_with_graph(result_data, tool_type, node_limit=None):
-    """Enhanced response formatting for unlimited display"""
-    try:
-        if isinstance(result_data, str):
-            try:
-                result_data = json.loads(result_data)
-            except json.JSONDecodeError:
-                return str(result_data), None
-        
-        graph_data = None
-        
-        if tool_type == "write_neo4j_cypher" and isinstance(result_data, dict):
-            if "change_info" in result_data:
-                change_info = result_data["change_info"]
-                formatted_response = f"""
-🔄 **Database Update Completed**
-
-**⚡ Execution:** {change_info['execution_time_ms']}ms  
-**🕐 Time:** {change_info['timestamp'][:19]}
-
-**📝 Changes Made:**
-{chr(10).join(f"  • {change}" for change in change_info['changes'])}
-
-**🔧 Query:** `{change_info['query']}`
-                """.strip()
+    # Process ALL records and extract ALL graph objects
+    for record in records:
+        for key, value in record.items():
+            # Handle nodes
+            if hasattr(value, 'labels'):  # It's a node
+                node_id = str(value.element_id)
                 
-                if result_data.get("graph_data"):
-                    graph_data = result_data["graph_data"]
-                    node_count = len(graph_data.get('nodes', []))
-                    rel_count = len(graph_data.get('relationships', []))
-                    if node_count > 0 or rel_count > 0:
-                        formatted_response += f"\n\n🕸️ **Complete graph visualization** with {node_count} nodes and {rel_count} relationships"
+                # Extract all properties
+                properties = dict(value)
                 
-                return formatted_response, graph_data
-        
-        elif tool_type == "read_neo4j_cypher" and isinstance(result_data, dict):
-            if "data" in result_data and "metadata" in result_data:
-                data = result_data["data"]
-                metadata = result_data["metadata"]
-                graph_data = result_data.get("graph_data")
-                
-                formatted_response = f"""
-📊 **Complete Query Results - No Limits Applied**
-
-**🔢 Records:** {metadata['record_count']}  
-**⚡ Time:** {metadata['execution_time_ms']}ms  
-**🕐 Timestamp:** {metadata['timestamp'][:19]}
-                """.strip()
-                
-                if not graph_data or not graph_data.get('nodes'):
-                    if isinstance(data, list) and len(data) > 0:
-                        if len(data) <= 5:
-                            formatted_response += f"\n\n**📋 Complete Data:**\n```json\n{json.dumps(data, indent=2)}\n```"
+                # Ensure we have a meaningful display name
+                if not any(prop in properties for prop in ['name', 'title', 'displayName']):
+                    labels = list(value.labels)
+                    if labels:
+                        # Create a meaningful name from available properties
+                        significant_props = [k for k, v in properties.items() 
+                                           if isinstance(v, str) and len(str(v)) < 50]
+                        if significant_props:
+                            properties['name'] = f"{labels[0]}_{properties[significant_props[0]]}"
                         else:
-                            formatted_response += f"\n\n**📋 Data Sample (showing first 3 of {len(data)} total):**\n```json\n{json.dumps(data[:3], indent=2)}\n... and {len(data) - 3} more records\n```"
+                            properties['name'] = f"{labels[0]}_{len(nodes) + 1}"
                     else:
-                        formatted_response += "\n\n**📋 Data:** No records found"
+                        properties['name'] = f"Node_{len(nodes) + 1}"
                 
-                if graph_data and graph_data.get('nodes'):
-                    node_count = len(graph_data['nodes'])
-                    rel_count = len(graph_data.get('relationships', []))
-                    
-                    formatted_response += f"\n\n🕸️ **Complete graph visualization** with {node_count} nodes and {rel_count} relationships"
-                    
-                    if node_count > 0:
-                        label_counts = {}
-                        for node in graph_data['nodes']:
-                            for label in node.get('labels', ['Unknown']):
-                                label_counts[label] = label_counts.get(label, 0) + 1
+                nodes[node_id] = {
+                    'id': node_id,
+                    'labels': list(value.labels),
+                    'properties': properties,
+                    'degree': 0  # Will be calculated later
+                }
+            
+            # Handle relationships
+            elif hasattr(value, 'type'):  # It's a relationship
+                start_node_id = str(value.start_node.element_id)
+                end_node_id = str(value.end_node.element_id)
+                
+                rel = {
+                    'id': str(value.element_id),
+                    'type': value.type,
+                    'startNode': start_node_id,
+                    'endNode': end_node_id,
+                    'properties': dict(value)
+                }
+                relationships.append(rel)
+                
+                # Add connected nodes if not already present
+                for node_ref, node_id_key in [(value.start_node, start_node_id), (value.end_node, end_node_id)]:
+                    if node_id_key not in nodes:
+                        node_props = dict(node_ref)
+                        if not any(prop in node_props for prop in ['name', 'title', 'displayName']):
+                            labels = list(node_ref.labels)
+                            if labels:
+                                node_props['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                            else:
+                                node_props['name'] = f"Node_{len(nodes) + 1}"
                         
-                        if len(label_counts) > 0:
-                            label_summary = ", ".join([f"{label}({count})" for label, count in sorted(label_counts.items())])
-                            formatted_response += f"\n**🏷️ Node Types:** {label_summary}"
-                    
-                    # Note that this is unlimited display
-                    formatted_response += f"\n**🚀 Unlimited Display:** Showing ALL results without artificial limits"
-                
-                return formatted_response, graph_data
-        
-        elif tool_type == "get_neo4j_schema" and isinstance(result_data, dict):
-            if "schema" in result_data:
-                schema = result_data["schema"]
-                metadata = result_data.get("metadata", {})
-                
-                schema_summary = []
-                if isinstance(schema, dict):
-                    for label, info in schema.items():
-                        if isinstance(info, dict):
-                            props = info.get('properties', {})
-                            relationships = info.get('relationships', {})
-                            schema_summary.append(f"**{label}**: {len(props)} props, {len(relationships)} rels")
-                
-                formatted_response = f"""
-🏗️ **Complete Database Schema**
-
-**⚡ Time:** {metadata.get('execution_time_ms', 'N/A')}ms
-
-**📊 Complete Overview:**
-{chr(10).join(f"  • {item}" for item in schema_summary)}
-                """.strip()
-                
-                return formatted_response, None
-        
-        # Fallback
-        formatted_text = json.dumps(result_data, indent=2) if isinstance(result_data, (dict, list)) else str(result_data)
-        return formatted_text, None
+                        nodes[node_id_key] = {
+                            'id': node_id_key,
+                            'labels': list(node_ref.labels),
+                            'properties': node_props,
+                            'degree': 0
+                        }
+            
+            # Handle lists (might contain nodes/relationships)
+            elif isinstance(value, list):
+                for item in value:
+                    if hasattr(item, 'labels'):  # Node in list
+                        node_id = str(item.element_id)
+                        if node_id not in nodes:
+                            item_props = dict(item)
+                            if not any(prop in item_props for prop in ['name', 'title', 'displayName']):
+                                labels = list(item.labels)
+                                if labels:
+                                    item_props['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                                else:
+                                    item_props['name'] = f"Node_{len(nodes) + 1}"
+                            
+                            nodes[node_id] = {
+                                'id': node_id,
+                                'labels': list(item.labels),
+                                'properties': item_props,
+                                'degree': 0
+                            }
+                    elif hasattr(item, 'type'):  # Relationship in list
+                        rel = {
+                            'id': str(item.element_id),
+                            'type': item.type,
+                            'startNode': str(item.start_node.element_id),
+                            'endNode': str(item.end_node.element_id),
+                            'properties': dict(item)
+                        }
+                        relationships.append(rel)
     
-    except Exception as e:
-        error_msg = f"❌ **Error formatting response:** {str(e)}"
-        logger.error(error_msg)
-        return error_msg, None
-
-def enhanced_select_tool_node(state: AgentState) -> dict:
-    """Enhanced tool selection optimized for unlimited display"""
-    logger.info(f"🤔 Processing question for unlimited display: {state.question}")
+    # Calculate node degrees
+    node_degrees = {}
+    visible_node_ids = set(nodes.keys())
     
-    try:
-        # Call LLM with unlimited display focus
-        llm_output = enhanced_cortex_llm(state.question, state.session_id)
-        logger.info(f"📥 LLM Response received for unlimited processing")
-        
-        # Use enhanced parsing that removes limits
-        tool, query, trace = enhanced_parse_llm_output(llm_output)
-        
-        # Ultimate fallback if still no tool/query
-        if not tool:
-            logger.warning("🚨 Ultimate fallback: No tool detected, defaulting to unlimited exploration")
-            tool = "read_neo4j_cypher"
-            query = "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-            trace = f"Ultimate unlimited fallback for: {state.question}"
-        
-        # Apply unlimited query optimization
-        if query and tool == "read_neo4j_cypher":
-            query = optimize_query_for_unlimited_visualization(query)
-        
-        logger.info(f"✅ Unlimited tool selection complete - Tool: {tool}, Query: {query[:100] if query else 'None'}")
-        
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": tool or "",
-            "query": query or "",
-            "trace": trace or f"Unlimited processing of: {state.question}",
-            "answer": "",
-            "graph_data": None,
-            "node_limit": None  # Always None for unlimited
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error in unlimited tool selection: {e}")
-        
-        # Emergency fallback for unlimited display
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": "read_neo4j_cypher",
-            "query": "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m",
-            "trace": f"Emergency unlimited fallback due to error: {str(e)}",
-            "answer": f"I'll show you complete data from your database. Error details: {str(e)}",
-            "graph_data": None,
-            "node_limit": None
-        }
-
-def execute_tool_node(state: AgentState) -> dict:
-    """Enhanced tool execution for unlimited display"""
-    tool = state.tool
-    query = state.query
-    trace = state.trace
-    answer = ""
-    graph_data = None
+    for rel in relationships:
+        start_id = rel['startNode']
+        end_id = rel['endNode']
+        if start_id in visible_node_ids and end_id in visible_node_ids:
+            node_degrees[start_id] = node_degrees.get(start_id, 0) + 1
+            node_degrees[end_id] = node_degrees.get(end_id, 0) + 1
     
-    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    # Update node degrees
+    for node_id, node_data in nodes.items():
+        node_data['degree'] = node_degrees.get(node_id, 0)
     
-    logger.info(f"⚡ Executing unlimited tool: '{tool}'")
-    logger.info(f"🔧 Unlimited query: {query[:200] if query else 'None'}...")
+    # Include ALL relationships between visible nodes
+    filtered_relationships = [
+        rel for rel in relationships 
+        if rel['startNode'] in visible_node_ids and rel['endNode'] in visible_node_ids
+    ]
     
-    try:
-        if not tool:
-            logger.error("❌ No tool selected")
-            answer = "⚠️ I couldn't determine the right tool for your question."
-        elif tool not in valid_tools:
-            logger.error(f"❌ Invalid tool: {tool}")
-            answer = f"⚠️ Tool '{tool}' not recognized. Available tools: {', '.join(valid_tools)}"
-        elif tool == "get_neo4j_schema":
-            logger.info("📋 Calling schema endpoint...")
-            result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers, timeout=60)
-            if result.ok:
-                answer, graph_data = format_response_with_graph(result.json(), tool, None)
-                logger.info("✅ Schema retrieval successful")
-            else:
-                logger.error(f"❌ Schema query failed: {result.status_code}")
-                answer = f"❌ Schema query failed: {result.text}"
-        elif tool == "read_neo4j_cypher":
-            if not query or not query.strip():
-                logger.error("❌ No query provided")
-                answer = "⚠️ I couldn't generate a valid query for your question."
-            else:
-                logger.info("📖 Executing unlimited read query...")
-                query_clean = clean_cypher_query(query)
-                data = {
-                    "query": query_clean, 
-                    "params": {},
-                    "node_limit": None  # CRITICAL: No limits
-                }
-                result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=120)
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, None)
-                    logger.info("✅ Unlimited read query successful")
-                else:
-                    logger.error(f"❌ Read query failed: {result.status_code}")
-                    answer = f"❌ Query failed: {result.text}"
-        elif tool == "write_neo4j_cypher":
-            if not query or not query.strip():
-                logger.error("❌ No query provided")
-                answer = "⚠️ I couldn't generate a valid modification query."
-            else:
-                logger.info("✏️ Executing write query...")
-                query_clean = clean_cypher_query(query)
-                data = {
-                    "query": query_clean, 
-                    "params": {},
-                    "node_limit": None  # No limits for write operations either
-                }
-                result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers, timeout=120)
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, None)
-                    logger.info("✅ Write query successful")
-                else:
-                    logger.error(f"❌ Write query failed: {result.status_code}")
-                    answer = f"❌ Update failed: {result.text}"
-        else:
-            logger.error(f"❌ Unknown tool: {tool}")
-            answer = f"❌ Unknown tool: {tool}"
+    # Enhanced statistics
+    node_type_stats = {}
+    relationship_type_stats = {}
     
-    except requests.exceptions.Timeout:
-        logger.error("⏰ Request timed out")
-        answer = "⚠️ Query timed out. The query may be too complex for unlimited display."
-    except requests.exceptions.ConnectionError:
-        logger.error("🔌 Connection error")
-        answer = "⚠️ Cannot connect to the database server. Please check if services are running."
-    except Exception as e:
-        logger.error(f"💥 Unexpected error: {e}")
-        answer = f"⚠️ Execution failed: {str(e)}"
+    for node in nodes.values():
+        labels = node.get('labels', ['Unknown'])
+        primary_label = labels[0] if labels else 'Unknown'
+        node_type_stats[primary_label] = node_type_stats.get(primary_label, 0) + 1
     
-    logger.info(f"🏁 Unlimited tool execution completed. Graph data: {'Yes' if graph_data else 'No'}")
+    for rel in filtered_relationships:
+        rel_type = rel.get('type', 'Unknown')
+        relationship_type_stats[rel_type] = relationship_type_stats.get(rel_type, 0) + 1
+    
+    logger.info(f"✅ UNLIMITED graph extraction complete: {len(nodes)} nodes, {len(filtered_relationships)} relationships")
     
     return {
-        "question": state.question,
-        "session_id": state.session_id,
-        "tool": tool,
-        "query": query,
-        "trace": trace,
-        "answer": answer,
-        "graph_data": graph_data,
-        "node_limit": None  # Always None for unlimited
+        'nodes': list(nodes.values()),
+        'relationships': filtered_relationships,
+        'total_nodes': len(nodes),
+        'total_relationships': len(filtered_relationships),
+        'limited': False,  # Never limited in unlimited mode
+        'node_type_stats': node_type_stats,
+        'relationship_type_stats': relationship_type_stats,
+        'max_degree': max(node_degrees.values()) if node_degrees else 0,
+        'avg_degree': sum(node_degrees.values()) / len(node_degrees) if node_degrees else 0,
+        'unlimited_mode': True
     }
 
-def build_agent():
-    """Build and return the unlimited LangGraph agent"""
-    workflow = StateGraph(state_schema=AgentState)
+def format_change_summary(counters, query: str, execution_time: float):
+    """Format a detailed summary of what changed in Neo4j"""
+    timestamp = datetime.now().isoformat()
     
-    # Add nodes with unlimited functions
-    workflow.add_node("select_tool", RunnableLambda(enhanced_select_tool_node))
-    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
+    changes = []
+    if counters.nodes_created > 0:
+        changes.append(f"✅ {counters.nodes_created} node(s) created")
+    if counters.nodes_deleted > 0:
+        changes.append(f"🗑️ {counters.nodes_deleted} node(s) deleted")
+    if counters.relationships_created > 0:
+        changes.append(f"🔗 {counters.relationships_created} relationship(s) created")
+    if counters.relationships_deleted > 0:
+        changes.append(f"💥 {counters.relationships_deleted} relationship(s) deleted")
+    if counters.properties_set > 0:
+        changes.append(f"📝 {counters.properties_set} property(ies) set")
+    if counters.labels_added > 0:
+        changes.append(f"🏷️ {counters.labels_added} label(s) added")
+    if counters.labels_removed > 0:
+        changes.append(f"🏷️ {counters.labels_removed} label(s) removed")
+    if counters.indexes_added > 0:
+        changes.append(f"📊 {counters.indexes_added} index(es) added")
+    if counters.indexes_removed > 0:
+        changes.append(f"📊 {counters.indexes_removed} index(es) removed")
+    if counters.constraints_added > 0:
+        changes.append(f"🔒 {counters.constraints_added} constraint(s) added")
+    if counters.constraints_removed > 0:
+        changes.append(f"🔒 {counters.constraints_removed} constraint(s) removed")
     
-    # Set entry point
-    workflow.set_entry_point("select_tool")
+    if not changes:
+        changes.append("ℹ️ No changes detected")
     
-    # Add edges
-    workflow.add_edge("select_tool", "execute_tool")
-    workflow.add_edge("execute_tool", END)
+    return {
+        "timestamp": timestamp,
+        "execution_time_ms": round(execution_time * 1000, 2),
+        "query": query,
+        "changes": changes,
+        "summary": f"🕐 {timestamp} | ⚡ {round(execution_time * 1000, 2)}ms | {' | '.join(changes)}",
+        "raw_counters": {
+            "nodes_created": counters.nodes_created,
+            "nodes_deleted": counters.nodes_deleted,
+            "relationships_created": counters.relationships_created,
+            "relationships_deleted": counters.relationships_deleted,
+            "properties_set": counters.properties_set,
+            "labels_added": counters.labels_added,
+            "labels_removed": counters.labels_removed,
+            "indexes_added": counters.indexes_added,
+            "indexes_removed": counters.indexes_removed,
+            "constraints_added": counters.constraints_added,
+            "constraints_removed": counters.constraints_removed
+        }
+    }
+
+@app.get("/")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy", 
+        "service": "Unlimited Neo4j MCP Server", 
+        "features": ["unlimited_display", "no_artificial_limits", "complete_graph_extraction"],
+        "node_limits": "NONE - displays everything according to query"
+    }
+
+@app.post("/read_neo4j_cypher")
+async def read_neo4j_cypher_unlimited(request: CypherRequest):
+    """UNLIMITED read endpoint - processes ALL data according to the query"""
+    try:
+        start_time = datetime.now()
+        
+        logger.info(f"📊 Executing UNLIMITED query: {request.query[:100]}...")
+        
+        # Execute query without any artificial limits
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read_with_graph, request.query, request.params or {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        result_data = json.loads(result)
+        
+        # Extract ALL graph data without limits
+        graph_data = None
+        try:
+            async with driver.session(database=NEO4J_DATABASE) as session:
+                viz_result = await session.execute_read(_read_for_viz, request.query, request.params or {})
+            
+            # Use unlimited extraction function
+            graph_data = extract_unlimited_graph_data(viz_result)
+            logger.info(f"🕸️ UNLIMITED graph extracted: {graph_data.get('total_nodes', 0)} nodes, {graph_data.get('total_relationships', 0)} relationships")
+            
+        except Exception as e:
+            logger.warning(f"Could not extract graph data for visualization: {e}")
+        
+        # Check if we have graph data
+        has_graph_data = graph_data and (graph_data.get('nodes') or graph_data.get('relationships'))
+        
+        response = {
+            "data": result_data,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2),
+                "query": request.query,
+                "record_count": len(result_data),
+                "has_graph_data": has_graph_data,
+                "node_limit": "UNLIMITED",
+                "unlimited_mode": True
+            },
+            "graph_data": graph_data if has_graph_data else None
+        }
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in unlimited read_neo4j_cypher: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/write_neo4j_cypher")
+async def write_neo4j_cypher_unlimited(request: CypherRequest):
+    """UNLIMITED write endpoint - no restrictions on returned data"""
+    try:
+        start_time = datetime.now()
+        
+        logger.info(f"✏️ Executing UNLIMITED write query: {request.query[:100]}...")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_write(_write, request.query, request.params or {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        # Format detailed change information
+        change_info = format_change_summary(result._summary.counters, request.query, execution_time)
+        
+        # Log the change
+        logger.info(f"Neo4j Write Operation: {change_info['summary']}")
+        
+        response = {
+            "result": "SUCCESS",
+            "change_info": change_info
+        }
+        
+        # If the write operation returns data (like MERGE or CREATE with RETURN), 
+        # extract ALL visualization data without limits
+        graph_data = None
+        try:
+            if "RETURN" in request.query.upper():
+                async with driver.session(database=NEO4J_DATABASE) as session:
+                    viz_result = await session.execute_read(_read_for_viz, request.query, request.params or {})
+                graph_data = extract_unlimited_graph_data(viz_result)
+                response["graph_data"] = graph_data
+        except Exception:
+            response["graph_data"] = None
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in unlimited write_neo4j_cypher: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/get_neo4j_schema")
+async def get_neo4j_schema():
+    """Get complete Neo4j schema without restrictions"""
+    get_schema_query = "CALL apoc.meta.schema();"
+    try:
+        start_time = datetime.now()
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, get_schema_query, {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        schema = json.loads(result)[0].get('value')
+        return {
+            "schema": schema,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2),
+                "unlimited_mode": True
+            },
+            "graph_data": None
+        }
+    except Exception as e:
+        logger.error(f"Error in get_neo4j_schema: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sample_graph")
+async def get_unlimited_sample_graph():
+    """Get a complete sample of the graph without any artificial limits"""
+    query = """
+    MATCH (n) 
+    OPTIONAL MATCH (n)-[r]-(m) 
+    RETURN n, r, m
+    """
     
-    # Compile and return
-    agent = workflow.compile()
-    logger.info("🚀 UNLIMITED LangGraph agent built successfully - NO NODE LIMITS")
-    return agent
+    try:
+        logger.info("🚀 Getting UNLIMITED sample graph...")
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read_for_viz, query, {})
+        
+        graph_data = extract_unlimited_graph_data(result)
+        
+        return {
+            "graph_data": graph_data,
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "node_limit": "UNLIMITED",
+            "unlimited_mode": True
+        }
+    except Exception as e:
+        logger.error(f"Error getting unlimited sample graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/graph_stats")
+async def get_unlimited_graph_stats():
+    """Get comprehensive graph statistics without any restrictions"""
+    stats_queries = [
+        ("total_nodes", "MATCH (n) RETURN count(n) as count"),
+        ("total_relationships", "MATCH ()-[r]->() RETURN count(r) as count"),
+        ("node_labels", "CALL db.labels() YIELD label RETURN collect(label) as labels"),
+        ("relationship_types", "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types"),
+        ("node_label_counts", "MATCH (n) RETURN labels(n)[0] as label, count(*) as count ORDER BY count DESC"),
+        ("relationship_type_counts", "MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC"),
+        ("connected_components", "MATCH (n) WHERE (n)--() RETURN count(DISTINCT n) as connected_nodes"),
+        ("isolated_nodes", "MATCH (n) WHERE NOT (n)--() RETURN count(n) as isolated"),
+        ("avg_degree", "MATCH (n) OPTIONAL MATCH (n)-[r]-() RETURN avg(count(r)) as avg_degree"),
+        ("max_degree", "MATCH (n) OPTIONAL MATCH (n)-[r]-() RETURN max(count(r)) as max_degree"),
+        ("database_size", "MATCH (n) OPTIONAL MATCH (n)-[r]-() RETURN count(n) as nodes, count(r) as relationships")
+    ]
+    
+    stats = {}
+    
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            for stat_name, query in stats_queries:
+                try:
+                    result = await session.execute_read(_read, query, {})
+                    data = json.loads(result)
+                    stats[stat_name] = data
+                except Exception as e:
+                    logger.warning(f"Could not get {stat_name}: {e}")
+                    stats[stat_name] = []
+        
+        return {
+            "stats": stats,
+            "timestamp": datetime.now().isoformat(),
+            "unlimited_support": True,
+            "artificial_limits": "NONE"
+        }
+    except Exception as e:
+        logger.error(f"Error getting unlimited graph stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/unlimited_display_info")
+async def get_unlimited_display_info():
+    """Get information about unlimited display capabilities"""
+    return {
+        "unlimited_display": True,
+        "artificial_limits": "NONE",
+        "features": [
+            "complete_graph_traversal",
+            "no_node_limits",
+            "no_relationship_limits", 
+            "full_data_extraction",
+            "unlimited_visualization",
+            "command_based_display"
+        ],
+        "description": "This server processes ALL data according to your queries without any artificial limits",
+        "performance_notes": [
+            "Large datasets may take longer to process",
+            "Browser may become slow with very large graphs (>10k nodes)",
+            "Consider using specific filters in your queries for better performance"
+        ],
+        "example_unlimited_queries": {
+            "all_nodes": "MATCH (n) RETURN n",
+            "complete_graph": "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m",
+            "all_relationships": "MATCH (a)-[r]->(b) RETURN a, r, b",
+            "specific_entity_complete": "MATCH (n:Person) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
+        }
+    }
+
+async def _read(tx: AsyncTransaction, query: str, params: dict):
+    """Execute read query and return ALL results"""
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return json.dumps([r.data() for r in records.records], default=str)
+
+async def _read_with_graph(tx: AsyncTransaction, query: str, params: dict):
+    """Execute read query that preserves ALL graph structure information"""
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return json.dumps([r.data() for r in records.records], default=str)
+
+async def _read_for_viz(tx: AsyncTransaction, query: str, params: dict):
+    """Execute read query specifically for UNLIMITED graph visualization"""
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return records.records  # Return ALL raw records for graph extraction
+
+async def _write(tx: AsyncTransaction, query: str, params: dict):
+    """Execute write query without restrictions"""
+    return await tx.run(query, params)
 
 if __name__ == "__main__":
-    agent = build_agent()
-    logger.info("🚀 Unlimited Neo4j Graph Agent ready - displays everything according to commands!")
+    import uvicorn
+    logger.info("🚀 Starting UNLIMITED Neo4j MCP Server...")
+    logger.info("🕸️ Features: UNLIMITED display, NO artificial limits, complete data extraction")
+    logger.info("⚠️ Performance: Large datasets will be processed completely - may take time")
+    uvicorn.run("unlimited_mcpserver:app", host="0.0.0.0", port=8000, reload=True)
