@@ -1,893 +1,500 @@
-import streamlit as st
-import streamlit.components.v1 as components
-from pyvis.network import Network
-import requests
-import json
-import os
-import tempfile
-from datetime import datetime
-import uuid
-import traceback
-import hashlib
-import colorsys
+# =============================================================================
+# BACKEND ENHANCEMENTS FOR UNLIMITED GRAPH DISPLAY
+# =============================================================================
 
-# Page configuration
-st.set_page_config(
-    page_title="Neo4j Graph Explorer - Browser Experience", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# 1. UPDATE mcpserver.py - Enhanced graph extraction for unlimited display
+# =============================================================================
 
-# Enhanced CSS with Neo4j Browser styling
-st.markdown("""
-<style>
-    .main .block-container {
-        padding-top: 1rem;
-        max-width: 100%;
-    }
+def extract_graph_data_unlimited(records, node_limit=None):
+    """
+    Extract nodes and relationships with unlimited display capability
+    Optimized for Neo4j Browser-like experience
+    """
+    nodes = {}
+    relationships = []
     
-    .neo4j-header {
-        background: linear-gradient(135deg, #008cc1 0%, #0056d6 100%);
-        color: white;
-        padding: 1rem 2rem;
-        border-radius: 10px;
-        text-align: center;
-        margin-bottom: 1rem;
-        box-shadow: 0 4px 12px rgba(0, 140, 193, 0.3);
-    }
+    # If no limit specified, process all data
+    effective_limit = node_limit if node_limit is not None else float('inf')
     
-    .schema-panel {
-        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-        border: 1px solid #008cc1;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
+    logger.info(f"🕸️ Processing graph data with limit: {'unlimited' if node_limit is None else node_limit}")
     
-    .node-type-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        margin: 2px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: bold;
-        color: white;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
+    # Process records and extract graph objects
+    for record in records:
+        for key, value in record.items():
+            # Handle nodes
+            if hasattr(value, 'labels'):  # It's a node
+                node_id = str(value.element_id)
+                if len(nodes) < effective_limit:
+                    # Enhanced property extraction
+                    properties = dict(value)
+                    
+                    # Ensure we have a meaningful display name
+                    if not any(prop in properties for prop in ['name', 'title', 'displayName']):
+                        # Create a meaningful name based on properties
+                        labels = list(value.labels)
+                        if labels:
+                            # Use first significant property or create from label
+                            significant_props = [k for k, v in properties.items() 
+                                               if isinstance(v, str) and len(str(v)) < 50]
+                            if significant_props:
+                                properties['name'] = f"{labels[0]}_{properties[significant_props[0]]}"
+                            else:
+                                properties['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                        else:
+                            properties['name'] = f"Node_{len(nodes) + 1}"
+                    
+                    nodes[node_id] = {
+                        'id': node_id,
+                        'labels': list(value.labels),
+                        'properties': properties,
+                        'degree': 0  # Will be calculated later
+                    }
+            
+            # Handle relationships
+            elif hasattr(value, 'type'):  # It's a relationship
+                start_node_id = str(value.start_node.element_id)
+                end_node_id = str(value.end_node.element_id)
+                
+                rel = {
+                    'id': str(value.element_id),
+                    'type': value.type,
+                    'startNode': start_node_id,
+                    'endNode': end_node_id,
+                    'properties': dict(value)
+                }
+                relationships.append(rel)
+                
+                # Add connected nodes if not already present and within limit
+                for node_ref, node_id_key in [(value.start_node, start_node_id), (value.end_node, end_node_id)]:
+                    if node_id_key not in nodes and len(nodes) < effective_limit:
+                        node_props = dict(node_ref)
+                        if not any(prop in node_props for prop in ['name', 'title', 'displayName']):
+                            labels = list(node_ref.labels)
+                            if labels:
+                                node_props['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                            else:
+                                node_props['name'] = f"Node_{len(nodes) + 1}"
+                        
+                        nodes[node_id_key] = {
+                            'id': node_id_key,
+                            'labels': list(node_ref.labels),
+                            'properties': node_props,
+                            'degree': 0
+                        }
+            
+            # Handle lists (might contain nodes/relationships)
+            elif isinstance(value, list):
+                for item in value:
+                    if hasattr(item, 'labels') and len(nodes) < effective_limit:  # Node in list
+                        node_id = str(item.element_id)
+                        if node_id not in nodes:
+                            item_props = dict(item)
+                            if not any(prop in item_props for prop in ['name', 'title', 'displayName']):
+                                labels = list(item.labels)
+                                if labels:
+                                    item_props['name'] = f"{labels[0]}_{len(nodes) + 1}"
+                                else:
+                                    item_props['name'] = f"Node_{len(nodes) + 1}"
+                            
+                            nodes[node_id] = {
+                                'id': node_id,
+                                'labels': list(item.labels),
+                                'properties': item_props,
+                                'degree': 0
+                            }
+                    elif hasattr(item, 'type'):  # Relationship in list
+                        rel = {
+                            'id': str(item.element_id),
+                            'type': item.type,
+                            'startNode': str(item.start_node.element_id),
+                            'endNode': str(item.end_node.element_id),
+                            'properties': dict(item)
+                        }
+                        relationships.append(rel)
     
-    .relationship-badge {
-        display: inline-block;
-        padding: 3px 10px;
-        margin: 2px;
-        border-radius: 15px;
-        font-size: 11px;
-        font-weight: 600;
-        color: white;
-        background: linear-gradient(45deg, #667eea, #764ba2);
-        box-shadow: 0 2px 4px rgba(0,0,0,0.15);
-    }
+    # Calculate node degrees for Neo4j Browser-like sizing
+    node_degrees = {}
+    visible_node_ids = set(nodes.keys())
     
-    .graph-controls {
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
-    }
-    
-    .schema-stats {
-        background: linear-gradient(135deg, #4CAF50, #45a049);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        text-align: center;
-    }
-    
-    .query-panel {
-        background: #f8f9fa;
-        border: 2px solid #008cc1;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
-    
-    .cypher-display {
-        background: #2d3748;
-        color: #68d391;
-        padding: 1rem;
-        border-radius: 8px;
-        font-family: 'Courier New', monospace;
-        font-size: 14px;
-        border-left: 4px solid #68d391;
-        margin: 0.5rem 0;
-    }
-    
-    .stButton button {
-        background: linear-gradient(45deg, #008cc1, #0056d6);
-        color: white;
-        border: none;
-        padding: 0.6rem 1.5rem;
-        border-radius: 25px;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 8px rgba(0, 140, 193, 0.3);
-    }
-    
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0, 140, 193, 0.4);
-        background: linear-gradient(45deg, #0056d6, #008cc1);
-    }
-    
-    .graph-wrapper {
-        border: 3px solid #008cc1;
-        border-radius: 15px;
-        overflow: hidden;
-        background: #ffffff;
-        box-shadow: 0 8px 32px rgba(0, 140, 193, 0.2);
-        margin: 1rem 0;
-    }
-    
-    .graph-header {
-        background: linear-gradient(90deg, #008cc1, #0056d6);
-        color: white;
-        padding: 12px 20px;
-        font-weight: bold;
-        font-size: 16px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state with Neo4j Browser-like features
-def init_session_state():
-    defaults = {
-        "conversation_history": [],
-        "graph_data": None,
-        "last_response": None,
-        "session_id": str(uuid.uuid4()),
-        "connection_status": "unknown",
-        "schema_info": None,
-        "node_types": [],
-        "relationship_types": [],
-        "graph_layout": "physics",
-        "show_labels": True,
-        "show_relationships": True,
-        "node_size_mode": "degree",
-        "color_scheme": "smart",
-        "unlimited_display": True,
-        "schema_loaded": False
-    }
-    
-    for key, default_value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default_value
-
-init_session_state()
-
-# Neo4j Browser-like header
-st.markdown('''
-<div class="neo4j-header">
-    <h1>🗄️ Neo4j Graph Explorer</h1>
-    <p><strong>Complete Schema Visualization</strong> • <strong>Unlimited Graph Display</strong> • <strong>Neo4j Browser Experience</strong></p>
-</div>
-''', unsafe_allow_html=True)
-
-def get_schema_information():
-    """Fetch complete schema information from the API"""
-    try:
-        response = requests.get("http://localhost:8020/schema/summary", timeout=10)
-        if response.ok:
-            return response.json()
-        return None
-    except Exception as e:
-        st.error(f"Schema fetch error: {str(e)}")
-        return None
-
-def generate_smart_colors(items, base_hue=0.6):
-    """Generate visually distinct colors for graph elements"""
-    colors = []
-    for i, item in enumerate(items):
-        # Use golden ratio for optimal color distribution
-        hue = (base_hue + i * 0.618033988749895) % 1
-        saturation = 0.7 + (i % 3) * 0.1  # Vary saturation
-        lightness = 0.5 + (i % 2) * 0.15   # Vary lightness
-        
-        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
-        hex_color = '#{:02x}{:02x}{:02x}'.format(
-            int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
-        )
-        colors.append(hex_color)
-    
-    return colors
-
-def get_neo4j_style_node_color(labels, node_types=None):
-    """Get Neo4j Browser-style colors for nodes"""
-    if not labels:
-        return "#BDC3C7"
-    
-    label = labels[0] if isinstance(labels, list) else str(labels)
-    
-    # Neo4j Browser inspired color palette
-    neo4j_colors = {
-        "Person": "#DA7194",       # Pink
-        "User": "#4C8EDA",         # Blue  
-        "Employee": "#DA7194",     # Pink
-        "Customer": "#F79767",     # Orange
-        "Movie": "#8DCC93",        # Green
-        "Film": "#8DCC93",         # Green
-        "Actor": "#F25A29",        # Red-Orange
-        "Director": "#A29BFE",     # Purple
-        "Producer": "#6C5CE7",     # Deep Purple
-        "Company": "#00B894",      # Teal
-        "Organization": "#00B894", # Teal
-        "Department": "#FDCB6E",   # Yellow
-        "Product": "#E84393",      # Magenta
-        "Service": "#00CEC9",      # Cyan
-        "Location": "#A29BFE",     # Purple
-        "City": "#6C5CE7",         # Deep Purple
-        "Country": "#5F27CD",      # Dark Purple
-        "Event": "#FF7675",        # Light Red
-        "Project": "#74B9FF",      # Light Blue
-        "Database": "#00B894",     # Teal
-        "Server": "#636E72",       # Gray
-        "Network": "#2D3436",      # Dark Gray
-        "Group": "#00CEC9",        # Cyan
-        "Team": "#74B9FF",         # Light Blue
-        "Document": "#DDD",        # Light Gray
-        "File": "#B2BEC3",         # Gray
-        "Category": "#FDCB6E",     # Yellow
-        "Tag": "#A29BFE"           # Purple
-    }
-    
-    return neo4j_colors.get(label, "#95A5A6")
-
-def get_neo4j_style_relationship_color(rel_type):
-    """Get Neo4j Browser-style colors for relationships"""
-    colors = {
-        "KNOWS": "#DA7194",        # Pink
-        "FRIEND_OF": "#DA7194",    # Pink
-        "WORKS_FOR": "#4C8EDA",    # Blue
-        "WORKS_IN": "#4C8EDA",     # Blue
-        "MANAGES": "#6C5CE7",      # Purple
-        "REPORTS_TO": "#A29BFE",   # Light Purple
-        "LOCATED_IN": "#F79767",   # Orange
-        "LIVES_IN": "#F79767",     # Orange
-        "BELONGS_TO": "#8DCC93",   # Green
-        "OWNS": "#00B894",         # Teal
-        "CREATED": "#FDCB6E",      # Yellow
-        "USES": "#E84393",         # Magenta
-        "ACTED_IN": "#8DCC93",     # Green
-        "DIRECTED": "#6C5CE7",     # Purple
-        "PRODUCED": "#00CEC9",     # Cyan
-        "LOVES": "#E84393",        # Magenta
-        "MARRIED_TO": "#DA7194",   # Pink
-        "CONNECTED": "#95A5A6",    # Gray
-        "RELATED": "#95A5A6"       # Gray
-    }
-    
-    return colors.get(rel_type, "#95A5A6")
-
-def create_neo4j_browser_like_graph(graph_data: dict, unlimited_display: bool = True) -> bool:
-    """Create a Neo4j Browser-like graph visualization with unlimited display capability"""
-    
-    if not graph_data:
-        st.info("🔍 No graph data available for visualization.")
-        return False
-    
-    try:
-        nodes = graph_data.get("nodes", [])
-        relationships = graph_data.get("relationships", [])
-        
-        if not nodes:
-            st.info("📊 No nodes found in the current dataset.")
-            return False
-        
-        # Show comprehensive statistics
-        total_nodes = len(nodes)
-        total_relationships = len(relationships)
-        
-        st.markdown(f'''
-        <div class="schema-stats">
-            <h3>🕸️ Complete Graph Visualization</h3>
-            <p><strong>{total_nodes:,} Nodes</strong> • <strong>{total_relationships:,} Relationships</strong> • <strong>Unlimited Display</strong></p>
-        </div>
-        ''', unsafe_allow_html=True)
-        
-        # Create Neo4j-style network with enhanced settings
-        net = Network(
-            height="800px",  # Taller for better view
-            width="100%", 
-            bgcolor="#FFFFFF",
-            font_color="#2C3E50",
-            directed=True,
-            select_menu=False,  # Disable selection menu for cleaner look
-            filter_menu=False   # Disable filter menu
-        )
-        
-        # Process all nodes without artificial limits
-        added_nodes = set()
-        node_stats = {}
-        
-        st.info(f"🎨 Processing {total_nodes:,} nodes for Neo4j Browser-like visualization...")
-        
-        # Calculate node degrees for sizing
-        node_degrees = {}
-        for rel in relationships:
-            start_id = str(rel.get("startNode", ""))
-            end_id = str(rel.get("endNode", ""))
+    for rel in relationships:
+        start_id = rel['startNode']
+        end_id = rel['endNode']
+        if start_id in visible_node_ids and end_id in visible_node_ids:
             node_degrees[start_id] = node_degrees.get(start_id, 0) + 1
             node_degrees[end_id] = node_degrees.get(end_id, 0) + 1
-        
-        for i, node in enumerate(nodes):
-            try:
-                node_id = f"node_{i}"
-                raw_id = str(node.get("id", f"node_{i}"))
-                
-                # Extract display information
-                display_name = safe_extract_node_name(node)
-                labels = node.get("labels", ["Unknown"])
-                primary_label = labels[0] if labels else "Unknown"
-                
-                # Track node types for statistics
-                node_stats[primary_label] = node_stats.get(primary_label, 0) + 1
-                
-                # Neo4j Browser-style sizing based on connectivity
-                base_size = 25
-                degree = node_degrees.get(raw_id, 0)
-                if degree > 10:
-                    size = base_size + 20  # Hub nodes
-                elif degree > 5:
-                    size = base_size + 10  # Well-connected nodes
-                elif degree > 2:
-                    size = base_size + 5   # Connected nodes
-                else:
-                    size = base_size       # Regular nodes
-                
-                # Neo4j Browser-style colors
-                color = get_neo4j_style_node_color(labels)
-                
-                # Enhanced tooltip with comprehensive information
-                props = node.get("properties", {})
-                tooltip_parts = [
-                    f"🏷️ Type: {primary_label}",
-                    f"📛 Name: {display_name}",
-                    f"🔗 Connections: {degree}"
-                ]
-                
-                # Add key properties
-                prop_count = 0
-                for key, value in props.items():
-                    if key not in ['name', 'title', 'displayName'] and prop_count < 5:
-                        tooltip_parts.append(f"📝 {key}: {str(value)[:50]}...")
-                        prop_count += 1
-                
-                if len(props) > prop_count + 3:
-                    tooltip_parts.append(f"📋 +{len(props) - prop_count - 3} more properties")
-                
-                tooltip = "\\n".join(tooltip_parts)
-                
-                # Add node with Neo4j Browser styling
-                net.add_node(
-                    node_id,
-                    label=display_name,
-                    color={
-                        'background': color,
-                        'border': '#2C3E50',
-                        'highlight': {
-                            'background': color,
-                            'border': '#E74C3C'
-                        },
-                        'hover': {
-                            'background': color,
-                            'border': '#F39C12'
-                        }
-                    },
-                    size=size,
-                    title=tooltip,
-                    font={
-                        'size': max(14, min(20, 12 + degree // 2)),  # Dynamic font size
-                        'color': '#FFFFFF',
-                        'face': 'Arial',
-                        'strokeWidth': 2,
-                        'strokeColor': '#2C3E50'
-                    },
-                    borderWidth=2,
-                    borderWidthSelected=4,
-                    shadow={
-                        'enabled': True,
-                        'color': 'rgba(0,0,0,0.3)',
-                        'size': 8,
-                        'x': 2,
-                        'y': 2
-                    },
-                    margin={
-                        'top': 8,
-                        'bottom': 8,
-                        'left': 8,
-                        'right': 8
-                    }
-                )
-                
-                added_nodes.add((raw_id, node_id))
-                
-            except Exception as e:
-                st.warning(f"⚠️ Skipped node {i}: {str(e)}")
-                continue
-        
-        # Process all relationships without limits
-        id_mapping = dict(added_nodes)
-        simple_nodes = {node_id for _, node_id in added_nodes}
-        
-        added_edges = 0
-        relationship_stats = {}
-        
-        for i, rel in enumerate(relationships):
-            try:
-                start_raw = str(rel.get("startNode", ""))
-                end_raw = str(rel.get("endNode", ""))
-                rel_type = str(rel.get("type", "CONNECTED"))
-                
-                # Track relationship types
-                relationship_stats[rel_type] = relationship_stats.get(rel_type, 0) + 1
-                
-                start_id = id_mapping.get(start_raw)
-                end_id = id_mapping.get(end_raw)
-                
-                if start_id and end_id and start_id in simple_nodes and end_id in simple_nodes:
-                    color = get_neo4j_style_relationship_color(rel_type)
-                    
-                    # Enhanced relationship properties
-                    rel_props = rel.get("properties", {})
-                    rel_tooltip_parts = [f"Type: {rel_type}"]
-                    for key, value in list(rel_props.items())[:3]:
-                        rel_tooltip_parts.append(f"{key}: {str(value)[:30]}")
-                    rel_tooltip = "\\n".join(rel_tooltip_parts)
-                    
-                    # Add relationship with Neo4j Browser styling
-                    net.add_edge(
-                        start_id,
-                        end_id,
-                        label=rel_type,
-                        color={
-                            'color': color,
-                            'highlight': '#E74C3C',
-                            'hover': '#F39C12'
-                        },
-                        width=3,
-                        title=rel_tooltip,
-                        font={
-                            'size': 12,
-                            'color': '#2C3E50',
-                            'face': 'Arial',
-                            'strokeWidth': 2,
-                            'strokeColor': '#FFFFFF',
-                            'align': 'middle'
-                        },
-                        arrows={
-                            'to': {
-                                'enabled': True,
-                                'scaleFactor': 1.0,
-                                'type': 'arrow'
-                            }
-                        },
-                        smooth={
-                            'enabled': True,
-                            'type': 'dynamic',
-                            'roundness': 0.2
-                        },
-                        shadow={
-                            'enabled': True,
-                            'color': 'rgba(0,0,0,0.1)',
-                            'size': 4,
-                            'x': 1,
-                            'y': 1
-                        }
-                    )
-                    
-                    added_edges += 1
-                    
-            except Exception as e:
-                st.warning(f"⚠️ Skipped relationship {i}: {str(e)}")
-                continue
-        
-        # Neo4j Browser-like physics configuration for stability
-        net.set_options("""
-        var options = {
-          "configure": {
-            "enabled": false
-          },
-          "edges": {
-            "color": {
-              "inherit": false
-            },
-            "smooth": {
-              "enabled": true,
-              "type": "dynamic",
-              "roundness": 0.2
-            }
-          },
-          "physics": {
-            "enabled": true,
-            "stabilization": {
-              "enabled": true,
-              "iterations": 200,
-              "updateInterval": 25,
-              "onlyDynamicEdges": false,
-              "fit": true
-            },
-            "barnesHut": {
-              "theta": 0.5,
-              "gravitationalConstant": -8000,
-              "centralGravity": 0.3,
-              "springLength": 120,
-              "springConstant": 0.04,
-              "damping": 0.09,
-              "avoidOverlap": 0.1
-            },
-            "maxVelocity": 50,
-            "minVelocity": 0.75,
-            "timestep": 0.5
-          },
-          "interaction": {
-            "hover": true,
-            "hoverConnectedEdges": true,
-            "selectConnectedEdges": false,
-            "tooltipDelay": 200,
-            "zoomView": true,
-            "dragView": true
-          },
-          "layout": {
-            "improvedLayout": true,
-            "clusterThreshold": 150,
-            "hierarchical": false
-          }
-        }
-        """)
-        
-        st.success(f"✅ **Neo4j Browser-Like Graph Created:** {len(simple_nodes):,} nodes, {added_edges:,} relationships")
-        
-        # Display statistics
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 📊 Node Type Distribution")
-            for node_type, count in sorted(node_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
-                color = get_neo4j_style_node_color([node_type])
-                st.markdown(f'''
-                <div class="node-type-badge" style="background-color: {color};">
-                    {node_type}: {count:,}
-                </div>
-                ''', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown("### 🔗 Relationship Type Distribution")
-            for rel_type, count in sorted(relationship_stats.items(), key=lambda x: x[1], reverse=True)[:10]:
-                st.markdown(f'''
-                <div class="relationship-badge">
-                    {rel_type}: {count:,}
-                </div>
-                ''', unsafe_allow_html=True)
-        
-        # Generate and display the graph
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
-            net.save_graph(f.name)
-            html_file = f.name
-        
-        with open(html_file, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-        
-        # Neo4j Browser-like wrapper with enhanced styling
-        wrapped_html = f"""
-        <div class="graph-wrapper">
-            <div class="graph-header">
-                <span>🕸️ Complete Neo4j Graph Visualization</span>
-                <span>{len(simple_nodes):,} Nodes • {added_edges:,} Relationships • Unlimited Display</span>
-            </div>
-            <div style="position: relative;">
-                {html_content}
-            </div>
-        </div>
-        """
-        
-        # Display with increased height for better viewing
-        components.html(wrapped_html, height=850, scrolling=False)
-        
-        # Cleanup
-        try:
-            os.unlink(html_file)
-        except:
-            pass
-        
-        return True
-        
-    except Exception as e:
-        st.error(f"❌ Neo4j Browser-like graph rendering failed: {str(e)}")
-        
-        with st.expander("🔍 Debug Information"):
-            st.code(str(e))
-            st.code(traceback.format_exc())
-        
-        return False
-
-def safe_extract_node_name(node):
-    """Safely extract display name from node"""
-    try:
-        props = node.get("properties", {})
-        labels = node.get("labels", ["Unknown"])
-        node_id = str(node.get("id", ""))
-        
-        # Try different name properties
-        name_options = [
-            props.get("name"),
-            props.get("title"), 
-            props.get("displayName"),
-            props.get("username"),
-            props.get("fullName"),
-            props.get("firstName")
-        ]
-        
-        for name in name_options:
-            if name and str(name).strip():
-                return str(name).strip()[:30]
-        
-        # Fallback to label + ID
-        if labels and labels[0] != "Unknown":
-            short_id = node_id.split(":")[-1][-4:] if ":" in node_id else node_id[-4:]
-            return f"{labels[0]}_{short_id}"
-        
-        return f"Node_{node_id[-6:] if len(node_id) > 6 else node_id}"
-        
-    except Exception as e:
-        return f"Node_{hash(str(node)) % 10000}"
-
-def call_agent_api(question: str, node_limit: int = None) -> dict:
-    """Enhanced API call with unlimited support"""
-    try:
-        api_url = "http://localhost:8020/chat"
-        
-        # Use very high limit for unlimited display
-        effective_limit = node_limit if node_limit else 50000
-        
-        payload = {
-            "question": question,
-            "session_id": st.session_state.session_id,
-            "node_limit": effective_limit
-        }
-        
-        with st.spinner("🤖 Processing with unlimited graph capability..."):
-            response = requests.post(api_url, json=payload, timeout=120)  # Longer timeout
-            response.raise_for_status()
-            result = response.json()
-            
-            st.session_state.connection_status = "connected"
-            return result
-            
-    except requests.exceptions.ConnectionError:
-        st.session_state.connection_status = "disconnected"
-        st.error("❌ Cannot connect to agent API. Please ensure the server is running on port 8020.")
-        return None
-    except Exception as e:
-        st.error(f"❌ API Error: {str(e)}")
-        return None
-
-# Main layout
-col1, col2 = st.columns([1, 3], gap="large")
-
-with col1:
-    st.markdown("### 🎛️ Neo4j Browser Controls")
     
-    # Connection status
-    status_colors = {"connected": "🟢", "disconnected": "🔴", "unknown": "⚪"}
-    st.markdown(f'''
-    <div class="schema-panel">
-        <strong>Connection Status:</strong> {status_colors.get(st.session_state.connection_status, "⚪")} {st.session_state.connection_status}
-    </div>
-    ''', unsafe_allow_html=True)
+    # Update node degrees
+    for node_id, node_data in nodes.items():
+        node_data['degree'] = node_degrees.get(node_id, 0)
     
-    # Schema information panel
-    st.markdown("#### 📊 Database Schema")
-    schema_info = get_schema_information()
-    
-    if schema_info and schema_info.get("status") == "success":
-        schema_data = schema_info.get("schema_info", {})
-        
-        st.markdown(f'''
-        <div class="schema-panel">
-            <h4>🧠 Schema Intelligence</h4>
-            <p><strong>Node Types:</strong> {schema_data.get("node_types", 0)}</p>
-            <p><strong>Relationship Types:</strong> {schema_data.get("relationship_types", 0)}</p>
-            <p><strong>Properties:</strong> {schema_data.get("property_keys", 0)}</p>
-            <p><strong>Status:</strong> ✅ Schema-Aware</p>
-        </div>
-        ''', unsafe_allow_html=True)
-        
-        st.session_state.schema_loaded = True
-        
-        if st.button("🔄 Refresh Schema", use_container_width=True):
-            try:
-                refresh_response = requests.post("http://localhost:8020/schema/refresh", timeout=30)
-                if refresh_response.ok:
-                    st.success("✅ Schema refreshed successfully!")
-                    st.rerun()
-                else:
-                    st.error("❌ Failed to refresh schema")
-            except Exception as e:
-                st.error(f"❌ Schema refresh error: {str(e)}")
-    else:
-        st.warning("⚠️ Schema information not available")
-    
-    st.divider()
-    
-    # Neo4j Browser-like query suggestions
-    st.markdown("#### 💡 Neo4j Browser-Style Queries")
-    st.info("✨ **Unlimited Display** - Show complete graphs without artificial limits")
-    
-    neo4j_queries = [
-        ("Complete Graph", "Show me the entire graph structure"),
-        ("Schema Overview", "Display the complete database schema"),
-        ("All Node Types", "Show me all different types of nodes"),
-        ("All Relationships", "Display all relationship types"),
-        ("Connected Components", "Find all connected components"),
-        ("Hub Nodes", "Show me the most connected nodes"),
-        ("Network Paths", "Display network paths and connections"),
-        ("Graph Statistics", "Show me comprehensive graph statistics")
+    # Filter relationships to only include those between visible nodes
+    filtered_relationships = [
+        rel for rel in relationships 
+        if rel['startNode'] in visible_node_ids and rel['endNode'] in visible_node_ids
     ]
     
-    for i, (name, query) in enumerate(neo4j_queries):
-        if st.button(f"🔍 {name}", key=f"neo4j_query_{i}", use_container_width=True):
-            result = call_agent_api(query)
-            if result:
-                if result.get("graph_data"):
-                    st.session_state.graph_data = result["graph_data"]
-                st.session_state.last_response = result
-                st.rerun()
+    # Enhanced statistics
+    node_type_stats = {}
+    relationship_type_stats = {}
     
-    st.divider()
+    for node in nodes.values():
+        labels = node.get('labels', ['Unknown'])
+        primary_label = labels[0] if labels else 'Unknown'
+        node_type_stats[primary_label] = node_type_stats.get(primary_label, 0) + 1
     
-    # Custom query input
-    st.markdown("#### ✍️ Custom Cypher Query")
+    for rel in filtered_relationships:
+        rel_type = rel.get('type', 'Unknown')
+        relationship_type_stats[rel_type] = relationship_type_stats.get(rel_type, 0) + 1
     
-    with st.form("neo4j_query_form"):
-        user_question = st.text_area(
-            "Ask anything about your graph:",
-            placeholder="e.g., Show me all nodes connected to Person nodes through any relationship",
-            height=100
-        )
-        
-        unlimited_mode = st.checkbox(
-            "🚀 Unlimited Display Mode", 
-            value=True,
-            help="Remove all limits and show the complete graph structure"
-        )
-        
-        submit_button = st.form_submit_button("🚀 Execute Query", use_container_width=True)
+    logger.info(f"✅ Graph extraction complete: {len(nodes)} nodes, {len(filtered_relationships)} relationships")
     
-    if submit_button and user_question.strip():
-        node_limit = None if unlimited_mode else 1000
-        result = call_agent_api(user_question.strip(), node_limit)
-        
-        if result:
-            if result.get("graph_data"):
-                st.session_state.graph_data = result["graph_data"]
-            st.session_state.last_response = result
-            st.success("✅ Query executed with unlimited display capability!")
-            st.rerun()
-    
-    st.divider()
-    
-    # Graph controls
-    st.markdown("#### 🎨 Visualization Controls")
-    
-    if st.button("🕸️ Load Complete Schema Graph", use_container_width=True):
-        result = call_agent_api("Show me the complete database structure with all nodes and relationships")
-        if result:
-            if result.get("graph_data"):
-                st.session_state.graph_data = result["graph_data"]
-            st.session_state.last_response = result
-            st.rerun()
-    
-    if st.button("📊 Load Sample Network", use_container_width=True):
-        result = call_agent_api("Show me a comprehensive sample of the network structure")
-        if result:
-            if result.get("graph_data"):
-                st.session_state.graph_data = result["graph_data"]
-            st.session_state.last_response = result
-            st.rerun()
-    
-    if st.button("🗑️ Clear Graph", use_container_width=True):
-        st.session_state.graph_data = None
-        st.session_state.last_response = None
-        st.success("🧹 Graph cleared!")
-        st.rerun()
+    return {
+        'nodes': list(nodes.values()),
+        'relationships': filtered_relationships,
+        'total_nodes': len(nodes),
+        'total_relationships': len(filtered_relationships),
+        'limited': len(nodes) >= effective_limit if effective_limit != float('inf') else False,
+        'node_type_stats': node_type_stats,
+        'relationship_type_stats': relationship_type_stats,
+        'max_degree': max(node_degrees.values()) if node_degrees else 0,
+        'avg_degree': sum(node_degrees.values()) / len(node_degrees) if node_degrees else 0
+    }
 
-with col2:
-    st.markdown("### 🕸️ Neo4j Browser-Like Visualization")
-    
-    # Show last response if available
-    if st.session_state.last_response:
-        answer = st.session_state.last_response.get("answer", "")
-        if answer:
-            st.markdown(f'''
-            <div class="query-panel">
-                <h4>🤖 Query Response</h4>
-                <p>{answer}</p>
-            </div>
-            ''', unsafe_allow_html=True)
+# 2. UPDATE mcpserver.py - Enhanced read endpoint
+# =============================================================================
+
+@app.post("/read_neo4j_cypher")
+async def read_neo4j_cypher_unlimited(request: CypherRequest):
+    """Enhanced read endpoint with unlimited display support"""
+    try:
+        start_time = datetime.now()
         
-        # Show executed query
-        query = st.session_state.last_response.get("query", "")
-        if query:
-            st.markdown(f'''
-            <div class="cypher-display">
-                <strong>Executed Cypher Query:</strong><br>
-                {query}
-            </div>
-            ''', unsafe_allow_html=True)
-    
-    # Render the graph
-    if st.session_state.graph_data:
-        success = create_neo4j_browser_like_graph(
-            st.session_state.graph_data, 
-            unlimited_display=True
-        )
+        # Support unlimited display by accepting None as node_limit
+        node_limit = request.node_limit
+        if node_limit == 0 or node_limit == -1:  # Special values for unlimited
+            node_limit = None
         
-        if success:
-            nodes_count = len(st.session_state.graph_data.get("nodes", []))
-            rels_count = len(st.session_state.graph_data.get("relationships", []))
+        logger.info(f"📊 Executing query with limit: {'unlimited' if node_limit is None else node_limit}")
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read_with_graph, request.query, request.params or {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        result_data = json.loads(result)
+        
+        # Extract graph data with unlimited capability
+        graph_data = None
+        try:
+            async with driver.session(database=NEO4J_DATABASE) as session:
+                viz_result = await session.execute_read(_read_for_viz, request.query, request.params or {})
             
-            st.markdown(f'''
-            <div class="schema-stats">
-                🎉 <strong>Success!</strong> Neo4j Browser-like visualization created with {nodes_count:,} nodes and {rels_count:,} relationships!
-                <br><strong>✨ Unlimited Display Mode Active</strong> - Complete graph structure shown
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.error("❌ Graph rendering failed. Check the debug information above.")
-    
-    else:
-        # Welcome screen with Neo4j styling
-        st.markdown("""
-        <div style="text-align: center; padding: 4rem; background: linear-gradient(135deg, #008cc1 0%, #0056d6 100%); color: white; border-radius: 15px; margin: 2rem 0; box-shadow: 0 8px 32px rgba(0, 140, 193, 0.3);">
-            <h2>🗄️ Neo4j Browser Experience</h2>
-            <p><strong>Complete Schema Visualization • Unlimited Graph Display • Enhanced Stability</strong></p>
-        </div>
-        """, unsafe_allow_html=True)
+            # Use unlimited extraction function
+            graph_data = extract_graph_data_unlimited(viz_result, node_limit)
+            logger.info(f"🕸️ Graph extracted: {graph_data.get('total_nodes', 0)} nodes, {graph_data.get('total_relationships', 0)} relationships")
+            
+        except Exception as e:
+            logger.warning(f"Could not extract graph data for visualization: {e}")
         
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); color: #2c3e50; padding: 2rem; border-radius: 15px; margin: 1rem 0; border: 2px solid #008cc1;">
-            <h3 style="text-align: center; margin-top: 0; color: #008cc1;">🚀 Enhanced Features:</h3>
-            <div style="text-align: left;">
-                <p>🕸️ <strong>Unlimited Display</strong> - Show complete graphs without artificial limits</p>
-                <p>🎨 <strong>Neo4j Browser Styling</strong> - Authentic Neo4j look and feel</p>
-                <p>🧠 <strong>Schema Intelligence</strong> - Uses complete database schema for optimization</p>
-                <p>⚡ <strong>Enhanced Stability</strong> - Improved physics and layout algorithms</p>
-                <p>🔗 <strong>Smart Connectivity</strong> - Better relationship visualization and clustering</p>
-                <p>📊 <strong>Real-time Statistics</strong> - Live node and relationship type distribution</p>
-                <p>🎯 <strong>Intelligent Sizing</strong> - Node sizes based on connectivity (hub detection)</p>
-                <p>🌈 <strong>Smart Colors</strong> - Neo4j-inspired color palette for optimal distinction</p>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Check if we have graph data
+        has_graph_data = graph_data and (graph_data.get('nodes') or graph_data.get('relationships'))
+        
+        response = {
+            "data": result_data,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2),
+                "query": request.query,
+                "record_count": len(result_data),
+                "has_graph_data": has_graph_data,
+                "node_limit": "unlimited" if node_limit is None else node_limit,
+                "unlimited_mode": node_limit is None
+            },
+            "graph_data": graph_data if has_graph_data else None
+        }
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in read_neo4j_cypher_unlimited: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Enhanced footer
-st.markdown("---")
-st.markdown("""
-<div style="
-    text-align: center; 
-    color: #6c757d; 
-    padding: 1.5rem;
-    background: linear-gradient(90deg, rgba(0, 140, 193, 0.1), rgba(0, 86, 214, 0.1));
-    border-radius: 15px;
-    margin-top: 2rem;
-    border: 1px solid #008cc1;
-">
-    <h4 style="margin: 0; background: linear-gradient(90deg, #008cc1, #0056d6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-        🗄️ Neo4j Graph Explorer - Browser Experience
-    </h4>
-    <p style="margin: 0.5rem 0;">🕸️ Unlimited Display • 🧠 Schema Intelligence • 🎨 Neo4j Styling • ⚡ Enhanced Performance</p>
-</div>
-""", unsafe_allow_html=True)
+# 3. UPDATE langgraph_agent.py - Enhanced system message for unlimited display
+# =============================================================================
+
+def create_unlimited_display_system_message() -> str:
+    """Enhanced system message for unlimited graph display"""
+    
+    schema_info = schema_manager.get_schema_for_query_generation()
+    schema_summary = schema_manager.schema_summary or "Schema summary not available"
+    
+    system_message = f"""You are a Neo4j database expert with UNLIMITED GRAPH DISPLAY capability and complete schema knowledge.
+
+🎯 **ACTUAL DATABASE SCHEMA:**
+{schema_info}
+
+**UNLIMITED DISPLAY MODE:**
+✅ NO artificial node limits - show complete graphs
+✅ Use unlimited queries for comprehensive visualization  
+✅ Generate queries that reveal the entire graph structure
+✅ Focus on complete network topology and connectivity
+
+**ENHANCED QUERY EXAMPLES FOR UNLIMITED DISPLAY:**
+
+User: "Show me the entire graph structure"
+Tool: read_neo4j_cypher
+Query: MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
+
+User: "Display complete database schema"
+Tool: get_neo4j_schema
+
+User: "Show all nodes and their connections"
+Tool: read_neo4j_cypher
+Query: MATCH (n)-[r]-(m) RETURN n, r, m UNION MATCH (isolated) WHERE NOT (isolated)--() RETURN isolated, null, null
+
+User: "Find the complete network structure"
+Tool: read_neo4j_cypher
+Query: MATCH path = (a)-[*1..3]-(b) RETURN path
+
+User: "Show me all connected components"
+Tool: read_neo4j_cypher
+Query: MATCH (n) OPTIONAL MATCH (n)-[r*1..10]-(connected) RETURN n, collect(DISTINCT connected) as component
+
+User: "Display the entire relationship network"
+Tool: read_neo4j_cypher
+Query: MATCH (a)-[r]->(b) RETURN a, r, b
+
+**UNLIMITED DISPLAY RULES:**
+- Remove all LIMIT clauses unless specifically requested
+- Use comprehensive MATCH patterns that capture entire graph
+- Include isolated nodes in results
+- Generate queries that show complete connectivity
+- Focus on revealing the full graph topology
+
+**CURRENT SCHEMA:**
+{schema_summary}
+
+Generate queries that show the COMPLETE graph structure without artificial limitations."""
+    
+    return system_message
+
+# 4. UPDATE app.py - Enhanced chat endpoint for unlimited support
+# =============================================================================
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_unlimited(request: ChatRequest):
+    """Enhanced chat endpoint with unlimited display support"""
+    if agent is None:
+        logger.error("Agent not initialized")
+        raise HTTPException(status_code=500, detail="Agent not initialized")
+    
+    session_id = request.session_id or str(uuid.uuid4())
+    
+    # Support unlimited display
+    node_limit = request.node_limit
+    if node_limit >= 50000:  # Treat very high limits as unlimited
+        node_limit = None
+        unlimited_mode = True
+    else:
+        unlimited_mode = False
+    
+    logger.info(f"🧠 Processing {'unlimited' if unlimited_mode else 'limited'} chat request...")
+    logger.info(f"📊 Question: {request.question[:100]} (Limit: {'unlimited' if unlimited_mode else node_limit})")
+    
+    start_time = datetime.now()
+    
+    try:
+        # Create appropriate state for unlimited display
+        if SCHEMA_AWARE:
+            state = SchemaAwareAgentState(
+                question=request.question,
+                session_id=session_id,
+                node_limit=node_limit if not unlimited_mode else 100000  # Use high number for unlimited
+            )
+        else:
+            state = AgentState(
+                question=request.question,
+                session_id=session_id,
+                node_limit=node_limit if not unlimited_mode else 100000
+            )
+        
+        # Run the agent with unlimited capability
+        logger.info(f"🔄 Running agent with {'unlimited' if unlimited_mode else 'limited'} display mode...")
+        result = await agent.ainvoke(state)
+        
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds() * 1000
+        
+        logger.info(f"✅ Agent completed - Tool: {result.get('tool')}")
+        logger.info(f"📈 Execution time: {execution_time:.2f}ms")
+        
+        # Enhanced graph data handling for unlimited display
+        has_graph_data = result.get('graph_data') and result.get('graph_data', {}).get('nodes')
+        if has_graph_data:
+            node_count = len(result['graph_data']['nodes'])
+            rel_count = len(result['graph_data'].get('relationships', []))
+            logger.info(f"🕸️ {'Unlimited' if unlimited_mode else 'Limited'} graph data: {node_count} nodes, {rel_count} relationships")
+        
+        # Enhanced response
+        response = ChatResponse(
+            trace=result.get("trace", ""),
+            tool=result.get("tool", ""),
+            query=result.get("query", ""),
+            answer=result.get("answer", ""),
+            graph_data=result.get("graph_data") if result.get("graph_data") else None,
+            session_id=session_id,
+            timestamp=datetime.now().isoformat(),
+            node_limit=request.node_limit,  # Return original request limit
+            execution_time_ms=execution_time,
+            success=True,
+            schema_aware=SCHEMA_AWARE
+        )
+        
+        return response
+        
+    except Exception as e:
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds() * 1000
+        
+        logger.error(f"❌ Chat request failed: {str(e)}")
+        
+        error_response = ChatResponse(
+            trace=f"Error in {'unlimited' if unlimited_mode else 'limited'} mode: {str(e)}",
+            tool="",
+            query="",
+            answer=f"❌ Error in {'unlimited' if unlimited_mode else 'limited'} display mode: {str(e)}",
+            graph_data=None,
+            session_id=session_id,
+            timestamp=datetime.now().isoformat(),
+            node_limit=request.node_limit,
+            execution_time_ms=execution_time,
+            success=False,
+            error=str(e),
+            schema_aware=SCHEMA_AWARE
+        )
+        
+        return error_response
+
+# 5. ENHANCED QUERY OPTIMIZATION FOR UNLIMITED DISPLAY
+# =============================================================================
+
+def optimize_query_for_unlimited_visualization(query: str, unlimited_mode: bool = False) -> str:
+    """Enhanced query optimization for unlimited display"""
+    query = query.strip()
+    
+    if unlimited_mode:
+        # Remove artificial limits for unlimited display
+        query = re.sub(r'\s+LIMIT\s+\d+', '', query, flags=re.IGNORECASE)
+        
+        # Enhance queries for better unlimited visualization
+        if "MATCH (n)" in query.upper() and "RETURN n" in query.upper():
+            # Add relationship context for better visualization
+            if "OPTIONAL MATCH" not in query.upper():
+                query = query.replace("RETURN n", "OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m")
+        
+        logger.info(f"🚀 Optimized query for unlimited display: {query[:100]}...")
+        
+    else:
+        # Apply reasonable limits for standard display
+        if ("MATCH" in query.upper() and 
+            "LIMIT" not in query.upper() and 
+            "count(" not in query.lower() and
+            "COUNT(" not in query):
+            
+            if "RETURN" in query.upper():
+                query += " LIMIT 50"
+    
+    return query
+
+# 6. PERFORMANCE OPTIMIZATIONS FOR UNLIMITED DISPLAY
+# =============================================================================
+
+# Enhanced database configuration for unlimited display
+UNLIMITED_DISPLAY_CONFIG = {
+    "max_query_timeout": 300,  # 5 minutes for complex unlimited queries
+    "memory_optimization": True,
+    "streaming_results": True,
+    "batch_processing": True,
+    "neo4j_page_cache": "2G",  # Increase page cache for large graphs
+    "neo4j_heap_size": "4G"    # Increase heap for complex queries
+}
+
+def get_unlimited_display_queries():
+    """Pre-optimized queries for unlimited display scenarios"""
+    
+    return {
+        "complete_graph": """
+            MATCH (n) 
+            OPTIONAL MATCH (n)-[r]-(m) 
+            RETURN n, r, m
+        """,
+        
+        "all_connections": """
+            MATCH (a)-[r]->(b) 
+            RETURN a, r, b 
+            UNION 
+            MATCH (isolated) 
+            WHERE NOT (isolated)--() 
+            RETURN isolated, null as r, null as b
+        """,
+        
+        "complete_network_paths": """
+            MATCH path = (a)-[*1..3]-(b) 
+            WHERE a <> b 
+            RETURN path
+        """,
+        
+        "schema_visualization": """
+            MATCH (n)-[r]-(m) 
+            RETURN DISTINCT labels(n) as StartLabels, type(r) as RelType, labels(m) as EndLabels
+            UNION
+            MATCH (isolated) 
+            WHERE NOT (isolated)--() 
+            RETURN DISTINCT labels(isolated) as StartLabels, null as RelType, null as EndLabels
+        """,
+        
+        "connected_components": """
+            MATCH (n) 
+            OPTIONAL MATCH path = (n)-[*1..10]-(connected) 
+            RETURN n, collect(DISTINCT connected) as component
+        """
+    }
+
+# 7. USAGE INSTRUCTIONS
+# =============================================================================
+
+UNLIMITED_DISPLAY_INTEGRATION = """
+🚀 UNLIMITED DISPLAY INTEGRATION STEPS:
+
+1. UPDATE mcpserver.py:
+   - Replace extract_graph_data_optimized() with extract_graph_data_unlimited()
+   - Update read_neo4j_cypher endpoint to read_neo4j_cypher_unlimited()
+
+2. UPDATE langgraph_agent.py:
+   - Add create_unlimited_display_system_message() function
+   - Update optimize_query_for_visualization() with unlimited support
+   - Modify cortex_llm() to use unlimited system message when needed
+
+3. UPDATE app.py:
+   - Replace chat endpoint with chat_unlimited()
+   - Add unlimited mode detection (node_limit >= 50000 = unlimited)
+   - Enhanced error handling for unlimited queries
+
+4. REPLACE ui.py:
+   - Use the Neo4j Browser-like UI provided above
+   - Includes unlimited display controls and Neo4j styling
+
+5. RESTART SERVICES:
+   - Restart mcpserver.py (port 8000)
+   - Restart app.py (port 8020)  
+   - Restart ui.py with Streamlit
+
+EXPECTED RESULTS:
+✅ Complete graph visualization without artificial limits
+✅ Neo4j Browser-like appearance and functionality
+✅ Schema-aware intelligent query generation
+✅ Enhanced stability and performance for large graphs
+✅ Real-time statistics and graph analytics
+"""
+
+print(UNLIMITED_DISPLAY_INTEGRATION)
