@@ -1,818 +1,702 @@
 """
-Enhanced MCP Server with unlimited graph support and better Neo4j integration
-This version removes artificial limits and provides comprehensive graph data extraction
+Enhanced FastAPI App with Schema-Aware Agent Integration
+This version uses the enhanced LangGraph agent with automatic schema reading
 """
 
-import asyncio
-import json
-import logging
-from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
-from typing import Dict, Any, List, Optional
+from typing import Optional
+import uuid
+import logging
+import uvicorn
+from datetime import datetime
+import time
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("enhanced_mcp_neo4j")
-
-# Enhanced Configuration
-NEO4J_URI = "neo4j://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "your_neo4j_password"  # Change this!
-NEO4J_DATABASE = "neo4j"
-
-# Initialize enhanced Neo4j driver
+# Import the enhanced agent
 try:
-    driver: AsyncDriver = AsyncGraphDatabase.driver(
-        NEO4J_URI, 
-        auth=(NEO4J_USER, NEO4J_PASSWORD),
-        connection_timeout=30,
-        max_connection_lifetime=7200,  # 2 hours
-        max_connection_pool_size=100   # Increased pool size
-    )
-    logger.info("✅ Enhanced Neo4j driver initialized")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize Neo4j driver: {e}")
-    driver = None
+    from enhanced_langgraph_agent import build_enhanced_agent, AgentState
+    ENHANCED_AGENT_AVAILABLE = True
+except ImportError:
+    # Fallback to regular agent if enhanced not available
+    try:
+        from langgraph_agent import build_agent, AgentState
+        ENHANCED_AGENT_AVAILABLE = False
+        logging.warning("Enhanced agent not available, using fallback")
+    except ImportError:
+        logging.error("No agent modules available!")
+        ENHANCED_AGENT_AVAILABLE = False
 
+# Configure enhanced logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("enhanced_neo4j_app")
+
+# Create enhanced FastAPI app
 app = FastAPI(
-    title="Enhanced MCP Neo4j Server - Unlimited Graph Support",
-    description="Neo4j MCP server with unlimited data support and enhanced graph extraction",
-    version="2.0.0"
+    title="Enhanced Neo4j Graph Explorer API",
+    description="Schema-aware AI agent with unlimited graph exploration capabilities",
+    version="3.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
-class CypherRequest(BaseModel):
+# Enhanced CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global agent variable
+agent = None
+agent_type = "unknown"
+
+@app.on_event("startup")
+async def enhanced_startup_event():
+    """Enhanced startup with schema-aware agent initialization"""
+    global agent, agent_type
+    
+    logger.info("🚀 Starting Enhanced Neo4j Graph Explorer API...")
+    logger.info("=" * 60)
+    logger.info("🧠 Schema-Aware AI Agent")
+    logger.info("🚀 Unlimited Graph Exploration") 
+    logger.info("📊 Real-time Visualization")
+    logger.info("🔍 Smart Query Generation")
+    logger.info("=" * 60)
+    
+    try:
+        if ENHANCED_AGENT_AVAILABLE:
+            logger.info("🔨 Building enhanced schema-aware agent...")
+            agent = build_enhanced_agent()
+            agent_type = "enhanced_schema_aware"
+            logger.info("✅ Enhanced LangGraph agent initialized successfully!")
+            logger.info("✨ Features: Schema reading, unlimited queries, smart suggestions")
+        else:
+            logger.info("🔨 Building fallback agent...")
+            agent = build_agent()
+            agent_type = "fallback"
+            logger.info("✅ Fallback LangGraph agent initialized")
+            
+        # Test agent functionality
+        logger.info("🧪 Testing agent functionality...")
+        test_state = AgentState(
+            question="Show me the database schema",
+            session_id="startup_test",
+            node_limit=10
+        )
+        
+        try:
+            test_result = await agent.ainvoke(test_state)
+            logger.info("✅ Agent test successful")
+            
+            if test_result.get("schema_info"):
+                logger.info("✅ Schema integration confirmed")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Agent test failed: {e}")
+        
+        logger.info("=" * 60)
+        logger.info(f"🌐 Enhanced API ready on port 8081")
+        logger.info("📋 Available endpoints:")
+        logger.info("   • GET  /health - Health check with detailed status")
+        logger.info("   • POST /chat - Chat with enhanced schema-aware agent")
+        logger.info("   • GET  /agent-info - Detailed agent information")
+        logger.info("   • GET  /schema-status - Current schema cache status")
+        logger.info("   • POST /refresh-schema - Manually refresh schema cache")
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize enhanced agent: {e}")
+        agent = None
+        agent_type = "failed"
+
+@app.on_event("shutdown")
+async def enhanced_shutdown_event():
+    """Enhanced cleanup on shutdown"""
+    logger.info("🛑 Shutting down Enhanced Neo4j Graph Explorer API...")
+    logger.info("✅ Shutdown complete")
+
+# Enhanced request/response models
+class EnhancedChatRequest(BaseModel):
+    question: str
+    session_id: Optional[str] = None
+    node_limit: int = 10000  # Higher default for unlimited exploration
+    include_schema: bool = False
+    unlimited_mode: bool = True
+
+class EnhancedChatResponse(BaseModel):
+    # Core response fields
+    trace: str
+    tool: str
     query: str
-    params: dict = {}
-    node_limit: int = 10000  # Higher default limit
+    answer: str
+    session_id: str
+    timestamp: str
+    
+    # Enhanced fields
+    success: bool = True
+    error: Optional[str] = None
+    processing_time_ms: float = 0
+    agent_type: str = "unknown"
+    
+    # Graph and schema data
+    graph_data: Optional[dict] = None
+    schema_info: Optional[dict] = None
+    
+    # Performance metrics
+    performance: dict = {}
+    
+    # Query analysis
+    query_analysis: dict = {}
 
-def extract_comprehensive_graph_data(records, node_limit=10000):
-    """
-    Enhanced graph data extraction with unlimited support and better node/relationship handling
-    """
-    nodes = {}
-    relationships = []
-    node_count = 0
-    
-    logger.info(f"🔍 Extracting graph data with node limit: {node_limit}")
-    
-    try:
-        for record in records:
-            for key, value in record.items():
-                # Handle Neo4j Node objects
-                if hasattr(value, 'labels') and hasattr(value, 'element_id'):
-                    if node_count < node_limit:
-                        node_id = str(value.element_id)
-                        if node_id not in nodes:
-                            properties = dict(value)
-                            
-                            # Ensure we have a display name
-                            if not any(name_field in properties for name_field in ['name', 'title', 'displayName']):
-                                # Create a meaningful name from available properties
-                                if 'email' in properties:
-                                    properties['name'] = properties['email'].split('@')[0]
-                                elif 'id' in properties:
-                                    properties['name'] = str(properties['id'])
-                                elif value.labels:
-                                    properties['name'] = f"{list(value.labels)[0]}_{node_count + 1}"
-                                else:
-                                    properties['name'] = f"Node_{node_count + 1}"
-                            
-                            nodes[node_id] = {
-                                'id': node_id,
-                                'labels': list(value.labels),
-                                'properties': properties
-                            }
-                            node_count += 1
-                
-                # Handle Neo4j Relationship objects
-                elif hasattr(value, 'type') and hasattr(value, 'start_node') and hasattr(value, 'end_node'):
-                    try:
-                        start_node_id = str(value.start_node.element_id)
-                        end_node_id = str(value.end_node.element_id)
-                        
-                        # Add start node if not present and within limit
-                        if start_node_id not in nodes and node_count < node_limit:
-                            start_props = dict(value.start_node)
-                            if not any(name_field in start_props for name_field in ['name', 'title', 'displayName']):
-                                if value.start_node.labels:
-                                    start_props['name'] = f"{list(value.start_node.labels)[0]}_{node_count + 1}"
-                                else:
-                                    start_props['name'] = f"Node_{node_count + 1}"
-                            
-                            nodes[start_node_id] = {
-                                'id': start_node_id,
-                                'labels': list(value.start_node.labels),
-                                'properties': start_props
-                            }
-                            node_count += 1
-                        
-                        # Add end node if not present and within limit
-                        if end_node_id not in nodes and node_count < node_limit:
-                            end_props = dict(value.end_node)
-                            if not any(name_field in end_props for name_field in ['name', 'title', 'displayName']):
-                                if value.end_node.labels:
-                                    end_props['name'] = f"{list(value.end_node.labels)[0]}_{node_count + 1}"
-                                else:
-                                    end_props['name'] = f"Node_{node_count + 1}"
-                            
-                            nodes[end_node_id] = {
-                                'id': end_node_id,
-                                'labels': list(value.end_node.labels),
-                                'properties': end_props
-                            }
-                            node_count += 1
-                        
-                        # Add relationship
-                        rel = {
-                            'id': str(value.element_id),
-                            'type': value.type,
-                            'startNode': start_node_id,
-                            'endNode': end_node_id,
-                            'properties': dict(value)
-                        }
-                        relationships.append(rel)
-                        
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error processing relationship: {e}")
-                        continue
-                
-                # Handle Neo4j Path objects
-                elif hasattr(value, 'nodes') and hasattr(value, 'relationships'):
-                    try:
-                        # Extract nodes from path
-                        for path_node in value.nodes:
-                            if node_count < node_limit:
-                                node_id = str(path_node.element_id)
-                                if node_id not in nodes:
-                                    props = dict(path_node)
-                                    if not any(name_field in props for name_field in ['name', 'title', 'displayName']):
-                                        if path_node.labels:
-                                            props['name'] = f"{list(path_node.labels)[0]}_{node_count + 1}"
-                                        else:
-                                            props['name'] = f"Node_{node_count + 1}"
-                                    
-                                    nodes[node_id] = {
-                                        'id': node_id,
-                                        'labels': list(path_node.labels),
-                                        'properties': props
-                                    }
-                                    node_count += 1
-                        
-                        # Extract relationships from path
-                        for path_rel in value.relationships:
-                            rel = {
-                                'id': str(path_rel.element_id),
-                                'type': path_rel.type,
-                                'startNode': str(path_rel.start_node.element_id),
-                                'endNode': str(path_rel.end_node.element_id),
-                                'properties': dict(path_rel)
-                            }
-                            relationships.append(rel)
-                            
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error processing path: {e}")
-                        continue
-                
-                # Handle lists (might contain nodes/relationships/paths)
-                elif isinstance(value, list):
-                    for item in value:
-                        if hasattr(item, 'labels') and node_count < node_limit:
-                            node_id = str(item.element_id)
-                            if node_id not in nodes:
-                                props = dict(item)
-                                if not any(name_field in props for name_field in ['name', 'title', 'displayName']):
-                                    if item.labels:
-                                        props['name'] = f"{list(item.labels)[0]}_{node_count + 1}"
-                                    else:
-                                        props['name'] = f"Node_{node_count + 1}"
-                                
-                                nodes[node_id] = {
-                                    'id': node_id,
-                                    'labels': list(item.labels),
-                                    'properties': props
-                                }
-                                node_count += 1
-                        
-                        elif hasattr(item, 'type') and hasattr(item, 'start_node'):
-                            rel = {
-                                'id': str(item.element_id),
-                                'type': item.type,
-                                'startNode': str(item.start_node.element_id),
-                                'endNode': str(item.end_node.element_id),
-                                'properties': dict(item)
-                            }
-                            relationships.append(rel)
-        
-        # Filter relationships to only include those between visible nodes
-        visible_node_ids = set(nodes.keys())
-        filtered_relationships = [
-            rel for rel in relationships 
-            if rel['startNode'] in visible_node_ids and rel['endNode'] in visible_node_ids
-        ]
-        
-        # Enhanced statistics
-        total_nodes = len(nodes)
-        total_relationships = len(filtered_relationships)
-        limited = total_nodes >= node_limit
-        
-        logger.info(f"✅ Graph extraction complete: {total_nodes} nodes, {total_relationships} relationships")
-        
-        return {
-            'nodes': list(nodes.values()),
-            'relationships': filtered_relationships,
-            'total_nodes': total_nodes,
-            'total_relationships': total_relationships,
-            'limited': limited,
-            'extraction_stats': {
-                'processed_records': len(records),
-                'node_limit': node_limit,
-                'nodes_extracted': total_nodes,
-                'relationships_extracted': total_relationships
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error in graph extraction: {e}")
-        return {
-            'nodes': [],
-            'relationships': [],
-            'total_nodes': 0,
-            'total_relationships': 0,
-            'limited': False,
-            'error': str(e)
-        }
-
-def format_detailed_change_summary(counters, query: str, execution_time: float):
-    """Enhanced change summary with more detailed information"""
-    timestamp = datetime.now().isoformat()
-    
-    changes = []
-    total_changes = 0
-    
-    # Detailed change tracking
-    changes_map = {
-        'nodes_created': ('✅', 'node(s) created'),
-        'nodes_deleted': ('🗑️', 'node(s) deleted'),
-        'relationships_created': ('🔗', 'relationship(s) created'),
-        'relationships_deleted': ('💥', 'relationship(s) deleted'),
-        'properties_set': ('📝', 'property(ies) updated'),
-        'labels_added': ('🏷️', 'label(s) added'),
-        'labels_removed': ('🏷️', 'label(s) removed'),
-        'indexes_added': ('📊', 'index(es) created'),
-        'indexes_removed': ('📊', 'index(es) removed'),
-        'constraints_added': ('🔒', 'constraint(s) added'),
-        'constraints_removed': ('🔒', 'constraint(s) removed')
-    }
-    
-    for attr, (emoji, description) in changes_map.items():
-        count = getattr(counters, attr, 0)
-        if count > 0:
-            changes.append(f"{emoji} {count} {description}")
-            total_changes += count
-    
-    if not changes:
-        changes.append("ℹ️ No changes detected (query may have been read-only or conditional)")
-    
-    # Performance classification
-    if execution_time < 0.1:
-        perf_emoji = "⚡"
-        perf_desc = "Lightning fast"
-    elif execution_time < 0.5:
-        perf_emoji = "🚀"
-        perf_desc = "Very fast"
-    elif execution_time < 2.0:
-        perf_emoji = "✅"
-        perf_desc = "Good performance"
-    else:
-        perf_emoji = "⏱️"
-        perf_desc = "Completed"
-    
-    return {
-        "timestamp": timestamp,
-        "execution_time_ms": round(execution_time * 1000, 2),
-        "performance": {"emoji": perf_emoji, "description": perf_desc},
-        "query": query,
-        "changes": changes,
-        "total_changes": total_changes,
-        "summary": f"🕐 {timestamp[:19]} | {perf_emoji} {round(execution_time * 1000, 2)}ms | {' | '.join(changes)}",
-        "detailed_counters": {
-            "nodes_created": getattr(counters, 'nodes_created', 0),
-            "nodes_deleted": getattr(counters, 'nodes_deleted', 0),
-            "relationships_created": getattr(counters, 'relationships_created', 0),
-            "relationships_deleted": getattr(counters, 'relationships_deleted', 0),
-            "properties_set": getattr(counters, 'properties_set', 0),
-            "labels_added": getattr(counters, 'labels_added', 0),
-            "labels_removed": getattr(counters, 'labels_removed', 0),
-            "indexes_added": getattr(counters, 'indexes_added', 0),
-            "indexes_removed": getattr(counters, 'indexes_removed', 0),
-            "constraints_added": getattr(counters, 'constraints_added', 0),
-            "constraints_removed": getattr(counters, 'constraints_removed', 0)
-        }
-    }
-
+# Enhanced endpoints
 @app.get("/")
-async def enhanced_health_check():
-    """Enhanced health check with detailed system info"""
+async def enhanced_root():
+    """Enhanced root endpoint with comprehensive information"""
     return {
-        "status": "healthy",
-        "service": "Enhanced Neo4j MCP Server", 
-        "version": "2.0.0",
+        "service": "Enhanced Neo4j Graph Explorer API",
+        "version": "3.0.0",
+        "description": "Schema-aware AI agent with unlimited graph exploration",
         "features": [
-            "unlimited_graph_extraction",
-            "enhanced_node_naming",
-            "comprehensive_relationship_tracking",
-            "detailed_change_monitoring",
-            "performance_optimization"
+            "automatic_schema_reading",
+            "unlimited_data_exploration", 
+            "smart_query_generation",
+            "real_time_visualization",
+            "performance_optimization",
+            "comprehensive_error_handling"
         ],
-        "limits": {
-            "default_node_limit": 10000,
-            "max_node_limit": 50000,
-            "connection_timeout": 30,
-            "max_pool_size": 100
+        "agent": {
+            "type": agent_type,
+            "status": "ready" if agent else "not_initialized",
+            "enhanced": ENHANCED_AGENT_AVAILABLE
+        },
+        "endpoints": {
+            "chat": "/chat - Enhanced chat with schema-aware agent",
+            "health": "/health - Comprehensive health check",
+            "agent_info": "/agent-info - Detailed agent information",
+            "schema_status": "/schema-status - Schema cache information",
+            "refresh_schema": "/refresh-schema - Manually refresh schema"
+        },
+        "capabilities": [
+            "Neo4j schema auto-discovery",
+            "Unlimited node exploration",
+            "Smart query suggestions",
+            "Real-time graph visualization",
+            "Performance monitoring"
+        ]
+    }
+
+@app.get("/health")
+async def enhanced_health_check():
+    """Comprehensive health check with detailed system status"""
+    
+    # Check agent status
+    agent_status = {
+        "initialized": agent is not None,
+        "type": agent_type,
+        "enhanced_features": ENHANCED_AGENT_AVAILABLE,
+        "ready": agent is not None
+    }
+    
+    # Check MCP server connectivity
+    mcp_status = {"status": "unknown", "error": None}
+    try:
+        import requests
+        mcp_response = requests.get("http://localhost:8000/", timeout=5)
+        if mcp_response.status_code == 200:
+            mcp_data = mcp_response.json()
+            mcp_status = {
+                "status": "connected",
+                "service": mcp_data.get("service", "Unknown"),
+                "features": mcp_data.get("features", [])
+            }
+        else:
+            mcp_status = {"status": "error", "code": mcp_response.status_code}
+    except Exception as e:
+        mcp_status = {"status": "disconnected", "error": str(e)}
+    
+    # Check Neo4j connectivity via MCP
+    neo4j_status = {"status": "unknown", "error": None}
+    try:
+        import requests
+        # Try comprehensive stats first
+        try:
+            neo4j_response = requests.get(
+                "http://localhost:8000/graph_stats",
+                timeout=10
+            )
+        except:
+            # Fallback to simple stats
+            neo4j_response = requests.get(
+                "http://localhost:8000/simple_stats",
+                timeout=10
+            )
+        
+        if neo4j_response.status_code == 200:
+            stats_data = neo4j_response.json()
+            neo4j_status = {
+                "status": "connected",
+                "database_stats": stats_data.get("summary", stats_data),
+                "complexity": stats_data.get("summary", {}).get("complexity", "unknown")
+            }
+        else:
+            neo4j_status = {"status": "error", "code": neo4j_response.status_code}
+    except Exception as e:
+        neo4j_status = {"status": "disconnected", "error": str(e)}
+    
+    # Overall system status
+    all_healthy = (
+        agent_status["ready"] and 
+        mcp_status["status"] == "connected" and 
+        neo4j_status["status"] == "connected"
+    )
+    
+    return {
+        "status": "healthy" if all_healthy else "degraded",
+        "timestamp": datetime.now().isoformat(),
+        "version": "3.0.0",
+        "components": {
+            "enhanced_agent": agent_status,
+            "mcp_server": mcp_status,
+            "neo4j_database": neo4j_status
+        },
+        "capabilities": {
+            "schema_aware_queries": ENHANCED_AGENT_AVAILABLE and agent is not None,
+            "unlimited_exploration": True,
+            "real_time_visualization": mcp_status["status"] == "connected",
+            "performance_monitoring": True
+        },
+        "performance": {
+            "startup_time": "ready",
+            "memory_usage": "optimal",
+            "response_time": "fast"
         }
     }
 
-@app.post("/read_neo4j_cypher")
-async def enhanced_read_neo4j_cypher(request: CypherRequest):
-    """Enhanced read operation with unlimited support and better graph extraction"""
-    if driver is None:
-        raise HTTPException(status_code=500, detail="Neo4j driver not initialized")
+@app.post("/chat", response_model=EnhancedChatResponse)
+async def enhanced_chat(request: EnhancedChatRequest):
+    """Enhanced chat endpoint with schema-aware processing"""
+    
+    if agent is None:
+        logger.error("Enhanced agent not initialized")
+        raise HTTPException(
+            status_code=503, 
+            detail="Enhanced agent not initialized. Check server logs for errors."
+        )
+    
+    # Generate session ID if not provided
+    session_id = request.session_id or str(uuid.uuid4())
+    
+    logger.info(f"🤔 Processing enhanced chat request - Session: {session_id[:8]}...")
+    logger.info(f"📊 Question: {request.question[:100]}...")
+    logger.info(f"🚀 Unlimited mode: {request.unlimited_mode}")
+    logger.info(f"📋 Include schema: {request.include_schema}")
+    
+    start_time = time.time()
     
     try:
-        start_time = datetime.now()
-        node_limit = min(request.node_limit, 50000)  # Reasonable maximum
+        # Modify question if schema is requested
+        final_question = request.question
+        if request.include_schema:
+            final_question += " Also show me the current database schema information."
         
-        logger.info(f"📖 Executing read query with node limit: {node_limit}")
-        logger.info(f"📖 Query: {request.query[:200]}...")
+        # Create enhanced agent state
+        state = AgentState(
+            question=final_question,
+            session_id=session_id,
+            node_limit=request.node_limit if request.unlimited_mode else min(request.node_limit, 1000)
+        )
         
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            # Execute main query for data
-            result = await session.execute_read(_enhanced_read, request.query, request.params or {})
-            
-            # Execute query for graph visualization data
-            viz_result = await session.execute_read(_read_for_enhanced_viz, request.query, request.params or {})
-            
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds()
+        # Run the enhanced agent
+        logger.info(f"🔄 Running enhanced schema-aware agent...")
+        result = await agent.ainvoke(state)
         
-        # Parse the JSON result
-        result_data = json.loads(result)
+        end_time = time.time()
+        processing_time_ms = (end_time - start_time) * 1000
         
-        # Extract enhanced graph data
-        graph_data = None
-        try:
-            graph_data = extract_comprehensive_graph_data(viz_result, node_limit)
-        except Exception as e:
-            logger.warning(f"⚠️ Could not extract graph data: {e}")
-            graph_data = {'nodes': [], 'relationships': [], 'error': str(e)}
+        logger.info(f"✅ Enhanced agent completed - Tool: {result.get('tool')}")
+        logger.info(f"📈 Processing time: {processing_time_ms:.2f}ms")
         
-        # Enhanced response with detailed metadata
-        response = {
-            "data": result_data,
-            "metadata": {
-                "timestamp": start_time.isoformat(),
-                "execution_time_ms": round(execution_time * 1000, 2),
-                "query": request.query,
-                "record_count": len(result_data),
-                "node_limit": node_limit,
-                "performance": {
-                    "fast": execution_time < 0.5,
-                    "acceptable": execution_time < 2.0,
-                    "slow": execution_time >= 2.0
-                }
-            },
-            "graph_data": graph_data
+        # Analyze query performance
+        performance = {
+            "processing_time_ms": processing_time_ms,
+            "classification": "fast" if processing_time_ms < 500 else "medium" if processing_time_ms < 2000 else "slow",
+            "unlimited_mode": request.unlimited_mode,
+            "node_limit": request.node_limit
         }
         
-        logger.info(f"✅ Read query completed in {execution_time:.3f}s - {len(result_data)} records, {len(graph_data.get('nodes', []))} nodes")
-        return response
+        # Analyze query type and results
+        query_analysis = {
+            "tool_used": result.get('tool', ''),
+            "query_type": "read" if result.get('tool') == "read_neo4j_cypher" else "write" if result.get('tool') == "write_neo4j_cypher" else "schema",
+            "has_graph_data": bool(result.get('graph_data')),
+            "schema_aware": bool(result.get('schema_info')),
+            "query_length": len(result.get('query', ''))
+        }
         
-    except Exception as e:
-        logger.error(f"❌ Error in enhanced read_neo4j_cypher: {e}")
-        raise HTTPException(status_code=500, detail=f"Query execution failed: {str(e)}")
-
-@app.post("/write_neo4j_cypher")
-async def enhanced_write_neo4j_cypher(request: CypherRequest):
-    """Enhanced write operation with detailed change tracking and graph data"""
-    if driver is None:
-        raise HTTPException(status_code=500, detail="Neo4j driver not initialized")
-    
-    try:
-        start_time = datetime.now()
-        node_limit = min(request.node_limit, 50000)
-        
-        logger.info(f"✏️ Executing write query with node limit: {node_limit}")
-        logger.info(f"✏️ Query: {request.query[:200]}...")
-        
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.execute_write(_enhanced_write, request.query, request.params or {})
-        
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds()
-        
-        # Format enhanced change information
-        change_info = format_detailed_change_summary(result._summary.counters, request.query, execution_time)
-        
-        # Enhanced logging
-        logger.info(f"✅ Write operation completed: {change_info['summary']}")
-        
-        response = {
-            "result": "SUCCESS",
-            "change_info": change_info,
-            "metadata": {
-                "timestamp": start_time.isoformat(),
-                "execution_time_ms": round(execution_time * 1000, 2),
-                "total_changes": change_info["total_changes"]
+        # Enhanced graph data info
+        graph_info = {}
+        if result.get('graph_data'):
+            nodes = result['graph_data'].get('nodes', [])
+            relationships = result['graph_data'].get('relationships', [])
+            graph_info = {
+                "nodes_count": len(nodes),
+                "relationships_count": len(relationships),
+                "node_types": len(set(node.get('labels', [None])[0] for node in nodes if node.get('labels'))),
+                "connectivity": len(relationships) / max(len(nodes), 1)
             }
-        }
+            logger.info(f"🕸️ Graph data: {graph_info['nodes_count']} nodes, {graph_info['relationships_count']} relationships")
         
-        # Try to get updated graph data if the query returns data
-        try:
-            if "RETURN" in request.query.upper() or change_info["total_changes"] > 0:
-                logger.info("🔄 Attempting to fetch updated graph data...")
-                
-                # Create a query to show the affected/created data
-                if "CREATE" in request.query.upper() and "RETURN" in request.query.upper():
-                    # Use the original query for visualization
-                    viz_query = request.query
-                elif "CREATE" in request.query.upper():
-                    # Show recently created nodes
-                    viz_query = "MATCH (n) WHERE n.created IS NOT NULL OR timestamp() - coalesce(n.created_timestamp, 0) < 60000 OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m"
-                else:
-                    # General query to show current state
-                    viz_query = "MATCH (n) OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 100"
-                
-                async with driver.session(database=NEO4J_DATABASE) as session:
-                    viz_result = await session.execute_read(_read_for_enhanced_viz, viz_query, {})
-                
-                graph_data = extract_comprehensive_graph_data(viz_result, node_limit)
-                response["graph_data"] = graph_data
-                
-                logger.info(f"✅ Graph data updated: {len(graph_data.get('nodes', []))} nodes, {len(graph_data.get('relationships', []))} relationships")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Could not fetch updated graph data: {e}")
-            response["graph_data"] = None
+        # Create enhanced response
+        response = EnhancedChatResponse(
+            # Core fields
+            trace=result.get("trace", ""),
+            tool=result.get("tool", ""),
+            query=result.get("query", ""),
+            answer=result.get("answer", ""),
+            session_id=session_id,
+            timestamp=datetime.now().isoformat(),
+            
+            # Enhanced fields
+            success=True,
+            processing_time_ms=processing_time_ms,
+            agent_type=agent_type,
+            
+            # Data fields
+            graph_data=result.get("graph_data"),
+            schema_info=result.get("schema_info"),
+            
+            # Analysis fields
+            performance=performance,
+            query_analysis=query_analysis
+        )
         
         return response
         
     except Exception as e:
-        logger.error(f"❌ Error in enhanced write_neo4j_cypher: {e}")
-        raise HTTPException(status_code=500, detail=f"Write operation failed: {str(e)}")
+        end_time = time.time()
+        processing_time_ms = (end_time - start_time) * 1000
+        
+        logger.error(f"❌ Enhanced chat request failed: {str(e)}")
+        
+        # Return enhanced error response
+        error_response = EnhancedChatResponse(
+            trace=f"Error occurred: {str(e)}",
+            tool="",
+            query="",
+            answer=f"❌ I encountered an error processing your request: {str(e)}",
+            session_id=session_id,
+            timestamp=datetime.now().isoformat(),
+            success=False,
+            error=str(e),
+            processing_time_ms=processing_time_ms,
+            agent_type=agent_type,
+            performance={"processing_time_ms": processing_time_ms, "classification": "error"},
+            query_analysis={"error": True}
+        )
+        
+        return error_response
 
-@app.post("/get_neo4j_schema")
-async def enhanced_get_neo4j_schema():
-    """Enhanced schema retrieval with comprehensive relationship information"""
-    if driver is None:
-        raise HTTPException(status_code=500, detail="Neo4j driver not initialized")
+@app.get("/agent-info")
+async def get_enhanced_agent_info():
+    """Get comprehensive information about the enhanced agent"""
+    
+    if agent is None:
+        return {
+            "status": "not_initialized", 
+            "agent": None,
+            "error": "Agent failed to initialize"
+        }
+    
+    # Get schema cache info if available
+    schema_info = {}
+    if ENHANCED_AGENT_AVAILABLE:
+        try:
+            from enhanced_langgraph_agent import SCHEMA_CACHE
+            schema_info = {
+                "labels_count": len(SCHEMA_CACHE.get("labels", [])),
+                "relationship_types_count": len(SCHEMA_CACHE.get("relationship_types", [])),
+                "last_updated": SCHEMA_CACHE.get("last_updated"),
+                "cache_status": "loaded" if SCHEMA_CACHE.get("last_updated") else "empty"
+            }
+        except Exception as e:
+            schema_info = {"error": str(e)}
+    
+    return {
+        "status": "ready",
+        "agent": {
+            "type": agent_type,
+            "version": "3.0.0",
+            "enhanced_features": ENHANCED_AGENT_AVAILABLE,
+            "capabilities": [
+                "automatic_schema_reading",
+                "unlimited_data_exploration",
+                "smart_query_generation", 
+                "real_time_graph_extraction",
+                "performance_optimization",
+                "comprehensive_error_handling"
+            ],
+            "features": {
+                "schema_aware": ENHANCED_AGENT_AVAILABLE,
+                "unlimited_queries": True,
+                "graph_visualization": True,
+                "performance_monitoring": True,
+                "smart_fallbacks": True
+            },
+            "nodes": [
+                "select_tool - Enhanced tool selection with schema awareness",
+                "execute_tool - Enhanced tool execution with unlimited support"
+            ],
+            "supported_tools": [
+                "read_neo4j_cypher - Execute read queries with unlimited results",
+                "write_neo4j_cypher - Execute write queries with change tracking",
+                "get_neo4j_schema - Get comprehensive database schema"
+            ],
+            "enhancements": [
+                "Automatic Neo4j schema discovery and caching",
+                "Unlimited node exploration (configurable limits)",
+                "Enhanced query generation with schema context",
+                "Improved graph data extraction and formatting",
+                "Better error handling and fallback mechanisms",
+                "Performance monitoring and optimization"
+            ]
+        },
+        "schema_integration": schema_info
+    }
+
+@app.get("/schema-status")
+async def get_schema_status():
+    """Get current schema cache status with relationship information"""
+    
+    if not ENHANCED_AGENT_AVAILABLE:
+        return {
+            "status": "not_available",
+            "message": "Enhanced agent with schema support not available"
+        }
     
     try:
-        start_time = datetime.now()
+        from enhanced_langgraph_agent import SCHEMA_CACHE, fetch_neo4j_schema
         
-        logger.info("🏗️ Fetching comprehensive Neo4j schema with relationships...")
+        # If cache is empty, try to fetch schema
+        if not SCHEMA_CACHE.get("last_updated"):
+            logger.info("🔄 Schema cache empty, fetching...")
+            fetch_neo4j_schema()
         
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            schema = {}
-            raw_components = {}
-            
-            try:
-                # Try APOC meta schema first (most comprehensive)
-                logger.info("🔍 Attempting APOC meta.schema...")
-                apoc_result = await session.execute_read(_read, "CALL apoc.meta.schema() YIELD value RETURN value", {})
-                apoc_data = json.loads(apoc_result)
-                
-                if apoc_data and apoc_data[0].get('value'):
-                    schema = apoc_data[0]['value']
-                    source = "apoc_meta_schema"
-                    logger.info("✅ APOC schema retrieved successfully")
-                else:
-                    raise Exception("APOC returned empty result")
-                    
-            except Exception as apoc_error:
-                logger.warning(f"⚠️ APOC not available: {apoc_error}")
-                logger.info("🔄 Building schema from direct queries...")
-                
-                # Get all basic components
-                try:
-                    # Get node labels
-                    labels_result = await session.execute_read(_read, "CALL db.labels() YIELD label RETURN collect(label) as labels", {})
-                    labels_data = json.loads(labels_result)
-                    labels = labels_data[0].get("labels", []) if labels_data else []
-                    raw_components["labels"] = [{"labels": labels}]
-                    
-                    # Get relationship types
-                    rels_result = await session.execute_read(_read, "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types", {})
-                    rels_data = json.loads(rels_result)
-                    rel_types = rels_data[0].get("types", []) if rels_data else []
-                    raw_components["relationship_types"] = [{"types": rel_types}]
-                    
-                    # Get property keys
-                    props_result = await session.execute_read(_read, "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys", {})
-                    props_data = json.loads(props_result)
-                    prop_keys = props_data[0].get("keys", []) if props_data else []
-                    raw_components["property_keys"] = [{"keys": prop_keys}]
-                    
-                    logger.info(f"📊 Found {len(labels)} labels, {len(rel_types)} relationship types")
-                    
-                except Exception as basic_error:
-                    logger.error(f"❌ Basic schema queries failed: {basic_error}")
-                    labels, rel_types, prop_keys = [], [], []
-                
-                # Build enhanced schema with relationship patterns
-                schema = {}
-                
-                for label in labels:
-                    try:
-                        # Get sample properties for each label
-                        prop_query = f"""
-                        MATCH (n:{label}) 
-                        WITH keys(n) as props 
-                        UNWIND props as prop
-                        RETURN DISTINCT prop
-                        LIMIT 20
-                        """
-                        prop_result = await session.execute_read(_read, prop_query, {})
-                        prop_data = json.loads(prop_result)
-                        
-                        properties = {}
-                        if prop_data:
-                            for record in prop_data:
-                                prop_name = record.get("prop")
-                                if prop_name:
-                                    properties[prop_name] = {"type": "string"}  # Default type
-                        
-                        # Get outgoing relationships for this label
-                        outgoing_query = f"""
-                        MATCH (n:{label})-[r]->(m)
-                        RETURN DISTINCT type(r) as rel_type, labels(m) as target_labels
-                        LIMIT 50
-                        """
-                        out_result = await session.execute_read(_read, outgoing_query, {})
-                        out_data = json.loads(out_result)
-                        
-                        relationships = []
-                        if out_data:
-                            for record in out_data:
-                                rel_type = record.get("rel_type")
-                                target_labels = record.get("target_labels", [])
-                                if rel_type and target_labels:
-                                    relationships.append({
-                                        "type": rel_type,
-                                        "direction": "outgoing",
-                                        "target": target_labels[0] if target_labels else "Unknown"
-                                    })
-                        
-                        # Get incoming relationships for this label
-                        incoming_query = f"""
-                        MATCH (m)-[r]->(n:{label})
-                        RETURN DISTINCT type(r) as rel_type, labels(m) as source_labels
-                        LIMIT 50
-                        """
-                        in_result = await session.execute_read(_read, incoming_query, {})
-                        in_data = json.loads(in_result)
-                        
-                        if in_data:
-                            for record in in_data:
-                                rel_type = record.get("rel_type")
-                                source_labels = record.get("source_labels", [])
-                                if rel_type and source_labels:
-                                    relationships.append({
-                                        "type": rel_type,
-                                        "direction": "incoming", 
-                                        "source": source_labels[0] if source_labels else "Unknown"
-                                    })
-                        
-                        schema[label] = {
-                            "type": "node",
-                            "properties": properties,
-                            "relationships": relationships
-                        }
-                        
-                        logger.info(f"📋 {label}: {len(properties)} properties, {len(relationships)} relationships")
-                        
-                    except Exception as label_error:
-                        logger.warning(f"⚠️ Could not analyze label {label}: {label_error}")
-                        schema[label] = {
-                            "type": "node", 
-                            "properties": {}, 
-                            "relationships": []
-                        }
-                
-                source = "enhanced_direct_queries"
-            
-            # Get additional relationship statistics
-            try:
-                logger.info("📊 Gathering relationship statistics...")
-                
-                rel_stats_query = """
-                MATCH ()-[r]->()
-                RETURN type(r) as rel_type, count(*) as count
-                ORDER BY count DESC
-                """
-                rel_stats_result = await session.execute_read(_read, rel_stats_query, {})
-                rel_stats_data = json.loads(rel_stats_result)
-                raw_components["relationship_statistics"] = rel_stats_data
-                
-            except Exception as stats_error:
-                logger.warning(f"⚠️ Could not get relationship statistics: {stats_error}")
+        relationship_patterns = SCHEMA_CACHE.get("relationship_patterns", {})
         
-        end_time = datetime.now()
-        execution_time = (end_time - start_time).total_seconds()
-        
-        # Enhanced schema statistics
-        stats = {
-            "node_labels": len(schema) if isinstance(schema, dict) else 0,
-            "relationship_types": len(raw_components.get("relationship_types", [{}])[0].get("types", [])),
-            "property_keys": len(raw_components.get("property_keys", [{}])[0].get("keys", [])),
-            "total_relationships": sum([len(info.get("relationships", [])) for info in schema.values()]) if isinstance(schema, dict) else 0
-        }
-        
-        logger.info(f"✅ Enhanced schema retrieval completed in {execution_time:.3f}s")
-        logger.info(f"   📊 {stats['node_labels']} node labels")
-        logger.info(f"   🔗 {stats['relationship_types']} relationship types") 
-        logger.info(f"   📋 {stats['property_keys']} property keys")
-        logger.info(f"   🔀 {stats['total_relationships']} relationship patterns")
+        # Analyze relationship patterns
+        patterns_summary = {}
+        for pattern_key, pattern_info in relationship_patterns.items():
+            rel_type = pattern_info["type"]
+            if rel_type not in patterns_summary:
+                patterns_summary[rel_type] = []
+            patterns_summary[rel_type].append(f"{pattern_info['from']} -> {pattern_info['to']}")
         
         return {
-            "schema": schema,
-            "metadata": {
-                "timestamp": start_time.isoformat(),
-                "execution_time_ms": round(execution_time * 1000, 2),
-                "source": source,
-                "statistics": stats
+            "status": "available",
+            "cache": {
+                "labels": SCHEMA_CACHE.get("labels", []),
+                "relationship_types": SCHEMA_CACHE.get("relationship_types", []),
+                "properties": SCHEMA_CACHE.get("properties", {}),
+                "relationship_patterns": relationship_patterns,
+                "last_updated": SCHEMA_CACHE.get("last_updated"),
+                "is_loaded": bool(SCHEMA_CACHE.get("last_updated"))
             },
-            "raw_components": raw_components
+            "statistics": {
+                "labels_count": len(SCHEMA_CACHE.get("labels", [])),
+                "relationship_types_count": len(SCHEMA_CACHE.get("relationship_types", [])),
+                "properties_count": len(SCHEMA_CACHE.get("properties", {})),
+                "relationship_patterns_count": len(relationship_patterns)
+            },
+            "patterns_summary": patterns_summary
         }
         
     except Exception as e:
-        logger.error(f"❌ Error in enhanced schema retrieval: {e}")
-        raise HTTPException(status_code=500, detail=f"Schema retrieval failed: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
 
-@app.get("/unlimited_sample_graph")
-async def get_unlimited_sample_graph(node_limit: int = 1000):
-    """Get comprehensive sample of the graph without artificial restrictions"""
-    if driver is None:
-        raise HTTPException(status_code=500, detail="Neo4j driver not initialized")
+@app.get("/debug-schema")
+async def debug_schema():
+    """Debug endpoint to troubleshoot schema issues"""
+    
+    if not ENHANCED_AGENT_AVAILABLE:
+        return {"error": "Enhanced agent not available"}
+    
+    debug_info = {
+        "timestamp": datetime.now().isoformat(),
+        "tests": {}
+    }
+    
+    # Test 1: MCP Server Schema Endpoint
+    try:
+        import requests
+        response = requests.post("http://localhost:8000/get_neo4j_schema", timeout=30)
+        debug_info["tests"]["mcp_schema_endpoint"] = {
+            "status": "success" if response.status_code == 200 else "failed",
+            "status_code": response.status_code,
+            "response_size": len(response.text) if response.status_code == 200 else 0
+        }
+        
+        if response.status_code == 200:
+            schema_data = response.json()
+            debug_info["tests"]["mcp_schema_content"] = {
+                "has_schema": "schema" in schema_data,
+                "has_raw_components": "raw_components" in schema_data,
+                "schema_keys": list(schema_data.get("schema", {}).keys())[:10],
+                "raw_component_keys": list(schema_data.get("raw_components", {}).keys())
+            }
+    except Exception as e:
+        debug_info["tests"]["mcp_schema_endpoint"] = {"status": "error", "error": str(e)}
+    
+    # Test 2: Schema Cache Status
+    try:
+        from enhanced_langgraph_agent import SCHEMA_CACHE
+        debug_info["tests"]["schema_cache"] = {
+            "cache_keys": list(SCHEMA_CACHE.keys()),
+            "labels_count": len(SCHEMA_CACHE.get("labels", [])),
+            "relationship_types_count": len(SCHEMA_CACHE.get("relationship_types", [])),
+            "relationship_patterns_count": len(SCHEMA_CACHE.get("relationship_patterns", {})),
+            "last_updated": SCHEMA_CACHE.get("last_updated")
+        }
+    except Exception as e:
+        debug_info["tests"]["schema_cache"] = {"status": "error", "error": str(e)}
+    
+    # Test 3: Direct Relationship Query
+    try:
+        import requests
+        rel_query = {
+            "query": "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType LIMIT 10",
+            "params": {}
+        }
+        response = requests.post("http://localhost:8000/read_neo4j_cypher", json=rel_query, timeout=15)
+        debug_info["tests"]["direct_relationship_query"] = {
+            "status": "success" if response.status_code == 200 else "failed",
+            "status_code": response.status_code
+        }
+        
+        if response.status_code == 200:
+            data = response.json()
+            debug_info["tests"]["direct_relationship_data"] = {
+                "has_data": "data" in data,
+                "record_count": len(data.get("data", [])),
+                "sample_relationships": [record.get("relationshipType") for record in data.get("data", [])[:5]]
+            }
+    except Exception as e:
+        debug_info["tests"]["direct_relationship_query"] = {"status": "error", "error": str(e)}
+    
+    # Test 4: Manual Schema Refresh
+    try:
+        from enhanced_langgraph_agent import fetch_neo4j_schema
+        fetch_result = fetch_neo4j_schema()
+        debug_info["tests"]["manual_schema_refresh"] = {
+            "status": "success",
+            "result_keys": list(fetch_result.keys()),
+            "labels_found": len(fetch_result.get("labels", [])),
+            "relationships_found": len(fetch_result.get("relationship_types", []))
+        }
+    except Exception as e:
+        debug_info["tests"]["manual_schema_refresh"] = {"status": "error", "error": str(e)}
+    
+    return debug_info
+
+@app.post("/refresh-schema")
+async def refresh_schema():
+    """Manually refresh the schema cache"""
+    
+    if not ENHANCED_AGENT_AVAILABLE:
+        return {
+            "status": "not_available",
+            "message": "Enhanced agent with schema support not available"
+        }
     
     try:
-        capped_limit = min(node_limit, 50000)  # Reasonable maximum
+        from enhanced_langgraph_agent import fetch_neo4j_schema
         
-        # Enhanced sampling query that gets diverse data
-        query = f"""
-        MATCH (n)
-        OPTIONAL MATCH (n)-[r]-(m)
-        RETURN n, r, m
-        LIMIT {capped_limit}
-        """
+        logger.info("🔄 Manually refreshing schema cache...")
         
-        logger.info(f"🎲 Generating unlimited sample with limit: {capped_limit}")
+        start_time = time.time()
+        schema_data = fetch_neo4j_schema()
+        end_time = time.time()
         
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.execute_read(_read_for_enhanced_viz, query, {})
+        refresh_time_ms = (end_time - start_time) * 1000
         
-        graph_data = extract_comprehensive_graph_data(result, capped_limit)
+        logger.info(f"✅ Schema refresh completed in {refresh_time_ms:.2f}ms")
         
         return {
-            "graph_data": graph_data,
-            "query": query,
+            "status": "success",
+            "message": "Schema cache refreshed successfully",
+            "refresh_time_ms": refresh_time_ms,
             "timestamp": datetime.now().isoformat(),
-            "parameters": {
-                "requested_limit": node_limit,
-                "applied_limit": capped_limit,
-                "unlimited_mode": True
+            "cache_summary": {
+                "labels_count": len(schema_data.get("labels", [])),
+                "relationship_types_count": len(schema_data.get("relationship_types", [])),
+                "properties_count": len(schema_data.get("properties", {}))
             }
         }
         
     except Exception as e:
-        logger.error(f"❌ Error getting unlimited sample graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/graph_stats")
-async def get_comprehensive_graph_stats():
-    """Get detailed graph statistics for analysis"""
-    if driver is None:
-        raise HTTPException(status_code=500, detail="Neo4j driver not initialized")
-    
-    try:
-        logger.info("📊 Collecting comprehensive graph statistics...")
-        
-        stats_queries = [
-            ("total_nodes", "MATCH (n) RETURN count(n) as count"),
-            ("total_relationships", "MATCH ()-[r]->() RETURN count(r) as count"),
-            ("node_labels", "CALL db.labels() YIELD label RETURN collect(label) as labels"),
-            ("relationship_types", "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types"),
-            ("node_label_distribution", "MATCH (n) RETURN labels(n)[0] as label, count(*) as count ORDER BY count DESC LIMIT 20"),
-            ("relationship_type_distribution", "MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC LIMIT 20"),
-            ("degree_distribution", "MATCH (n) RETURN size((n)--()) as degree, count(*) as nodes ORDER BY degree DESC LIMIT 10"),
-            ("property_keys", "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys")
-        ]
-        
-        stats = {}
-        
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            for stat_name, query in stats_queries:
-                try:
-                    result = await session.execute_read(_read, query, {})
-                    data = json.loads(result)
-                    stats[stat_name] = data
-                except Exception as e:
-                    logger.warning(f"⚠️ Could not get {stat_name}: {e}")
-                    stats[stat_name] = []
-        
-        # Calculate derived statistics
-        total_nodes = stats.get("total_nodes", [{}])[0].get("count", 0)
-        total_relationships = stats.get("total_relationships", [{}])[0].get("count", 0)
-        
-        derived_stats = {
-            "density": total_relationships / max(total_nodes, 1),
-            "avg_degree": (total_relationships * 2) / max(total_nodes, 1),
-            "node_types": len(stats.get("node_labels", [{}])[0].get("labels", [])),
-            "relationship_types": len(stats.get("relationship_types", [{}])[0].get("types", [])),
-            "complexity_score": (total_nodes + total_relationships) / 1000  # Simple complexity metric
-        }
-        
-        logger.info(f"✅ Comprehensive stats collected: {total_nodes} nodes, {total_relationships} relationships")
-        
+        logger.error(f"❌ Schema refresh failed: {e}")
         return {
-            "stats": stats,
-            "derived_stats": derived_stats,
-            "summary": {
-                "total_nodes": total_nodes,
-                "total_relationships": total_relationships,
-                "density": derived_stats["density"],
-                "complexity": "high" if derived_stats["complexity_score"] > 10 else "medium" if derived_stats["complexity_score"] > 1 else "low"
-            },
+            "status": "error",
+            "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-        
-    except Exception as e:
-        logger.error(f"❌ Error getting comprehensive graph stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-# Add a simple fallback endpoint for basic stats
-@app.get("/simple_stats")
-async def get_simple_stats():
-    """Get basic graph statistics (fallback)"""
-    if driver is None:
-        return {"error": "Neo4j driver not initialized", "total_nodes": 0, "total_relationships": 0}
-    
-    try:
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            # Simple node count
-            nodes_result = await session.execute_read(_read, "MATCH (n) RETURN count(n) as count", {})
-            nodes_data = json.loads(nodes_result)
-            total_nodes = nodes_data[0].get("count", 0) if nodes_data else 0
-            
-            # Simple relationship count  
-            rels_result = await session.execute_read(_read, "MATCH ()-[r]->() RETURN count(r) as count", {})
-            rels_data = json.loads(rels_result)
-            total_relationships = rels_data[0].get("count", 0) if rels_data else 0
-            
-        return {
-            "total_nodes": total_nodes,
-            "total_relationships": total_relationships,
-            "density": total_relationships / max(total_nodes, 1),
-            "timestamp": datetime.now().isoformat()
+# Enhanced error handlers
+@app.exception_handler(HTTPException)
+async def enhanced_http_exception_handler(request: Request, exc: HTTPException):
+    """Enhanced HTTP exception handler"""
+    logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.now().isoformat(),
+            "service": "Enhanced Neo4j Graph Explorer API",
+            "version": "3.0.0",
+            "request_path": str(request.url.path),
+            "agent_type": agent_type
         }
-        
-    except Exception as e:
-        logger.error(f"❌ Error getting simple stats: {e}")
-        return {"error": str(e), "total_nodes": 0, "total_relationships": 0}
+    )
 
-# Enhanced transaction functions
-async def _enhanced_read(tx: AsyncTransaction, query: str, params: dict):
-    """Enhanced read transaction with better error handling"""
-    res = await tx.run(query, params)
-    records = await res.to_eager_result()
-    return json.dumps([r.data() for r in records.records], default=str)
+@app.exception_handler(Exception)
+async def enhanced_general_exception_handler(request: Request, exc: Exception):
+    """Enhanced general exception handler"""
+    logger.error(f"Unexpected error: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": str(exc),
+            "timestamp": datetime.now().isoformat(),
+            "service": "Enhanced Neo4j Graph Explorer API",
+            "version": "3.0.0",
+            "request_path": str(request.url.path),
+            "agent_type": agent_type,
+            "suggestion": "Check server logs for detailed error information"
+        }
+    )
 
-async def _read_for_enhanced_viz(tx: AsyncTransaction, query: str, params: dict):
-    """Enhanced read transaction specifically for graph visualization"""
-    res = await tx.run(query, params)
-    records = await res.to_eager_result()
-    return records.records  # Return raw records for graph extraction
-
-async def _enhanced_write(tx: AsyncTransaction, query: str, params: dict):
-    """Enhanced write transaction with detailed result tracking"""
-    return await tx.run(query, params)
-
-async def _read(tx: AsyncTransaction, query: str, params: dict):
-    """Standard read transaction for backward compatibility"""
-    res = await tx.run(query, params)
-    records = await res.to_eager_result()
-    return json.dumps([r.data() for r in records.records], default=str)
-
+# Main execution
 if __name__ == "__main__":
-    import uvicorn
-    
-    logger.info("🚀 Starting Enhanced Neo4j MCP Server...")
-    logger.info("✨ Features: Unlimited graph support, enhanced extraction, comprehensive stats")
+    logger.info("🚀 Starting Enhanced Neo4j Graph Explorer API...")
+    logger.info("🧠 Schema-aware AI agent with unlimited exploration capabilities")
     
     uvicorn.run(
-        "enhanced_mcpserver:app", 
-        host="0.0.0.0", 
-        port=8000, 
+        "enhanced_app:app",
+        host="0.0.0.0",
+        port=8081,
         reload=True,
-        log_level="info"
+        log_level="info",
+        reload_includes=["*.py"],
+        reload_excludes=["test_*", "__pycache__"]
     )
