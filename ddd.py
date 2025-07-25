@@ -1,279 +1,392 @@
-#!/usr/bin/env python3
-"""
-Neo4j Connection Diagnostic & Fix Tool
-This will help you identify and fix the 503 Service Unavailable error
-"""
-
 import asyncio
-import sys
-import subprocess
-import time
-import requests
-from neo4j import AsyncGraphDatabase
+import json
+import logging
+from datetime import datetime
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
 
-# ============================================
-# CONFIGURATION - CHANGE THESE TO MATCH YOUR SETUP
-# ============================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mcp_neo4j_cypher")
 
 NEO4J_URI = "neo4j://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "your_neo4j_password"  # ⚠️ CHANGE THIS!
+NEO4J_PASSWORD = "your_neo4j_password"
 NEO4J_DATABASE = "neo4j"
 
-SERVER_URL = "http://localhost:8000"
+driver: AsyncDriver = AsyncGraphDatabase.driver(
+    NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
+)
 
-# ============================================
+app = FastAPI(title="MCP Neo4j Cypher API - Enhanced for Large Graphs")
 
-class Colors:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
+class CypherRequest(BaseModel):
+    query: str
+    params: dict = {}
+    node_limit: int = 5000  # Default limit for large graphs
 
-def print_colored(message, color=Colors.GREEN):
-    print(f"{color}{message}{Colors.ENDC}")
-
-def print_header(title):
-    print_colored(f"\n{'='*60}", Colors.BLUE)
-    print_colored(f"{title}", Colors.BOLD)
-    print_colored(f"{'='*60}", Colors.BLUE)
-
-async def test_neo4j_connection():
-    """Test direct Neo4j connection"""
-    print_header("🔍 TESTING NEO4J CONNECTION")
+def extract_graph_data_optimized(records, node_limit=2000):
+    """Extract nodes and relationships from Neo4j records optimized for Pyvis visualization"""
+    nodes = {}
+    relationships = []
     
-    print_colored(f"📍 Testing connection to: {NEO4J_URI}")
-    print_colored(f"👤 User: {NEO4J_USER}")
-    print_colored(f"🗄️  Database: {NEO4J_DATABASE}")
-    print_colored(f"🔑 Password: {'*' * len(NEO4J_PASSWORD)}")
-    
-    try:
-        # Test basic connectivity
-        print_colored("\n1. Testing basic connectivity...")
-        
-        driver = AsyncGraphDatabase.driver(
-            NEO4J_URI,
-            auth=(NEO4J_USER, NEO4J_PASSWORD),
-            connection_timeout=10
-        )
-        
-        # Test connection
-        async with driver.session(database=NEO4J_DATABASE) as session:
-            result = await session.run("RETURN 1 as test")
-            record = await result.single()
-            
-        if record and record["test"] == 1:
-            print_colored("✅ Neo4j connection successful!", Colors.GREEN)
-            
-            # Test data operations
-            print_colored("\n2. Testing data operations...")
-            
-            async with driver.session(database=NEO4J_DATABASE) as session:
-                # Count nodes
-                count_result = await session.run("MATCH (n) RETURN count(n) as node_count")
-                count_record = await count_result.single()
-                node_count = count_record["node_count"] if count_record else 0
-                
-                print_colored(f"   📊 Found {node_count} nodes in database", Colors.GREEN)
-                
-                # Test write operation
-                write_result = await session.run("CREATE (test:DiagnosticTest {created: datetime()}) RETURN test")
-                write_record = await write_result.single()
-                
-                if write_record:
-                    print_colored("   ✅ Write operation successful", Colors.GREEN)
+    # Process records and extract graph objects
+    for record in records:
+        for key, value in record.items():
+            # Handle nodes
+            if hasattr(value, 'labels'):  # It's a node
+                node_id = str(value.element_id)  # Ensure string ID for Pyvis
+                if len(nodes) < node_limit:  # Respect node limit
+                    # Clean properties for better display
+                    properties = dict(value)
+                    # Ensure we have a display name
+                    if 'name' not in properties and 'title' not in properties:
+                        properties['name'] = f"Node {len(nodes) + 1}"
                     
-                    # Clean up test node
-                    await session.run("MATCH (test:DiagnosticTest) DELETE test")
-                    print_colored("   🧹 Test node cleaned up", Colors.GREEN)
+                    nodes[node_id] = {
+                        'id': node_id,
+                        'labels': list(value.labels),
+                        'properties': properties
+                    }
+            
+            # Handle relationships
+            elif hasattr(value, 'type'):  # It's a relationship
+                start_node_id = str(value.start_node.element_id)
+                end_node_id = str(value.end_node.element_id)
                 
-        await driver.close()
-        return True
-        
-    except Exception as e:
-        print_colored(f"❌ Neo4j connection failed: {e}", Colors.RED)
-        return False
-
-def check_neo4j_running():
-    """Check if Neo4j is running"""
-    print_header("🔍 CHECKING NEO4J STATUS")
-    
-    try:
-        # Try to run neo4j status command
-        result = subprocess.run(['neo4j', 'status'], capture_output=True, text=True, timeout=10)
-        
-        if result.returncode == 0:
-            print_colored("✅ Neo4j is running", Colors.GREEN)
-            print_colored(f"   Output: {result.stdout.strip()}", Colors.BLUE)
-            return True
-        else:
-            print_colored("❌ Neo4j is not running", Colors.RED)
-            print_colored(f"   Error: {result.stderr.strip()}", Colors.RED)
-            return False
-            
-    except subprocess.TimeoutExpired:
-        print_colored("⚠️  Neo4j status command timed out", Colors.YELLOW)
-        return False
-    except FileNotFoundError:
-        print_colored("⚠️  Neo4j command not found - is Neo4j installed?", Colors.YELLOW)
-        return False
-    except Exception as e:
-        print_colored(f"❌ Error checking Neo4j status: {e}", Colors.RED)
-        return False
-
-def test_server_health():
-    """Test server health endpoint"""
-    print_header("🔍 TESTING SERVER HEALTH")
-    
-    try:
-        print_colored(f"📍 Testing server at: {SERVER_URL}/health")
-        
-        response = requests.get(f"{SERVER_URL}/health", timeout=10)
-        
-        print_colored(f"📊 Status Code: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            print_colored("✅ Server is responding", Colors.GREEN)
-            print_colored(f"   Server Status: {data.get('status', 'unknown')}")
-            
-            if 'neo4j' in data:
-                neo4j_status = data['neo4j'].get('status', 'unknown')
-                print_colored(f"   Neo4j Status: {neo4j_status}")
+                rel = {
+                    'id': str(value.element_id),
+                    'type': value.type,
+                    'startNode': start_node_id,
+                    'endNode': end_node_id,
+                    'properties': dict(value)
+                }
+                relationships.append(rel)
                 
-                if neo4j_status != 'connected':
-                    print_colored("❌ Server can't connect to Neo4j - this is your 503 error cause!", Colors.RED)
-                    return False
+                # Add connected nodes if not already present and within limit
+                if start_node_id not in nodes and len(nodes) < node_limit:
+                    start_props = dict(value.start_node)
+                    if 'name' not in start_props and 'title' not in start_props:
+                        start_props['name'] = f"Node {len(nodes) + 1}"
+                    
+                    nodes[start_node_id] = {
+                        'id': start_node_id,
+                        'labels': list(value.start_node.labels),
+                        'properties': start_props
+                    }
+                
+                if end_node_id not in nodes and len(nodes) < node_limit:
+                    end_props = dict(value.end_node)
+                    if 'name' not in end_props and 'title' not in end_props:
+                        end_props['name'] = f"Node {len(nodes) + 1}"
+                    
+                    nodes[end_node_id] = {
+                        'id': end_node_id,
+                        'labels': list(value.end_node.labels),
+                        'properties': end_props
+                    }
             
-            return True
-            
-        elif response.status_code == 503:
-            print_colored("❌ 503 Service Unavailable - Neo4j connection problem!", Colors.RED)
-            try:
-                error_data = response.json()
-                print_colored(f"   Error details: {error_data}", Colors.YELLOW)
-            except:
-                print_colored(f"   Raw response: {response.text}", Colors.YELLOW)
-            return False
-        else:
-            print_colored(f"❌ Server error: {response.status_code}", Colors.RED)
-            return False
-            
-    except requests.exceptions.ConnectionError:
-        print_colored("❌ Cannot connect to server - is it running?", Colors.RED)
-        return False
-    except Exception as e:
-        print_colored(f"❌ Server test failed: {e}", Colors.RED)
-        return False
-
-def provide_solutions():
-    """Provide step-by-step solutions"""
-    print_header("🛠️  SOLUTIONS FOR 503 ERROR")
+            # Handle lists (might contain nodes/relationships)
+            elif isinstance(value, list):
+                for item in value:
+                    if hasattr(item, 'labels') and len(nodes) < node_limit:  # Node in list
+                        node_id = str(item.element_id)
+                        item_props = dict(item)
+                        if 'name' not in item_props and 'title' not in item_props:
+                            item_props['name'] = f"Node {len(nodes) + 1}"
+                        
+                        nodes[node_id] = {
+                            'id': node_id,
+                            'labels': list(item.labels),
+                            'properties': item_props
+                        }
+                    elif hasattr(item, 'type'):  # Relationship in list
+                        rel = {
+                            'id': str(item.element_id),
+                            'type': item.type,
+                            'startNode': str(item.start_node.element_id),
+                            'endNode': str(item.end_node.element_id),
+                            'properties': dict(item)
+                        }
+                        relationships.append(rel)
     
-    print_colored("The 503 Service Unavailable error means your server is running but can't connect to Neo4j.", Colors.YELLOW)
-    print_colored("\n📋 Step-by-Step Solutions:\n", Colors.BOLD)
-    
-    print_colored("1. 🚀 START NEO4J DATABASE:")
-    print_colored("   neo4j start")
-    print_colored("   # OR if using Docker:")
-    print_colored("   docker run --name neo4j -p 7687:7687 -p 7474:7474 -e NEO4J_AUTH=neo4j/your_password neo4j")
-    
-    print_colored("\n2. 🔑 CHECK/SET NEO4J PASSWORD:")
-    print_colored("   neo4j-admin set-password your_new_password")
-    print_colored("   # Then update your server configuration file")
-    
-    print_colored("\n3. ✏️  UPDATE SERVER CONFIGURATION:")
-    print_colored("   Edit your server file (standalone_server.py or mcpserver.py)")
-    print_colored("   Change: NEO4J_PASSWORD = 'your_actual_password'")
-    
-    print_colored("\n4. 🔄 RESTART YOUR SERVER:")
-    print_colored("   Stop the server (Ctrl+C)")
-    print_colored("   python standalone_server.py")
-    print_colored("   # Should show: ✅ Neo4j connection successful!")
-    
-    print_colored("\n5. 🧪 TEST THE FIX:")
-    print_colored("   curl http://localhost:8000/health")
-    print_colored("   # Should return: {\"status\": \"healthy\"}")
-
-def check_port_availability():
-    """Check if ports are available"""
-    print_header("🔍 CHECKING PORT AVAILABILITY")
-    
-    import socket
-    
-    ports_to_check = [
-        (7687, "Neo4j Bolt"),
-        (7474, "Neo4j HTTP"),
-        (8000, "Your Server")
+    # Filter relationships to only include those between visible nodes
+    visible_node_ids = set(nodes.keys())
+    filtered_relationships = [
+        rel for rel in relationships 
+        if rel['startNode'] in visible_node_ids and rel['endNode'] in visible_node_ids
     ]
     
-    for port, service in ports_to_check:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex(('localhost', port))
-            sock.close()
-            
-            if result == 0:
-                print_colored(f"✅ Port {port} ({service}) is open", Colors.GREEN)
-            else:
-                print_colored(f"❌ Port {port} ({service}) is not accessible", Colors.RED)
-                
-        except Exception as e:
-            print_colored(f"❌ Error checking port {port}: {e}", Colors.RED)
+    return {
+        'nodes': list(nodes.values()),
+        'relationships': filtered_relationships,
+        'total_nodes': len(nodes),
+        'total_relationships': len(filtered_relationships),
+        'limited': len(nodes) >= node_limit
+    }
 
-async def main():
-    """Main diagnostic function"""
-    print_colored("🩺 NEO4J CONNECTION DIAGNOSTIC TOOL", Colors.BOLD)
-    print_colored("This will help you fix the 503 Service Unavailable error\n", Colors.BLUE)
+def format_change_summary(counters, query: str, execution_time: float):
+    """Format a detailed summary of what changed in Neo4j"""
+    timestamp = datetime.now().isoformat()
     
-    # 1. Check if Neo4j is running
-    neo4j_running = check_neo4j_running()
+    changes = []
+    if counters.nodes_created > 0:
+        changes.append(f"✅ {counters.nodes_created} node(s) created")
+    if counters.nodes_deleted > 0:
+        changes.append(f"🗑️ {counters.nodes_deleted} node(s) deleted")
+    if counters.relationships_created > 0:
+        changes.append(f"🔗 {counters.relationships_created} relationship(s) created")
+    if counters.relationships_deleted > 0:
+        changes.append(f"💥 {counters.relationships_deleted} relationship(s) deleted")
+    if counters.properties_set > 0:
+        changes.append(f"📝 {counters.properties_set} property(ies) set")
+    if counters.labels_added > 0:
+        changes.append(f"🏷️ {counters.labels_added} label(s) added")
+    if counters.labels_removed > 0:
+        changes.append(f"🏷️ {counters.labels_removed} label(s) removed")
+    if counters.indexes_added > 0:
+        changes.append(f"📊 {counters.indexes_added} index(es) added")
+    if counters.indexes_removed > 0:
+        changes.append(f"📊 {counters.indexes_removed} index(es) removed")
+    if counters.constraints_added > 0:
+        changes.append(f"🔒 {counters.constraints_added} constraint(s) added")
+    if counters.constraints_removed > 0:
+        changes.append(f"🔒 {counters.constraints_removed} constraint(s) removed")
     
-    # 2. Check port availability
-    check_port_availability()
+    if not changes:
+        changes.append("ℹ️ No changes detected")
     
-    # 3. Test Neo4j connection directly
-    neo4j_works = await test_neo4j_connection()
+    return {
+        "timestamp": timestamp,
+        "execution_time_ms": round(execution_time * 1000, 2),
+        "query": query,
+        "changes": changes,
+        "summary": f"🕐 {timestamp} | ⚡ {round(execution_time * 1000, 2)}ms | {' | '.join(changes)}",
+        "raw_counters": {
+            "nodes_created": counters.nodes_created,
+            "nodes_deleted": counters.nodes_deleted,
+            "relationships_created": counters.relationships_created,
+            "relationships_deleted": counters.relationships_deleted,
+            "properties_set": counters.properties_set,
+            "labels_added": counters.labels_added,
+            "labels_removed": counters.labels_removed,
+            "indexes_added": counters.indexes_added,
+            "indexes_removed": counters.indexes_removed,
+            "constraints_added": counters.constraints_added,
+            "constraints_removed": counters.constraints_removed
+        }
+    }
+
+@app.get("/")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "Neo4j MCP Server", "max_nodes": 5000}
+
+@app.post("/read_neo4j_cypher")
+async def read_neo4j_cypher(request: CypherRequest):
+    try:
+        start_time = datetime.now()
+        node_limit = request.node_limit or 5000
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read_with_graph, request.query, request.params or {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        result_data = json.loads(result)
+        
+        # Extract graph data for visualization with node limit
+        graph_data = None
+        try:
+            async with driver.session(database=NEO4J_DATABASE) as session:
+                viz_result = await session.execute_read(_read_for_viz, request.query, request.params or {})
+            graph_data = extract_graph_data_optimized(viz_result, node_limit)
+        except Exception as e:
+            logger.warning(f"Could not extract graph data for visualization: {e}")
+        
+        # Check if we have graph data (nodes/relationships)
+        has_graph_data = graph_data and (graph_data.get('nodes') or graph_data.get('relationships'))
+        
+        response = {
+            "data": result_data,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2),
+                "query": request.query,
+                "record_count": len(result_data),
+                "has_graph_data": has_graph_data,
+                "node_limit": node_limit
+            },
+            "graph_data": graph_data if has_graph_data else None
+        }
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in read_neo4j_cypher: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/write_neo4j_cypher")
+async def write_neo4j_cypher(request: CypherRequest):
+    try:
+        start_time = datetime.now()
+        node_limit = request.node_limit or 5000
+        
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_write(_write, request.query, request.params or {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        # Format detailed change information
+        change_info = format_change_summary(result._summary.counters, request.query, execution_time)
+        
+        # Log the change
+        logger.info(f"Neo4j Write Operation: {change_info['summary']}")
+        
+        response = {
+            "result": "SUCCESS",
+            "change_info": change_info
+        }
+        
+        # If the write operation returns data (like MERGE or CREATE with RETURN), 
+        # try to get visualization data
+        graph_data = None
+        try:
+            if "RETURN" in request.query.upper():
+                async with driver.session(database=NEO4J_DATABASE) as session:
+                    viz_result = await session.execute_read(_read_for_viz, request.query, request.params or {})
+                graph_data = extract_graph_data_optimized(viz_result, node_limit)
+                response["graph_data"] = graph_data
+        except Exception:
+            response["graph_data"] = None
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in write_neo4j_cypher: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/get_neo4j_schema")
+async def get_neo4j_schema():
+    get_schema_query = "CALL apoc.meta.schema();"
+    try:
+        start_time = datetime.now()
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read, get_schema_query, {})
+        end_time = datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        schema = json.loads(result)[0].get('value')
+        return {
+            "schema": schema,
+            "metadata": {
+                "timestamp": start_time.isoformat(),
+                "execution_time_ms": round(execution_time * 1000, 2)
+            },
+            "graph_data": None
+        }
+    except Exception as e:
+        logger.error(f"Error in get_neo4j_schema: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sample_graph")
+async def get_sample_graph(node_limit: int = 200):
+    """Get a sample of the graph for visualization with configurable limit (optimized for Pyvis)"""
+    query = f"""
+    MATCH (n)-[r]->(m)
+    RETURN n, r, m
+    LIMIT {min(node_limit, 1000)}
+    """
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            result = await session.execute_read(_read_for_viz, query, {})
+        
+        graph_data = extract_graph_data_optimized(result, node_limit)
+        
+        return {
+            "graph_data": graph_data,
+            "query": query,
+            "timestamp": datetime.now().isoformat(),
+            "node_limit": node_limit
+        }
+    except Exception as e:
+        logger.error(f"Error getting sample graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/graph_stats")
+async def get_graph_stats():
+    """Get comprehensive graph statistics"""
+    stats_queries = [
+        ("total_nodes", "MATCH (n) RETURN count(n) as count"),
+        ("total_relationships", "MATCH ()-[r]->() RETURN count(r) as count"),
+        ("node_labels", "CALL db.labels() YIELD label RETURN collect(label) as labels"),
+        ("relationship_types", "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types"),
+        ("node_label_counts", "MATCH (n) RETURN labels(n)[0] as label, count(*) as count ORDER BY count DESC"),
+        ("relationship_type_counts", "MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC")
+    ]
     
-    # 4. Test server health
-    server_works = test_server_health()
+    stats = {}
     
-    # 5. Provide diagnosis and solutions
-    print_header("🎯 DIAGNOSIS SUMMARY")
+    try:
+        async with driver.session(database=NEO4J_DATABASE) as session:
+            for stat_name, query in stats_queries:
+                try:
+                    result = await session.execute_read(_read, query, {})
+                    data = json.loads(result)
+                    stats[stat_name] = data
+                except Exception as e:
+                    logger.warning(f"Could not get {stat_name}: {e}")
+                    stats[stat_name] = []
+        
+        return {
+            "stats": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting graph stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/optimize_query/{node_limit}")
+async def optimize_query_for_limit(node_limit: int, query: str):
+    """Optimize a query to respect node limits"""
+    optimized_query = query
     
-    if neo4j_works and server_works:
-        print_colored("🎉 EVERYTHING IS WORKING!", Colors.GREEN)
-        print_colored("Your 503 error should be resolved.", Colors.GREEN)
-    elif neo4j_works and not server_works:
-        print_colored("❌ Neo4j works, but server has issues", Colors.RED)
-        print_colored("Check server configuration and restart it.", Colors.YELLOW)
-    elif not neo4j_works:
-        print_colored("❌ NEO4J CONNECTION PROBLEM - This is causing your 503 error!", Colors.RED)
-        if not neo4j_running:
-            print_colored("Neo4j is not running - start it first!", Colors.YELLOW)
+    # Add LIMIT if not present and query is a MATCH
+    if "MATCH" in query.upper() and "LIMIT" not in query.upper():
+        if "RETURN" in query.upper():
+            # Insert LIMIT before the last part
+            parts = query.rsplit("RETURN", 1)
+            if len(parts) == 2:
+                optimized_query = f"{parts[0]}RETURN {parts[1]} LIMIT {node_limit}"
         else:
-            print_colored("Neo4j is running but connection failed - check password!", Colors.YELLOW)
+            optimized_query = f"{query} LIMIT {node_limit}"
     
-    # Always provide solutions
-    provide_solutions()
-    
-    print_header("🏁 NEXT STEPS")
-    
-    if not neo4j_works:
-        print_colored("1. Fix Neo4j connection using solutions above", Colors.YELLOW)
-        print_colored("2. Run this diagnostic again to verify fix", Colors.YELLOW)
-        print_colored("3. Restart your server", Colors.YELLOW)
-    else:
-        print_colored("1. Your Neo4j connection works!", Colors.GREEN)
-        print_colored("2. Restart your server if needed", Colors.GREEN)
-        print_colored("3. Test with: curl http://localhost:8000/health", Colors.GREEN)
+    return {
+        "original_query": query,
+        "optimized_query": optimized_query,
+        "node_limit": node_limit
+    }
+
+async def _read(tx: AsyncTransaction, query: str, params: dict):
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return json.dumps([r.data() for r in records.records], default=str)
+
+async def _read_with_graph(tx: AsyncTransaction, query: str, params: dict):
+    """Read query that preserves graph structure information"""
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return json.dumps([r.data() for r in records.records], default=str)
+
+async def _read_for_viz(tx: AsyncTransaction, query: str, params: dict):
+    """Read query specifically for graph visualization"""
+    res = await tx.run(query, params)
+    records = await res.to_eager_result()
+    return records.records  # Return raw records for graph extraction
+
+async def _write(tx: AsyncTransaction, query: str, params: dict):
+    return await tx.run(query, params)
 
 if __name__ == "__main__":
-    print("🔧 Starting Neo4j diagnostic...")
-    print("⚠️  Make sure to update NEO4J_PASSWORD in this script first!")
-    print()
-    
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run("mcpserver:app", host="0.0.0.0", port=8000, reload=True)
