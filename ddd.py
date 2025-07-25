@@ -5,8 +5,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
 
-# FastMCP and FastAPI imports
-from fastmcp import FastMCP, Context
+# FastAPI imports
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,7 +14,7 @@ from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncTransaction
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("mcp_neo4j_fastmcp")
+logger = logging.getLogger("mcp_neo4j_server")
 
 # Neo4j Configuration
 NEO4J_URI = "neo4j://localhost:7687"
@@ -28,14 +27,13 @@ driver: AsyncDriver = AsyncGraphDatabase.driver(
     NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)
 )
 
-# Create FastMCP instance
-mcp = FastMCP("Neo4j Graph Explorer MCP Server")
-
-# Create FastAPI instance for HTTP endpoints
+# Create FastAPI instance
 app = FastAPI(
     title="Neo4j Graph Explorer MCP Server",
-    description="Modern MCP server with FastMCP tools and FastAPI endpoints",
-    version="3.0.0"
+    description="MCP-style server with FastAPI endpoints for Neo4j graph database",
+    version="3.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # Add CORS middleware
@@ -47,7 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic models for FastAPI
+# Pydantic models
 class CypherRequest(BaseModel):
     query: str
     params: dict = {}
@@ -57,6 +55,17 @@ class CypherResponse(BaseModel):
     data: List[Dict[str, Any]]
     metadata: Dict[str, Any]
     graph_data: Optional[Dict[str, Any]] = None
+
+class MCPToolRequest(BaseModel):
+    tool: str
+    arguments: Dict[str, Any] = {}
+
+class MCPToolResponse(BaseModel):
+    tool: str
+    result: Dict[str, Any]
+    success: bool = True
+    error: Optional[str] = None
+    timestamp: str
 
 # Enhanced graph data extraction for unlimited display
 def extract_graph_data_unlimited(records, node_limit=None):
@@ -261,35 +270,24 @@ async def _write(tx: AsyncTransaction, query: str, params: dict):
     return await tx.run(query, params)
 
 # =============================================================================
-# MCP TOOLS - Using @mcp.tool decorators
+# MCP-STYLE TOOL FUNCTIONS
 # =============================================================================
 
-@mcp.tool()
-async def read_neo4j_cypher(
-    ctx: Context,
-    query: str,
-    params: Optional[Dict[str, Any]] = None,
-    node_limit: Optional[int] = 5000
-) -> Dict[str, Any]:
-    """
-    Execute a read-only Cypher query against Neo4j database.
-    
-    Args:
-        query: Cypher query string (MATCH, RETURN, WHERE, etc.)
-        params: Optional query parameters as key-value pairs
-        node_limit: Maximum number of nodes to return for visualization (0 for unlimited)
-    
-    Returns:
-        Dictionary with query results, metadata, and optional graph visualization data
-    """
+async def tool_read_neo4j_cypher(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP tool: Execute a read-only Cypher query against Neo4j database"""
     try:
+        query = arguments.get("query", "")
+        params = arguments.get("params", {})
+        node_limit = arguments.get("node_limit", 5000)
+        
+        if not query:
+            raise ValueError("Query parameter is required")
+        
         start_time = datetime.now()
         
         # Support unlimited display
         if node_limit == 0 or node_limit == -1:
             node_limit = None
-        
-        params = params or {}
         
         logger.info(f"🔍 Executing read query with limit: {'unlimited' if node_limit is None else node_limit}")
         
@@ -331,27 +329,17 @@ async def read_neo4j_cypher(
         logger.error(f"Error in read_neo4j_cypher: {e}")
         raise Exception(f"Neo4j read query failed: {str(e)}")
 
-@mcp.tool()
-async def write_neo4j_cypher(
-    ctx: Context,
-    query: str,
-    params: Optional[Dict[str, Any]] = None,
-    node_limit: Optional[int] = 5000
-) -> Dict[str, Any]:
-    """
-    Execute a write Cypher query against Neo4j database.
-    
-    Args:
-        query: Cypher query string (CREATE, MERGE, SET, DELETE, etc.)
-        params: Optional query parameters as key-value pairs
-        node_limit: Maximum number of nodes to return for visualization
-    
-    Returns:
-        Dictionary with change information and optional graph visualization data
-    """
+async def tool_write_neo4j_cypher(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP tool: Execute a write Cypher query against Neo4j database"""
     try:
+        query = arguments.get("query", "")
+        params = arguments.get("params", {})
+        node_limit = arguments.get("node_limit", 5000)
+        
+        if not query:
+            raise ValueError("Query parameter is required")
+        
         start_time = datetime.now()
-        params = params or {}
         
         logger.info(f"✏️ Executing write query: {query[:100]}...")
         
@@ -390,14 +378,8 @@ async def write_neo4j_cypher(
         logger.error(f"Error in write_neo4j_cypher: {e}")
         raise Exception(f"Neo4j write query failed: {str(e)}")
 
-@mcp.tool()
-async def get_neo4j_schema(ctx: Context) -> Dict[str, Any]:
-    """
-    Get the Neo4j database schema including node labels, relationship types, and properties.
-    
-    Returns:
-        Dictionary with complete database schema information
-    """
+async def tool_get_neo4j_schema(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP tool: Get the Neo4j database schema"""
     get_schema_query = "CALL apoc.meta.schema();"
     try:
         start_time = datetime.now()
@@ -424,14 +406,8 @@ async def get_neo4j_schema(ctx: Context) -> Dict[str, Any]:
         logger.error(f"Error in get_neo4j_schema: {e}")
         raise Exception(f"Neo4j schema query failed: {str(e)}")
 
-@mcp.tool()
-async def get_graph_stats(ctx: Context) -> Dict[str, Any]:
-    """
-    Get comprehensive graph statistics including node counts, relationship counts, and types.
-    
-    Returns:
-        Dictionary with detailed graph statistics
-    """
+async def tool_get_graph_stats(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP tool: Get comprehensive graph statistics"""
     stats_queries = [
         ("total_nodes", "MATCH (n) RETURN count(n) as count"),
         ("total_relationships", "MATCH ()-[r]->() RETURN count(r) as count"),
@@ -467,20 +443,10 @@ async def get_graph_stats(ctx: Context) -> Dict[str, Any]:
         logger.error(f"Error getting graph stats: {e}")
         raise Exception(f"Graph statistics query failed: {str(e)}")
 
-@mcp.tool()
-async def get_sample_graph(
-    ctx: Context,
-    node_limit: Optional[int] = 200
-) -> Dict[str, Any]:
-    """
-    Get a sample of the graph for visualization with configurable limit.
+async def tool_get_sample_graph(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP tool: Get a sample of the graph for visualization"""
+    node_limit = arguments.get("node_limit", 200)
     
-    Args:
-        node_limit: Maximum number of nodes to include (0 for unlimited)
-    
-    Returns:
-        Dictionary with sample graph data for visualization
-    """
     # Support unlimited sampling
     if node_limit == 0 or node_limit == -1:
         node_limit = None
@@ -516,8 +482,37 @@ async def get_sample_graph(
         logger.error(f"Error getting sample graph: {e}")
         raise Exception(f"Sample graph query failed: {str(e)}")
 
+# MCP tool registry
+MCP_TOOLS = {
+    "read_neo4j_cypher": {
+        "function": tool_read_neo4j_cypher,
+        "description": "Execute read-only Cypher queries",
+        "parameters": ["query", "params", "node_limit"]
+    },
+    "write_neo4j_cypher": {
+        "function": tool_write_neo4j_cypher,
+        "description": "Execute write Cypher queries",
+        "parameters": ["query", "params", "node_limit"]
+    },
+    "get_neo4j_schema": {
+        "function": tool_get_neo4j_schema,
+        "description": "Get database schema information",
+        "parameters": []
+    },
+    "get_graph_stats": {
+        "function": tool_get_graph_stats,
+        "description": "Get comprehensive graph statistics",
+        "parameters": []
+    },
+    "get_sample_graph": {
+        "function": tool_get_sample_graph,
+        "description": "Get sample graph for visualization",
+        "parameters": ["node_limit"]
+    }
+}
+
 # =============================================================================
-# FASTAPI HTTP ENDPOINTS - For REST API access
+# FASTAPI ENDPOINTS
 # =============================================================================
 
 @app.get("/")
@@ -527,17 +522,68 @@ async def health_check():
         "status": "healthy",
         "service": "Neo4j Graph Explorer MCP Server",
         "version": "3.0.0",
-        "features": ["fastmcp_tools", "unlimited_display", "enhanced_performance"],
+        "features": ["mcp_tools", "unlimited_display", "enhanced_performance"],
+        "timestamp": datetime.now().isoformat(),
+        "tools_available": len(MCP_TOOLS)
+    }
+
+@app.get("/tools")
+async def list_tools():
+    """List all available MCP tools"""
+    return {
+        "tools": [
+            {
+                "name": name,
+                "description": info["description"],
+                "parameters": info["parameters"]
+            }
+            for name, info in MCP_TOOLS.items()
+        ],
+        "total_tools": len(MCP_TOOLS),
         "timestamp": datetime.now().isoformat()
     }
 
+@app.post("/tools/call")
+async def call_tool(request: MCPToolRequest):
+    """Call an MCP tool by name"""
+    try:
+        if request.tool not in MCP_TOOLS:
+            raise HTTPException(status_code=404, detail=f"Tool '{request.tool}' not found")
+        
+        tool_info = MCP_TOOLS[request.tool]
+        tool_function = tool_info["function"]
+        
+        logger.info(f"🛠️ Calling tool: {request.tool}")
+        
+        result = await tool_function(request.arguments)
+        
+        return MCPToolResponse(
+            tool=request.tool,
+            result=result,
+            success=True,
+            timestamp=datetime.now().isoformat()
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Tool '{request.tool}' failed: {e}")
+        return MCPToolResponse(
+            tool=request.tool,
+            result={},
+            success=False,
+            error=str(e),
+            timestamp=datetime.now().isoformat()
+        )
+
+# Direct HTTP endpoints for backward compatibility
 @app.post("/read_neo4j_cypher", response_model=CypherResponse)
 async def http_read_neo4j_cypher(request: CypherRequest):
     """HTTP endpoint for read queries"""
     try:
-        from fastmcp import Context
-        ctx = Context()
-        result = await read_neo4j_cypher(ctx, request.query, request.params, request.node_limit)
+        result = await tool_read_neo4j_cypher({
+            "query": request.query,
+            "params": request.params,
+            "node_limit": request.node_limit
+        })
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -546,9 +592,11 @@ async def http_read_neo4j_cypher(request: CypherRequest):
 async def http_write_neo4j_cypher(request: CypherRequest):
     """HTTP endpoint for write queries"""
     try:
-        from fastmcp import Context
-        ctx = Context()
-        result = await write_neo4j_cypher(ctx, request.query, request.params, request.node_limit)
+        result = await tool_write_neo4j_cypher({
+            "query": request.query,
+            "params": request.params,
+            "node_limit": request.node_limit
+        })
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -557,9 +605,7 @@ async def http_write_neo4j_cypher(request: CypherRequest):
 async def http_get_neo4j_schema():
     """HTTP endpoint for schema queries"""
     try:
-        from fastmcp import Context
-        ctx = Context()
-        result = await get_neo4j_schema(ctx)
+        result = await tool_get_neo4j_schema({})
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -568,9 +614,7 @@ async def http_get_neo4j_schema():
 async def http_get_graph_stats():
     """HTTP endpoint for graph statistics"""
     try:
-        from fastmcp import Context
-        ctx = Context()
-        result = await get_graph_stats(ctx)
+        result = await tool_get_graph_stats({})
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -579,62 +623,22 @@ async def http_get_graph_stats():
 async def http_get_sample_graph(node_limit: int = 200):
     """HTTP endpoint for sample graph"""
     try:
-        from fastmcp import Context
-        ctx = Context()
-        result = await get_sample_graph(ctx, node_limit)
+        result = await tool_get_sample_graph({"node_limit": node_limit})
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/mcp/tools")
-async def list_mcp_tools():
-    """List all available MCP tools"""
-    return {
-        "tools": [
-            {
-                "name": "read_neo4j_cypher",
-                "description": "Execute read-only Cypher queries",
-                "parameters": ["query", "params", "node_limit"]
-            },
-            {
-                "name": "write_neo4j_cypher", 
-                "description": "Execute write Cypher queries",
-                "parameters": ["query", "params", "node_limit"]
-            },
-            {
-                "name": "get_neo4j_schema",
-                "description": "Get database schema information",
-                "parameters": []
-            },
-            {
-                "name": "get_graph_stats",
-                "description": "Get comprehensive graph statistics", 
-                "parameters": []
-            },
-            {
-                "name": "get_sample_graph",
-                "description": "Get sample graph for visualization",
-                "parameters": ["node_limit"]
-            }
-        ],
-        "features": ["unlimited_display", "enhanced_performance", "mcp_protocol"],
-        "timestamp": datetime.now().isoformat()
-    }
-
-# Combine FastMCP with FastAPI
-app.mount("/mcp", mcp.create_app())
-
-# Run both servers
+# Run server
 if __name__ == "__main__":
     import uvicorn
     
-    logger.info("🚀 Starting Neo4j Graph Explorer MCP Server with FastMCP + FastAPI...")
+    logger.info("🚀 Starting Neo4j Graph Explorer MCP Server...")
     logger.info("🛠️ MCP Tools: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema, get_graph_stats, get_sample_graph")
     logger.info("🌐 HTTP API: Available at /docs for OpenAPI documentation")
-    logger.info("🔗 MCP Protocol: Available at /mcp for MCP client connections")
+    logger.info("🔧 MCP Tools: Available at /tools for tool listing")
     
     uvicorn.run(
-        "mcpserver_fastmcp:app",
+        "mcpserver:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
