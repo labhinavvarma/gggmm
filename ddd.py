@@ -1,971 +1,1093 @@
+"""
+Fixed Neo4j Streamlit UI with Stable NVL Graph Visualization
+This version properly connects to the backend and shows stable relationship lines
+"""
+
+import streamlit as st
 import requests
-import urllib3
-from pydantic import BaseModel
-from typing import Optional, Dict, List
-from langgraph.graph import StateGraph, END
-from langchain_core.runnables import RunnableLambda
-import re
+import uuid
+import time
 import json
-import logging
 from datetime import datetime
+from typing import Dict, Any, Optional
+import streamlit.components.v1 as components
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("schema_aware_agent")
+# ============================================
+# CONFIGURATION - FIXED PORTS AND ENDPOINTS
+# ============================================
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Backend server ports (make sure these match your running servers)
+MCP_SERVER_PORT = 8000  # MCP server with Neo4j tools
+FASTAPI_APP_PORT = 8081  # FastAPI app with LangGraph agent
 
-# ============================================================================
-# STATE MODELS - Both Original and Schema-Aware
-# ============================================================================
+# Choose which backend to use (MCP server has more features)
+USE_MCP_SERVER = True  # Set to False to use FastAPI app instead
 
-class AgentState(BaseModel):
-    """Original agent state for backward compatibility"""
-    question: str
-    session_id: str
-    tool: str = ""
-    query: str = ""
-    trace: str = ""
-    answer: str = ""
-    graph_data: Optional[dict] = None
-    node_limit: int = 1000
+if USE_MCP_SERVER:
+    BACKEND_PORT = MCP_SERVER_PORT
+    CHAT_ENDPOINT = "/chat"
+    HEALTH_ENDPOINT = "/health"
+    GRAPH_ENDPOINT = "/graph"
+    STATS_ENDPOINT = "/stats"
+else:
+    BACKEND_PORT = FASTAPI_APP_PORT
+    CHAT_ENDPOINT = "/chat"
+    HEALTH_ENDPOINT = "/health"
+    GRAPH_ENDPOINT = "/graph"  # May not exist in FastAPI app
+    STATS_ENDPOINT = "/stats"  # May not exist in FastAPI app
 
-class SchemaAwareAgentState(BaseModel):
-    """Enhanced agent state with schema awareness"""
-    question: str
-    session_id: str
-    tool: str = ""
-    query: str = ""
-    trace: str = ""
-    answer: str = ""
-    graph_data: Optional[dict] = None
-    node_limit: int = 1000
-    schema_info: Optional[dict] = None
+BASE_URL = f"http://localhost:{BACKEND_PORT}"
 
-# ============================================================================
-# SCHEMA MANAGER
-# ============================================================================
+print(f"🔧 Streamlit UI Configuration:")
+print(f"   Backend: {'MCP Server' if USE_MCP_SERVER else 'FastAPI App'}")
+print(f"   Port: {BACKEND_PORT}")
+print(f"   Base URL: {BASE_URL}")
 
-class Neo4jSchemaManager:
-    """Manages Neo4j schema retrieval and analysis"""
+# ============================================
+# PAGE CONFIGURATION
+# ============================================
+
+st.set_page_config(
+    page_title="Neo4j Chatbot with Stable Graph",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Enhanced Custom CSS
+st.markdown("""
+<style>
+    .main { 
+        padding-top: 1rem; 
+    }
     
-    def __init__(self):
-        self.schema_cache = None
-        self.last_schema_update = None
-        self.schema_summary = None
+    .header-container {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
     
-    def fetch_database_schema(self) -> Dict:
-        """Retrieve the complete Neo4j database schema"""
-        try:
-            logger.info("🔍 Fetching complete Neo4j database schema...")
-            
-            # Get schema from MCP server
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers, timeout=30)
-            
-            if not result.ok:
-                logger.error(f"Failed to fetch schema: {result.status_code}")
-                return {}
-            
-            schema_response = result.json()
-            raw_schema = schema_response.get("schema", {})
-            
-            # Get additional schema information
-            additional_queries = [
-                ("node_labels", "CALL db.labels() YIELD label RETURN collect(label) as labels"),
-                ("relationship_types", "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types"),
-                ("property_keys", "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys"),
-                ("node_counts", "MATCH (n) RETURN labels(n) as label, count(*) as count ORDER BY count DESC"),
-                ("relationship_counts", "MATCH ()-[r]->() RETURN type(r) as type, count(*) as count ORDER BY count DESC")
-            ]
-            
-            enhanced_schema = {
-                "raw_schema": raw_schema,
-                "enhanced_info": {},
-                "last_updated": datetime.now().isoformat()
+    .status-healthy {
+        background: linear-gradient(90deg, #00d4aa 0%, #00b894 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        margin: 0.2rem;
+        display: inline-block;
+        font-weight: bold;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .status-error {
+        background: linear-gradient(90deg, #ff6b6b 0%, #ee5a52 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        margin: 0.2rem;
+        display: inline-block;
+        font-weight: bold;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .tool-badge {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+        display: inline-block;
+        margin: 0.2rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .query-display {
+        background: #1e1e1e;
+        color: #f8f8f2;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        font-family: 'Courier New', monospace;
+        border-left: 4px solid #50fa7b;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 0.5rem 0;
+    }
+    
+    .result-display {
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #00d4aa;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 0.5rem 0;
+    }
+    
+    .user-message {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .assistant-message {
+        background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .connection-indicator {
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        font-weight: bold;
+        margin: 0.5rem 0;
+    }
+    
+    .connected {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    
+    .disconnected {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    
+    .metric-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #667eea;
+        margin: 0.5rem 0;
+    }
+    
+    .prompt-section {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+        border-left: 4px solid #28a745;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================
+# SESSION STATE INITIALIZATION
+# ============================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+if "graph_data" not in st.session_state:
+    st.session_state.graph_data = None
+if "database_stats" not in st.session_state:
+    st.session_state.database_stats = {}
+if "connection_status" not in st.session_state:
+    st.session_state.connection_status = "checking"
+if "last_update_time" not in st.session_state:
+    st.session_state.last_update_time = None
+
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+
+@st.cache_data(ttl=10)
+def check_backend_health():
+    """Check health of the backend server with caching"""
+    try:
+        response = requests.get(f"{BASE_URL}{HEALTH_ENDPOINT}", timeout=5)
+        if response.status_code == 200:
+            return {"status": "healthy", "data": response.json()}
+        else:
+            return {"status": "error", "error": f"HTTP {response.status_code}"}
+    except requests.exceptions.ConnectionError:
+        return {"status": "disconnected", "error": f"Server not running on port {BACKEND_PORT}"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+def get_database_stats():
+    """Get current database statistics"""
+    try:
+        response = requests.get(f"{BASE_URL}{STATS_ENDPOINT}", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"HTTP {response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_graph_data(limit: int = 50):
+    """Get graph data for visualization"""
+    try:
+        response = requests.get(f"{BASE_URL}{GRAPH_ENDPOINT}?limit={limit}&include_relationships=true", timeout=15)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"HTTP {response.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def send_chat_message(question: str):
+    """Send chat message to backend"""
+    try:
+        payload = {
+            "question": question,
+            "session_id": st.session_state.session_id
+        }
+        
+        start_time = time.time()
+        
+        response = requests.post(
+            f"{BASE_URL}{CHAT_ENDPOINT}",
+            json=payload,
+            timeout=30
+        )
+        
+        response_time = time.time() - start_time
+        
+        if response.status_code == 200:
+            result = response.json()
+            result["response_time"] = response_time
+            return result
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {response.status_code}: {response.text}",
+                "answer": f"❌ Server error: {response.status_code}",
+                "response_time": response_time
             }
             
-            # Execute additional schema queries
-            for info_type, query in additional_queries:
-                try:
-                    data = {"query": query, "params": {}, "node_limit": 1000}
-                    result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=15)
-                    if result.ok:
-                        query_result = result.json()
-                        enhanced_schema["enhanced_info"][info_type] = query_result.get("data", [])
-                        logger.info(f"✅ Retrieved {info_type}")
-                    else:
-                        enhanced_schema["enhanced_info"][info_type] = []
-                except Exception as e:
-                    logger.warning(f"⚠️ Error getting {info_type}: {e}")
-                    enhanced_schema["enhanced_info"][info_type] = []
-            
-            # Cache the schema
-            self.schema_cache = enhanced_schema
-            self.last_schema_update = datetime.now()
-            
-            # Generate schema summary
-            self.schema_summary = self._generate_schema_summary(enhanced_schema)
-            
-            logger.info("✅ Complete database schema retrieved and cached")
-            return enhanced_schema
-            
-        except Exception as e:
-            logger.error(f"❌ Error fetching database schema: {e}")
-            return {}
+    except requests.exceptions.ConnectionError:
+        return {
+            "success": False,
+            "error": "Cannot connect to backend server",
+            "answer": f"❌ Backend server not running on port {BACKEND_PORT}. Please start the server.",
+            "response_time": 0
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "answer": f"❌ Request failed: {str(e)}",
+            "response_time": 0
+        }
+
+def create_stable_nvl_visualization(graph_data, height=600):
+    """Create stable Neo4j Visualization Library component with proper relationships"""
     
-    def _generate_schema_summary(self, schema: Dict) -> str:
-        """Generate a human-readable schema summary"""
-        try:
-            enhanced_info = schema.get("enhanced_info", {})
-            
-            # Extract information
-            node_labels = []
-            if enhanced_info.get("node_labels") and len(enhanced_info["node_labels"]) > 0:
-                node_labels = enhanced_info["node_labels"][0].get("labels", [])
-            
-            relationship_types = []
-            if enhanced_info.get("relationship_types") and len(enhanced_info["relationship_types"]) > 0:
-                relationship_types = enhanced_info["relationship_types"][0].get("types", [])
-            
-            property_keys = []
-            if enhanced_info.get("property_keys") and len(enhanced_info["property_keys"]) > 0:
-                property_keys = enhanced_info["property_keys"][0].get("keys", [])
-            
-            node_counts = enhanced_info.get("node_counts", [])
-            rel_counts = enhanced_info.get("relationship_counts", [])
-            
-            # Build summary
-            summary = f"""
-📊 **COMPLETE NEO4J DATABASE SCHEMA**
-
-🏷️ **Available Node Labels ({len(node_labels)}):**
-{', '.join(node_labels) if node_labels else 'None found'}
-
-🔗 **Available Relationship Types ({len(relationship_types)}):**
-{', '.join(relationship_types) if relationship_types else 'None found'}
-
-📝 **Available Properties ({len(property_keys)}):**
-{', '.join(property_keys[:20]) if property_keys else 'None found'}
-{f'... and {len(property_keys) - 20} more' if len(property_keys) > 20 else ''}
-
-📈 **Node Counts by Type:**
-{chr(10).join([f"  • {item.get('label', ['Unknown'])[0] if isinstance(item.get('label'), list) else item.get('label', 'Unknown')}: {item.get('count', 0)}" for item in node_counts[:10]]) if node_counts else 'No data'}
-
-🔗 **Relationship Counts by Type:**
-{chr(10).join([f"  • {item.get('type', 'Unknown')}: {item.get('count', 0)}" for item in rel_counts[:10]]) if rel_counts else 'No data'}
-            """.strip()
-            
-            return summary
-            
-        except Exception as e:
-            logger.error(f"Error generating schema summary: {e}")
-            return "Schema summary unavailable"
+    nodes = graph_data.get("nodes", [])
+    relationships = graph_data.get("relationships", [])
     
-    def get_cached_schema(self) -> Optional[Dict]:
-        """Get cached schema if available and recent"""
-        if self.schema_cache and self.last_schema_update:
-            # Cache valid for 10 minutes
-            time_diff = (datetime.now() - self.last_schema_update).total_seconds()
-            if time_diff < 600:  # 10 minutes
-                return self.schema_cache
-        return None
+    # Create unique key for forcing updates
+    update_key = int(time.time())
     
-    def get_schema_for_query_generation(self) -> str:
-        """Get schema information formatted for query generation"""
-        schema = self.get_cached_schema()
-        if not schema:
-            schema = self.fetch_database_schema()
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Stable Neo4j Graph</title>
+        <script src="https://unpkg.com/d3@7"></script>
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: #f8f9fa;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 1rem;
+                text-align: center;
+                font-weight: bold;
+            }}
+            
+            .controls {{
+                background: white;
+                padding: 1rem;
+                border-bottom: 1px solid #eee;
+                display: flex;
+                gap: 1rem;
+                align-items: center;
+                flex-wrap: wrap;
+                justify-content: center;
+            }}
+            
+            .btn {{
+                background: #667eea;
+                color: white;
+                border: none;
+                padding: 0.5rem 1rem;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                transition: background 0.2s;
+            }}
+            
+            .btn:hover {{
+                background: #5a6fd8;
+            }}
+            
+            .stats {{
+                display: flex;
+                gap: 1rem;
+                align-items: center;
+                font-size: 14px;
+            }}
+            
+            .stat {{
+                background: #f8f9fa;
+                padding: 0.5rem;
+                border-radius: 4px;
+                border-left: 3px solid #667eea;
+                font-weight: bold;
+            }}
+            
+            #graph-container {{
+                height: {height - 120}px;
+                background: white;
+                border-top: 1px solid #eee;
+                position: relative;
+            }}
+            
+            #graph-svg {{
+                width: 100%;
+                height: 100%;
+            }}
+            
+            .node {{
+                cursor: pointer;
+                stroke: #fff;
+                stroke-width: 2px;
+            }}
+            
+            .link {{
+                stroke: #999;
+                stroke-opacity: 0.8;
+                stroke-width: 2px;
+                fill: none;
+            }}
+            
+            .node-label {{
+                font-size: 12px;
+                font-family: Arial, sans-serif;
+                fill: #333;
+                text-anchor: middle;
+                pointer-events: none;
+                user-select: none;
+            }}
+            
+            .link-label {{
+                font-size: 10px;
+                font-family: Arial, sans-serif;
+                fill: #666;
+                text-anchor: middle;
+                pointer-events: none;
+                user-select: none;
+            }}
+            
+            .tooltip {{
+                position: absolute;
+                padding: 8px;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                border-radius: 4px;
+                font-size: 12px;
+                pointer-events: none;
+                z-index: 1000;
+                opacity: 0;
+                transition: opacity 0.2s;
+            }}
+            
+            .loading {{
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100%;
+                font-size: 18px;
+                color: #666;
+                flex-direction: column;
+                gap: 1rem;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            🧠 Stable Neo4j Graph - D3.js Force Layout (Update #{update_key})
+        </div>
         
-        if not schema:
-            return "Schema not available"
+        <div class="controls">
+            <div class="stats">
+                <div class="stat">Nodes: {len(nodes)}</div>
+                <div class="stat">Relationships: {len(relationships)}</div>
+                <div class="stat">Updated: {datetime.now().strftime('%H:%M:%S')}</div>
+            </div>
+            <button class="btn" onclick="restartSimulation()">🔄 Restart</button>
+            <button class="btn" onclick="centerGraph()">🎯 Center</button>
+            <button class="btn" onclick="zoomToFit()">🔍 Fit</button>
+        </div>
         
-        enhanced_info = schema.get("enhanced_info", {})
+        <div id="graph-container">
+            {('<div class="loading">📝 No data in Neo4j database.<br>Create some nodes to see the graph!</div>' if len(nodes) == 0 else '<svg id="graph-svg"></svg>')}
+        </div>
         
-        # Extract key information for query generation
-        node_labels = []
-        if enhanced_info.get("node_labels") and len(enhanced_info["node_labels"]) > 0:
-            node_labels = enhanced_info["node_labels"][0].get("labels", [])
-        
-        relationship_types = []
-        if enhanced_info.get("relationship_types") and len(enhanced_info["relationship_types"]) > 0:
-            relationship_types = enhanced_info["relationship_types"][0].get("types", [])
-        
-        property_keys = []
-        if enhanced_info.get("property_keys") and len(enhanced_info["property_keys"]) > 0:
-            property_keys = enhanced_info["property_keys"][0].get("keys", [])
-        
-        # Format for LLM
-        schema_text = f"""
-AVAILABLE NODE LABELS: {', '.join(node_labels)}
-AVAILABLE RELATIONSHIP TYPES: {', '.join(relationship_types)}
-COMMON PROPERTIES: {', '.join(property_keys[:15])}
-        """.strip()
-        
-        return schema_text
+        <div class="tooltip" id="tooltip"></div>
 
-# Initialize schema manager
-schema_manager = Neo4jSchemaManager()
+        <script>
+            // Graph data from Neo4j
+            const graphData = {{
+                nodes: {json.dumps(nodes)},
+                relationships: {json.dumps(relationships)}
+            }};
+            
+            console.log('📊 Stable Graph Data:', {{
+                nodes: graphData.nodes.length,
+                relationships: graphData.relationships.length
+            }});
+            
+            let svg, g, simulation, link, node, nodeLabels, linkLabels;
+            
+            // Color scale for node labels
+            const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
+            
+            function initializeGraph() {{
+                if (graphData.nodes.length === 0) return;
+                
+                const container = d3.select('#graph-container');
+                const containerRect = container.node().getBoundingClientRect();
+                const width = containerRect.width;
+                const height = containerRect.height;
+                
+                // Clear any existing SVG
+                d3.select('#graph-svg').selectAll('*').remove();
+                
+                svg = d3.select('#graph-svg')
+                    .attr('width', width)
+                    .attr('height', height);
+                
+                g = svg.append('g');
+                
+                // Add zoom behavior
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 4])
+                    .on('zoom', function(event) {{
+                        g.attr('transform', event.transform);
+                    }});
+                
+                svg.call(zoom);
+                
+                // Process data for D3
+                const nodes = graphData.nodes.map(d => ({{
+                    ...d,
+                    id: d.id.toString(),
+                    label: d.caption || d.properties?.name || `Node ${{d.id}}`,
+                    color: colorScale(d.labels?.[0] || 'default'),
+                    size: 20 + (Object.keys(d.properties || {{}}).length * 2)
+                }}));
+                
+                const links = graphData.relationships.map(d => ({{
+                    ...d,
+                    source: d.source.toString(),
+                    target: d.target.toString(),
+                    label: d.type || 'RELATES_TO'
+                }}));
+                
+                console.log('🔗 Processed data:', {{ nodes: nodes.length, links: links.length }});
+                
+                // Create force simulation
+                simulation = d3.forceSimulation(nodes)
+                    .force('link', d3.forceLink(links).id(d => d.id).distance(100).strength(0.8))
+                    .force('charge', d3.forceManyBody().strength(-300))
+                    .force('center', d3.forceCenter(width / 2, height / 2))
+                    .force('collision', d3.forceCollide().radius(d => d.size + 5));
+                
+                // Create links
+                link = g.append('g')
+                    .selectAll('.link')
+                    .data(links)
+                    .enter().append('line')
+                    .attr('class', 'link')
+                    .style('stroke-width', 2)
+                    .style('stroke', '#999')
+                    .style('opacity', 0.8);
+                
+                // Create link labels
+                linkLabels = g.append('g')
+                    .selectAll('.link-label')
+                    .data(links)
+                    .enter().append('text')
+                    .attr('class', 'link-label')
+                    .text(d => d.label)
+                    .style('font-size', '10px')
+                    .style('fill', '#666')
+                    .style('text-anchor', 'middle');
+                
+                // Create nodes
+                node = g.append('g')
+                    .selectAll('.node')
+                    .data(nodes)
+                    .enter().append('circle')
+                    .attr('class', 'node')
+                    .attr('r', d => d.size)
+                    .style('fill', d => d.color)
+                    .style('stroke', '#fff')
+                    .style('stroke-width', 2)
+                    .on('mouseover', handleMouseOver)
+                    .on('mouseout', handleMouseOut)
+                    .on('click', handleClick)
+                    .call(d3.drag()
+                        .on('start', dragstarted)
+                        .on('drag', dragged)
+                        .on('end', dragended));
+                
+                // Create node labels
+                nodeLabels = g.append('g')
+                    .selectAll('.node-label')
+                    .data(nodes)
+                    .enter().append('text')
+                    .attr('class', 'node-label')
+                    .text(d => d.label)
+                    .style('font-size', '12px')
+                    .style('fill', '#333')
+                    .style('text-anchor', 'middle')
+                    .style('pointer-events', 'none');
+                
+                // Update positions on simulation tick
+                simulation.on('tick', () => {{
+                    link
+                        .attr('x1', d => d.source.x)
+                        .attr('y1', d => d.source.y)
+                        .attr('x2', d => d.target.x)
+                        .attr('y2', d => d.target.y);
+                    
+                    linkLabels
+                        .attr('x', d => (d.source.x + d.target.x) / 2)
+                        .attr('y', d => (d.source.y + d.target.y) / 2);
+                    
+                    node
+                        .attr('cx', d => d.x)
+                        .attr('cy', d => d.y);
+                    
+                    nodeLabels
+                        .attr('x', d => d.x)
+                        .attr('y', d => d.y + 5);
+                }});
+                
+                console.log('✅ Stable graph initialized');
+            }}
+            
+            // Event handlers
+            function handleMouseOver(event, d) {{
+                const tooltip = d3.select('#tooltip');
+                
+                let content = `<strong>${{d.label}}</strong><br/>`;
+                content += `<strong>Labels:</strong> ${{d.labels?.join(', ') || 'None'}}<br/>`;
+                
+                if (d.properties && Object.keys(d.properties).length > 0) {{
+                    content += '<strong>Properties:</strong><br/>';
+                    Object.entries(d.properties).forEach(([key, value]) => {{
+                        content += `  ${{key}}: ${{value}}<br/>`;
+                    }});
+                }}
+                
+                tooltip
+                    .html(content)
+                    .style('left', (event.pageX + 10) + 'px')
+                    .style('top', (event.pageY - 10) + 'px')
+                    .style('opacity', 1);
+                
+                d3.select(event.target)
+                    .style('stroke', '#ff6b6b')
+                    .style('stroke-width', 3);
+            }}
+            
+            function handleMouseOut(event, d) {{
+                d3.select('#tooltip').style('opacity', 0);
+                
+                d3.select(event.target)
+                    .style('stroke', '#fff')
+                    .style('stroke-width', 2);
+            }}
+            
+            function handleClick(event, d) {{
+                console.log('🖱️ Node clicked:', d);
+            }}
+            
+            // Drag behavior
+            function dragstarted(event, d) {{
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }}
+            
+            function dragged(event, d) {{
+                d.fx = event.x;
+                d.fy = event.y;
+            }}
+            
+            function dragended(event, d) {{
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }}
+            
+            // Control functions
+            function restartSimulation() {{
+                if (simulation) {{
+                    simulation.alpha(1).restart();
+                }}
+            }}
+            
+            function centerGraph() {{
+                if (svg) {{
+                    const containerRect = d3.select('#graph-container').node().getBoundingClientRect();
+                    const transform = d3.zoomIdentity.translate(containerRect.width / 2, containerRect.height / 2).scale(1);
+                    svg.transition().duration(750).call(
+                        svg.__zoom__.transform,
+                        transform
+                    );
+                }}
+            }}
+            
+            function zoomToFit() {{
+                if (g && svg) {{
+                    const bounds = g.node().getBBox();
+                    const containerRect = d3.select('#graph-container').node().getBoundingClientRect();
+                    const width = containerRect.width;
+                    const height = containerRect.height;
+                    
+                    const scale = Math.min(width / bounds.width, height / bounds.height) * 0.8;
+                    const translate = [width / 2 - scale * (bounds.x + bounds.width / 2), height / 2 - scale * (bounds.y + bounds.height / 2)];
+                    
+                    svg.transition().duration(750).call(
+                        svg.__zoom__.transform,
+                        d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+                    );
+                }}
+            }}
+            
+            // Initialize when page loads
+            document.addEventListener('DOMContentLoaded', function() {{
+                console.log('🚀 Initializing stable graph visualization...');
+                if (graphData.nodes.length > 0) {{
+                    setTimeout(initializeGraph, 100);
+                }}
+            }});
+            
+            // Handle resize
+            window.addEventListener('resize', function() {{
+                if (simulation) {{
+                    setTimeout(initializeGraph, 250);
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    return html_content
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
+def update_connection_status():
+    """Update connection status in session state"""
+    health = check_backend_health()
+    st.session_state.connection_status = health["status"]
+    return health
 
-def clean_cypher_query(query: str) -> str:
-    """Clean and format Cypher queries for execution"""
-    query = re.sub(r'[\r\n]+', ' ', query)
-    keywords = [
-        "MATCH", "WITH", "RETURN", "ORDER BY", "UNWIND", "WHERE", "LIMIT",
-        "SKIP", "CALL", "YIELD", "CREATE", "MERGE", "SET", "DELETE", "DETACH DELETE", "REMOVE"
+# ============================================
+# ENHANCED EXAMPLE PROMPTS
+# ============================================
+
+EXAMPLE_PROMPTS = {
+    "🔍 Basic Queries": [
+        "How many nodes are in the graph?",
+        "How many relationships are in the graph?",
+        "Show me the database schema",
+        "List all node labels",
+        "List all relationship types"
+    ],
+    
+    "👥 Create People & Companies": [
+        "Create a Person named Alice with age 30 and email alice@email.com",
+        "Create a Person named Bob with age 25 and city 'New York'",
+        "Create a Company named TechCorp with industry 'Technology'",
+        "Create a Company named DataInc with employees 500",
+        "Create a Person named Charlie who works at Microsoft"
+    ],
+    
+    "🔗 Create Relationships": [
+        "Connect Alice to TechCorp with relationship WORKS_FOR",
+        "Create a FRIENDS_WITH relationship between Alice and Bob",
+        "Connect Bob to DataInc as an EMPLOYEE",
+        "Create a MANAGES relationship from Charlie to Alice",
+        "Connect TechCorp and DataInc with PARTNERS_WITH relationship"
+    ],
+    
+    "📊 Data Analysis": [
+        "Show me all Person nodes with their properties",
+        "Find all Company nodes and their details",
+        "List all WORKS_FOR relationships",
+        "Show me nodes with the most connections",
+        "Find people who work at technology companies"
+    ],
+    
+    "🏗️ Create Networks": [
+        "Create a social network with 3 connected friends: Alice, Bob, and Charlie",
+        "Create a company hierarchy: CEO -> Manager -> Employee",
+        "Build a project team with 4 people and their roles",
+        "Create a family tree with parents and children",
+        "Build a university structure with students and professors"
+    ],
+    
+    "🧹 Cleanup Operations": [
+        "Delete all TestNode nodes",
+        "Remove all TEMPORARY relationships",
+        "Delete nodes with no relationships",
+        "Clean up duplicate Person nodes",
+        "Remove all nodes with label 'Demo'"
+    ],
+    
+    "🔄 Update Operations": [
+        "Update all Person nodes to add a 'status' property set to 'active'",
+        "Set the 'last_updated' property to current timestamp for all Company nodes",
+        "Update Alice's age to 31",
+        "Change all WORKS_FOR relationships to include a 'start_date' property",
+        "Add a 'department' property to all employees"
+    ],
+    
+    "🎯 Advanced Queries": [
+        "Find the shortest path between Alice and any Company",
+        "Show me all people who work at companies with more than 100 employees",
+        "Find nodes that are connected to both Person and Company nodes",
+        "List all people who have friends working at the same company",
+        "Show me the most connected person in the network"
     ]
-    for kw in keywords:
-        query = re.sub(rf'(?<!\s)({kw})', r' \1', query)
-        query = re.sub(rf'({kw})([^\s\(])', r'\1 \2', query)
-    query = re.sub(r'\s+', ' ', query)
-    return query.strip()
+}
 
-def optimize_query_for_visualization(query: str, node_limit: int = 1000) -> str:
-    """Optimize queries for better visualization performance"""
-    query = query.strip()
+# ============================================
+# MAIN UI LAYOUT
+# ============================================
+
+# Header
+st.markdown("""
+<div class="header-container">
+    <h1>🧠 Neo4j Chatbot with Stable Graph Visualization</h1>
+    <p>Chat with your Neo4j database and see real-time updates with stable relationship lines</p>
+    <p><strong>✅ FIXED VERSION with Proper Backend Connection</strong></p>
+</div>
+""", unsafe_allow_html=True)
+
+# Check connection status
+health_status = update_connection_status()
+
+# Display connection status
+if health_status["status"] == "healthy":
+    st.markdown(f"""
+    <div class="connection-indicator connected">
+        ✅ Connected to {USE_MCP_SERVER and 'MCP Server' or 'FastAPI App'} on port {BACKEND_PORT}
+    </div>
+    """, unsafe_allow_html=True)
     
-    if ("MATCH" in query.upper() and 
-        "LIMIT" not in query.upper() and 
-        "count(" not in query.lower() and
-        "COUNT(" not in query):
-        
-        if "RETURN" in query.upper():
-            limit = min(node_limit, 50) if node_limit > 50 else node_limit
-            query += f" LIMIT {limit}"
+    # Show server details
+    if "data" in health_status:
+        health_data = health_status["data"]
+        if USE_MCP_SERVER and "neo4j" in health_data:
+            neo4j_info = health_data["neo4j"]
+            st.success(f"Neo4j Status: {neo4j_info.get('status', 'unknown')}")
+else:
+    st.markdown(f"""
+    <div class="connection-indicator disconnected">
+        ❌ Cannot connect to backend server on port {BACKEND_PORT}
+        <br>Error: {health_status.get('error', 'Unknown error')}
+    </div>
+    """, unsafe_allow_html=True)
     
-    return query
+    st.error("**Please check:**")
+    st.error(f"1. {'MCP server' if USE_MCP_SERVER else 'FastAPI app'} is running on port {BACKEND_PORT}")
+    st.error("2. Neo4j database is accessible")
+    st.error("3. All dependencies are installed")
+    
+    if st.button("🔄 Retry Connection"):
+        st.cache_data.clear()
+        st.rerun()
 
-def validate_query_against_schema(query: str, schema_info: Dict) -> tuple[bool, str]:
-    """Validate a Cypher query against the actual database schema"""
-    try:
-        enhanced_info = schema_info.get("enhanced_info", {})
+# Only show main interface if connected
+if health_status["status"] == "healthy":
+    
+    # Create main layout
+    col1, col2 = st.columns([1, 1.5])
+    
+    # ============================================
+    # LEFT COLUMN - CHAT INTERFACE
+    # ============================================
+    
+    with col1:
+        st.markdown("## 💬 Chat Interface")
         
-        # Get available labels and relationships
-        node_labels = []
-        if enhanced_info.get("node_labels") and len(enhanced_info["node_labels"]) > 0:
-            node_labels = enhanced_info["node_labels"][0].get("labels", [])
+        # Display current database stats
+        stats = get_database_stats()
+        if "error" not in stats:
+            st.markdown("### 📊 Database Statistics")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("Nodes", stats.get("nodes", 0))
+                st.metric("Relationships", stats.get("relationships", 0))
+            with col_b:
+                st.metric("Labels", len(stats.get("labels", [])))
+                st.metric("Rel Types", len(stats.get("relationship_types", [])))
         
-        relationship_types = []
-        if enhanced_info.get("relationship_types") and len(enhanced_info["relationship_types"]) > 0:
-            relationship_types = enhanced_info["relationship_types"][0].get("types", [])
-        
-        # Extract labels and relationships from query
-        query_labels = re.findall(r':(\w+)', query)
-        query_relationships = re.findall(r':\s*(\w+)\s*\]', query)
-        
-        issues = []
-        
-        # Check labels
-        for label in query_labels:
-            if label not in node_labels:
-                issues.append(f"Label '{label}' not found. Available: {', '.join(node_labels[:5])}")
-        
-        # Check relationships
-        for rel in query_relationships:
-            if rel not in relationship_types:
-                issues.append(f"Relationship '{rel}' not found. Available: {', '.join(relationship_types[:5])}")
-        
-        if issues:
-            return False, "; ".join(issues)
-        
-        return True, "Query validated successfully"
-        
-    except Exception as e:
-        logger.warning(f"Schema validation error: {e}")
-        return True, "Validation skipped due to error"
-
-def format_response_with_graph(result_data, tool_type, node_limit=5000):
-    """Format the response for split-screen display"""
-    try:
-        if isinstance(result_data, str):
+        # Manual refresh button
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            # Refresh graph data
             try:
-                result_data = json.loads(result_data)
-            except:
-                return str(result_data), None
+                new_graph_data = get_graph_data(50)
+                if "error" not in new_graph_data:
+                    st.session_state.graph_data = new_graph_data
+                    st.session_state.last_update_time = datetime.now()
+                    st.success("✅ Data refreshed!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Failed to refresh: {e}")
         
-        graph_data = None
+        # Chat messages display
+        st.markdown("### 📝 Recent Messages")
         
-        if tool_type == "write_neo4j_cypher" and isinstance(result_data, dict):
-            if "change_info" in result_data:
-                change_info = result_data["change_info"]
-                formatted_response = f"""
-🔄 **Database Update Completed**
-
-**⚡ Execution:** {change_info['execution_time_ms']}ms  
-**🕐 Time:** {change_info['timestamp'][:19]}
-
-**📝 Changes Made:**
-{chr(10).join(f"{change}" for change in change_info['changes'])}
-
-**🔧 Query:** `{change_info['query']}`
-                """.strip()
+        # Display recent messages
+        for message in st.session_state.messages[-6:]:
+            if message["role"] == "user":
+                st.markdown(f"""
+                <div class="user-message">
+                    <strong>🧑 You:</strong> {message["content"]}
+                    <br><small>⏰ {datetime.fromisoformat(message["timestamp"]).strftime("%H:%M:%S")}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                result = message["content"]
                 
-                if result_data.get("graph_data"):
-                    graph_data = result_data["graph_data"]
-                    node_count = len(graph_data.get('nodes', []))
-                    rel_count = len(graph_data.get('relationships', []))
-                    if node_count > 0 or rel_count > 0:
-                        formatted_response += f"\n\n🕸️ **Updated graph visualization** with {node_count} nodes and {rel_count} relationships"
+                st.markdown(f"""
+                <div class="assistant-message">
+                    <strong>🤖 Neo4j Agent:</strong>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                return formatted_response, graph_data
+                # Display response components
+                if result.get("tool"):
+                    st.markdown(f"""
+                    <div class="tool-badge">
+                        🔧 {result["tool"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if result.get("query"):
+                    st.markdown("**Query:**")
+                    st.markdown(f"""
+                    <div class="query-display">
+                        {result["query"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if result.get("answer"):
+                    st.markdown("**Result:**")
+                    st.markdown(f"""
+                    <div class="result-display">
+                        {result["answer"]}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if result.get("response_time"):
+                    st.caption(f"⏱️ {result['response_time']:.2f}s")
         
-        elif tool_type == "read_neo4j_cypher" and isinstance(result_data, dict):
-            if "data" in result_data and "metadata" in result_data:
-                data = result_data["data"]
-                metadata = result_data["metadata"]
-                graph_data = result_data.get("graph_data")
-                
-                formatted_response = f"""
-📊 **Query Results**
-
-**🔢 Records:** {metadata['record_count']}  
-**⚡ Time:** {metadata['execution_time_ms']}ms  
-**🕐 Timestamp:** {metadata['timestamp'][:19]}
-                """.strip()
-                
-                if not graph_data or not graph_data.get('nodes'):
-                    if isinstance(data, list) and len(data) > 0:
-                        if len(data) <= 3:
-                            formatted_response += f"\n\n**📋 Data:**\n```json\n{json.dumps(data, indent=2)}\n```"
-                        else:
-                            formatted_response += f"\n\n**📋 Sample Data:**\n```json\n{json.dumps(data[:2], indent=2)}\n... and {len(data) - 2} more records\n```"
-                    else:
-                        formatted_response += "\n\n**📋 Data:** No records found"
-                
-                if graph_data and graph_data.get('nodes'):
-                    node_count = len(graph_data['nodes'])
-                    rel_count = len(graph_data.get('relationships', []))
-                    
-                    formatted_response += f"\n\n🕸️ **Graph visualization updated** with {node_count} nodes and {rel_count} relationships"
-                    
-                    if node_count > 0:
-                        label_counts = {}
-                        for node in graph_data['nodes']:
-                            for label in node.get('labels', ['Unknown']):
-                                label_counts[label] = label_counts.get(label, 0) + 1
-                        
-                        if len(label_counts) > 0:
-                            label_summary = ", ".join([f"{label}({count})" for label, count in sorted(label_counts.items())])
-                            formatted_response += f"\n**🏷️ Node Types:** {label_summary}"
-                    
-                    if graph_data.get('limited'):
-                        formatted_response += f"\n**⚠️ Display limited to {node_limit} nodes for performance**"
-                
-                return formatted_response, graph_data
+        # Chat input
+        st.markdown("### ✍️ Ask Your Question")
         
-        elif tool_type == "get_neo4j_schema" and isinstance(result_data, dict):
-            if "schema" in result_data:
-                schema = result_data["schema"]
-                metadata = result_data.get("metadata", {})
-                
-                schema_summary = []
-                if isinstance(schema, dict):
-                    for label, info in schema.items():
-                        if isinstance(info, dict):
-                            props = info.get('properties', {})
-                            relationships = info.get('relationships', {})
-                            schema_summary.append(f"**{label}**: {len(props)} props, {len(relationships)} rels")
-                
-                formatted_response = f"""
-🏗️ **Database Schema**
-
-**⚡ Time:** {metadata.get('execution_time_ms', 'N/A')}ms
-
-**📊 Overview:**
-{chr(10).join(f"{item}" for item in schema_summary[:10])}
-{f"... and {len(schema_summary) - 10} more types" if len(schema_summary) > 10 else ""}
-                """.strip()
-                
-                return formatted_response, None
+        with st.form("chat_form", clear_on_submit=True):
+            user_input = st.text_area(
+                "Ask about your Neo4j database:",
+                placeholder="e.g., How many nodes are in the graph?",
+                height=80
+            )
+            
+            submitted = st.form_submit_button("🚀 Send Query", use_container_width=True)
         
-        formatted_text = json.dumps(result_data, indent=2) if isinstance(result_data, (dict, list)) else str(result_data)
-        return formatted_text, None
+        if submitted and user_input:
+            # Add user message
+            user_message = {
+                "role": "user",
+                "content": user_input,
+                "timestamp": datetime.now().isoformat()
+            }
+            st.session_state.messages.append(user_message)
+            
+            # Process the request
+            with st.spinner("🧠 Processing with Neo4j agent..."):
+                result = send_chat_message(user_input)
+            
+            # Add assistant message
+            assistant_message = {
+                "role": "assistant",
+                "content": result,
+                "timestamp": datetime.now().isoformat()
+            }
+            st.session_state.messages.append(assistant_message)
+            
+            # Refresh graph if it was a write operation
+            if result.get("tool") == "write_neo4j_cypher" and result.get("success", True):
+                try:
+                    new_graph_data = get_graph_data(50)
+                    if "error" not in new_graph_data:
+                        st.session_state.graph_data = new_graph_data
+                        st.session_state.last_update_time = datetime.now()
+                        st.success("🔄 Graph updated!")
+                except Exception as e:
+                    st.warning(f"Could not refresh graph: {e}")
+            
+            st.rerun()
     
-    except Exception as e:
-        error_msg = f"❌ **Error formatting response:** {str(e)}"
-        logger.error(error_msg)
-        return error_msg, None
-
-# ============================================================================
-# SYSTEM MESSAGES
-# ============================================================================
-
-def create_schema_aware_system_message() -> str:
-    """Create a system message that includes the actual database schema"""
+    # ============================================
+    # RIGHT COLUMN - STABLE GRAPH VISUALIZATION
+    # ============================================
     
-    # Get the current schema
-    schema_info = schema_manager.get_schema_for_query_generation()
-    schema_summary = schema_manager.schema_summary or "Schema summary not available"
-    
-    system_message = f"""You are a Neo4j database expert assistant with COMPLETE KNOWLEDGE of the actual database schema.
-
-🎯 **ACTUAL DATABASE SCHEMA:**
-{schema_info}
-
-**RESPONSE FORMAT (REQUIRED):**
-Tool: [tool_name]
-Query: [cypher_query_or_none_for_schema]
-
-**TOOLS AVAILABLE:**
-1. **read_neo4j_cypher** - For viewing, exploring, counting, finding data
-2. **write_neo4j_cypher** - For creating, updating, deleting data  
-3. **get_neo4j_schema** - For database structure questions
-
-**SCHEMA-AWARE QUERY GENERATION RULES:**
-✅ ONLY use node labels that exist in the schema above
-✅ ONLY use relationship types that exist in the schema above  
-✅ ONLY use properties that exist in the schema above
-✅ Generate precise queries based on actual schema
-✅ Use exact label/property names (case-sensitive)
-
-**ENHANCED EXAMPLES USING ACTUAL SCHEMA:**
-
-User: "Show me all nodes"
-Tool: read_neo4j_cypher
-Query: MATCH (n) RETURN labels(n) as Type, count(*) as Count ORDER BY Count DESC LIMIT 10
-
-User: "Find people" (if Person label exists)
-Tool: read_neo4j_cypher
-Query: MATCH (n:Person) RETURN n LIMIT 30
-
-User: "Show relationships" (using actual relationship types)
-Tool: read_neo4j_cypher
-Query: MATCH (a)-[r]->(b) RETURN type(r) as RelType, count(*) as Count ORDER BY Count DESC LIMIT 10
-
-User: "Count data by type"
-Tool: read_neo4j_cypher
-Query: MATCH (n) RETURN labels(n) as NodeType, count(*) as Count ORDER BY Count DESC
-
-User: "Show me connections between different types"
-Tool: read_neo4j_cypher
-Query: MATCH (a)-[r]->(b) WHERE labels(a) <> labels(b) RETURN a, r, b LIMIT 25
-
-User: "Find nodes with most connections"
-Tool: read_neo4j_cypher
-Query: MATCH (n)-[r]-() RETURN n, count(r) as connections ORDER BY connections DESC LIMIT 20
-
-**MULTI-TIER QUERIES (using actual schema):**
-
-User: "Find 2nd degree connections"
-Tool: read_neo4j_cypher
-Query: MATCH (a)-[r1]->(b)-[r2]->(c) WHERE a <> c RETURN a, r1, b, r2, c LIMIT 40
-
-User: "Show network paths"
-Tool: read_neo4j_cypher
-Query: MATCH path = (a)-[*1..3]-(b) WHERE a <> b RETURN path LIMIT 30
-
-User: "Friends of friends"
-Tool: read_neo4j_cypher
-Query: MATCH (p)-[*2]-(fof) WHERE p <> fof RETURN p, fof LIMIT 35
-
-User: "Extended network of specific person"
-Tool: read_neo4j_cypher
-Query: MATCH path = (start {{name: "John"}})-[*1..3]-(end) WHERE start <> end RETURN path LIMIT 30
-
-**VALIDATION RULES:**
-- If user asks for non-existent labels/relationships, suggest available alternatives
-- Always use schema-validated queries
-- Provide helpful error messages when schema doesn't match request
-
-**CURRENT SCHEMA SUMMARY:**
-{schema_summary}
-
-IMPORTANT: Generate queries ONLY using the actual schema elements listed above. If a user asks for something not in the schema, explain what's available instead.
-"""
-    
-    return system_message
-
-# Original system message for backward compatibility
-ORIGINAL_SYS_MSG = """You are a Neo4j database expert assistant. For each user question, you must select ONE tool and provide a Cypher query (if needed).
-
-REQUIRED OUTPUT FORMAT:
-Tool: [tool_name]
-Query: [cypher_query_if_needed]
-
-AVAILABLE TOOLS:
-1. read_neo4j_cypher - for reading data (MATCH, RETURN, WHERE, COUNT, etc.)
-2. write_neo4j_cypher - for modifying data (CREATE, MERGE, SET, DELETE, etc.) 
-3. get_neo4j_schema - for schema information (no query needed)
-
-EXAMPLES:
-
-User: Show me all Person nodes
-Tool: read_neo4j_cypher
-Query: MATCH (n:Person) RETURN n LIMIT 25
-
-User: How many nodes are there?
-Tool: read_neo4j_cypher  
-Query: MATCH (n) RETURN count(n) AS node_count
-
-User: Create a person named John
-Tool: write_neo4j_cypher
-Query: CREATE (n:Person {name: "John"}) RETURN n
-
-User: What is the database schema?
-Tool: get_neo4j_schema
-
-Always respond with Tool: and Query: on separate lines."""
-
-# ============================================================================
-# LLM INTERACTION
-# ============================================================================
-
-# Cortex LLM configuration
-API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-MODEL = "llama3.1-70b"
-
-def schema_aware_cortex_llm(prompt: str, session_id: str) -> str:
-    """Enhanced Cortex LLM call with schema-aware system message"""
-    
-    # Get the latest schema-aware system message
-    schema_aware_sys_msg = create_schema_aware_system_message()
-    
-    headers = {
-        "Authorization": f'Snowflake Token="{API_KEY}"',
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "query": {
-            "aplctn_cd": "edagnai",
-            "app_id": "edadip",
-            "api_key": API_KEY,
-            "method": "cortex",
-            "model": MODEL,
-            "sys_msg": schema_aware_sys_msg,
-            "limit_convs": "0",
-            "prompt": {
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            "session_id": session_id
-        }
-    }
-    
-    try:
-        logger.info(f"🔄 Calling Schema-Aware Cortex LLM...")
-        resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
-        resp.raise_for_status()
+    with col2:
+        st.markdown("## 🎨 Stable Neo4j Graph")
         
-        raw_response = resp.text
+        # Load graph data if not already loaded
+        if st.session_state.graph_data is None:
+            with st.spinner("📊 Loading graph data..."):
+                try:
+                    graph_data = get_graph_data(50)
+                    if "error" not in graph_data:
+                        st.session_state.graph_data = graph_data
+                        st.session_state.last_update_time = datetime.now()
+                except Exception as e:
+                    st.error(f"Failed to load graph: {e}")
         
-        if "end_of_stream" in raw_response:
-            parsed_response = raw_response.partition("end_of_stream")[0].strip()
+        # Display graph
+        if st.session_state.graph_data and "error" not in st.session_state.graph_data:
+            graph_data = st.session_state.graph_data
+            
+            # Show graph info
+            nodes = graph_data.get("nodes", [])
+            relationships = graph_data.get("relationships", [])
+            
+            st.markdown("### 📈 Graph Overview")
+            col_x, col_y = st.columns(2)
+            with col_x:
+                st.metric("Loaded Nodes", len(nodes))
+            with col_y:
+                st.metric("Loaded Relationships", len(relationships))
+            
+            if st.session_state.last_update_time:
+                st.caption(f"Last updated: {st.session_state.last_update_time.strftime('%H:%M:%S')}")
+            
+            # Create and display stable graph
+            if nodes:
+                stable_graph_html = create_stable_nvl_visualization(graph_data, height=600)
+                
+                components.html(
+                    stable_graph_html,
+                    height=600,
+                    key=f"stable_graph_{int(time.time())}"
+                )
+            else:
+                st.info("📝 No nodes in database. Create some data to see the graph!")
+        
+        elif st.session_state.graph_data and "error" in st.session_state.graph_data:
+            st.error(f"Graph error: {st.session_state.graph_data['error']}")
         else:
-            parsed_response = raw_response.strip()
-        
-        logger.info(f"✅ Schema-aware LLM response received")
-        return parsed_response
-        
-    except Exception as e:
-        logger.error(f"❌ Schema-aware Cortex LLM API error: {e}")
-        return f"Tool: read_neo4j_cypher\nQuery: MATCH (n) RETURN n LIMIT 20"
+            st.info("📊 Click 'Refresh Data' to load the graph visualization")
 
-def cortex_llm(prompt: str, session_id: str) -> str:
-    """Original Cortex LLM call for backward compatibility"""
-    
-    headers = {
-        "Authorization": f'Snowflake Token="{API_KEY}"',
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "query": {
-            "aplctn_cd": "edagnai",
-            "app_id": "edadip",
-            "api_key": API_KEY,
-            "method": "cortex",
-            "model": MODEL,
-            "sys_msg": ORIGINAL_SYS_MSG,
-            "limit_convs": "0",
-            "prompt": {
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            "session_id": session_id
-        }
-    }
-    
-    try:
-        resp = requests.post(API_URL, headers=headers, json=payload, verify=False, timeout=30)
-        resp.raise_for_status()
-        return resp.text.partition("end_of_stream")[0].strip()
-    except Exception as e:
-        logger.error(f"Cortex LLM API error: {e}")
-        return f"Tool: read_neo4j_cypher\nQuery: MATCH (n) RETURN n LIMIT 20"
+# ============================================
+# SIDEBAR - ENHANCED PROMPTS
+# ============================================
 
-# ============================================================================
-# PARSING FUNCTIONS
-# ============================================================================
-
-def parse_llm_output(llm_output):
-    """Parse LLM output to extract tool and query (original)"""
-    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    trace = llm_output.strip()
-    tool = None
-    query = None
+with st.sidebar:
+    st.markdown("## 🚀 Enhanced Example Prompts")
     
-    # Extract tool
-    tool_match = re.search(r"Tool:\s*([\w_]+)", llm_output, re.I)
-    if tool_match:
-        tname = tool_match.group(1).strip()
-        if tname in allowed_tools:
-            tool = tname
+    # Server status
+    if health_status["status"] == "healthy":
+        st.markdown("### ✅ Server Status")
+        st.success(f"Connected to port {BACKEND_PORT}")
+    else:
+        st.markdown("### ❌ Server Status")
+        st.error(f"Not connected to port {BACKEND_PORT}")
     
-    # Extract query
-    query_match = re.search(r"Query:\s*(.+?)(?:\n\n|\n[A-Z]|$)", llm_output, re.I | re.DOTALL)
-    if query_match:
-        query = query_match.group(1).strip()
-    
-    # Fallback
-    if not tool:
-        tool = "read_neo4j_cypher"
-        query = "MATCH (n) RETURN n LIMIT 20"
-    
-    return tool, query, trace
-
-def schema_aware_parse_llm_output(llm_output, schema_info):
-    """Enhanced parsing with schema validation"""
-    allowed_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    trace = llm_output.strip()
-    tool = None
-    query = None
-    
-    # Extract tool
-    tool_match = re.search(r"Tool:\s*([\w_]+)", llm_output, re.I)
-    if tool_match:
-        tname = tool_match.group(1).strip()
-        if tname in allowed_tools:
-            tool = tname
-    
-    # Extract query
-    query_match = re.search(r"Query:\s*(.+?)(?:\n\n|\n[A-Z]|$)", llm_output, re.I | re.DOTALL)
-    if query_match:
-        query = query_match.group(1).strip()
-    
-    # Validate query against schema
-    if query and tool == "read_neo4j_cypher" and schema_info:
-        is_valid, validation_msg = validate_query_against_schema(query, schema_info)
-        if not is_valid:
-            logger.warning(f"⚠️ Schema validation failed: {validation_msg}")
-            trace += f"\n\nSchema Validation Warning: {validation_msg}"
-    
-    # Fallback
-    if not tool or not query:
-        tool = "read_neo4j_cypher"
-        query = "MATCH (n) RETURN labels(n) as Types, count(*) as Count ORDER BY Count DESC LIMIT 10"
-    
-    return tool, query, trace
-
-# ============================================================================
-# NODE FUNCTIONS
-# ============================================================================
-
-def select_tool_node(state: AgentState) -> dict:
-    """Original tool selection for backward compatibility"""
-    logger.info(f"🤔 Processing question: {state.question}")
-    
-    try:
-        llm_output = cortex_llm(state.question, state.session_id)
-        tool, query, trace = parse_llm_output(llm_output)
+    # Enhanced example prompts organized by category
+    for category, prompts in EXAMPLE_PROMPTS.items():
+        st.markdown(f"### {category}")
         
-        if query and tool == "read_neo4j_cypher":
-            query = optimize_query_for_visualization(query, state.node_limit)
-        
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": tool or "",
-            "query": query or "",
-            "trace": trace or "",
-            "answer": "",
-            "graph_data": None,
-            "node_limit": state.node_limit
-        }
-    except Exception as e:
-        logger.error(f"Error in select_tool_node: {e}")
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": "read_neo4j_cypher",
-            "query": "MATCH (n) RETURN n LIMIT 10",
-            "trace": f"Error: {str(e)}",
-            "answer": f"❌ Error processing question: {str(e)}",
-            "graph_data": None,
-            "node_limit": state.node_limit
-        }
-
-def schema_aware_select_tool_node(state: SchemaAwareAgentState) -> dict:
-    """Schema-aware tool selection"""
-    logger.info(f"🧠 Processing question with schema awareness: {state.question}")
-    
-    try:
-        # Ensure schema is loaded
-        schema_info = schema_manager.get_cached_schema()
-        if not schema_info:
-            logger.info("📊 Loading database schema...")
-            schema_info = schema_manager.fetch_database_schema()
-        
-        # Call LLM with schema-aware prompt
-        llm_output = schema_aware_cortex_llm(state.question, state.session_id)
-        
-        # Parse with schema validation
-        tool, query, trace = schema_aware_parse_llm_output(llm_output, schema_info)
-        
-        # Optimize query for visualization
-        if query and tool == "read_neo4j_cypher":
-            query = optimize_query_for_visualization(query, state.node_limit)
-        
-        logger.info(f"✅ Schema-aware tool selection complete - Tool: {tool}")
-        
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": tool or "",
-            "query": query or "",
-            "trace": trace or f"Schema-aware processing of: {state.question}",
-            "answer": "",
-            "graph_data": None,
-            "node_limit": state.node_limit,
-            "schema_info": schema_info
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error in schema-aware tool selection: {e}")
-        
-        return {
-            "question": state.question,
-            "session_id": state.session_id,
-            "tool": "read_neo4j_cypher",
-            "query": "MATCH (n) RETURN n LIMIT 10",
-            "trace": f"Error in schema-aware processing: {str(e)}",
-            "answer": f"Schema-aware processing encountered an error: {str(e)}",
-            "graph_data": None,
-            "node_limit": state.node_limit,
-            "schema_info": None
-        }
-
-def execute_tool_node(state: AgentState) -> dict:
-    """Original tool execution for backward compatibility"""
-    tool = state.tool
-    query = state.query
-    trace = state.trace
-    node_limit = state.node_limit
-    answer = ""
-    graph_data = None
-    
-    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    
-    logger.info(f"⚡ Executing tool: '{tool}'")
-    
-    try:
-        if tool == "get_neo4j_schema":
-            result = requests.post("http://localhost:8000/get_neo4j_schema", headers=headers, timeout=30)
-            if result.ok:
-                answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-            else:
-                answer = f"❌ Schema query failed: {result.text}"
-                
-        elif tool == "read_neo4j_cypher":
-            if not query:
-                answer = "⚠️ No query generated for your request."
-            else:
-                query_clean = clean_cypher_query(query)
-                data = {"query": query_clean, "params": {}, "node_limit": node_limit}
-                result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=45)
-                
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-                else:
-                    answer = f"❌ Query failed: {result.text}"
-                    
-        elif tool == "write_neo4j_cypher":
-            if not query:
-                answer = "⚠️ No modification query generated."
-            else:
-                query_clean = clean_cypher_query(query)
-                data = {"query": query_clean, "params": {}, "node_limit": node_limit}
-                result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers, timeout=45)
-                
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-                else:
-                    answer = f"❌ Update failed: {result.text}"
-        else:
-            answer = f"❌ Unknown tool: {tool}"
-    
-    except Exception as e:
-        logger.error(f"Error in execute_tool_node: {e}")
-        answer = f"⚠️ Execution failed: {str(e)}"
-    
-    return {
-        "question": state.question,
-        "session_id": state.session_id,
-        "tool": tool,
-        "query": query,
-        "trace": trace,
-        "answer": answer,
-        "graph_data": graph_data,
-        "node_limit": node_limit
-    }
-
-def schema_aware_execute_tool_node(state: SchemaAwareAgentState) -> dict:
-    """Enhanced execution with schema awareness"""
-    tool = state.tool
-    query = state.query
-    trace = state.trace
-    node_limit = state.node_limit
-    schema_info = state.schema_info
-    answer = ""
-    graph_data = None
-    
-    valid_tools = {"read_neo4j_cypher", "write_neo4j_cypher", "get_neo4j_schema"}
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    
-    logger.info(f"⚡ Executing schema-aware tool: '{tool}'")
-    
-    try:
-        if tool == "get_neo4j_schema":
-            # Return cached schema if available
-            if schema_info:
-                answer = schema_manager.schema_summary or "Schema information available"
-            else:
-                # Fetch fresh schema
-                schema_info = schema_manager.fetch_database_schema()
-                answer = schema_manager.schema_summary or "Schema retrieved"
-                
-        elif tool == "read_neo4j_cypher":
-            if not query:
-                answer = "⚠️ No query generated for your request."
-            else:
-                query_clean = clean_cypher_query(query)
-                
-                # Enhanced limits for schema-aware queries
-                enhanced_node_limit = node_limit
-                if any(pattern in query_clean.upper() for pattern in ['*', 'PATH', 'DEGREE', 'TIER']):
-                    enhanced_node_limit = min(node_limit * 2, 100)
-                
-                data = {
-                    "query": query_clean,
-                    "params": {},
-                    "node_limit": enhanced_node_limit
+        for prompt in prompts:
+            if st.button(prompt, key=f"prompt_{hash(prompt)}", use_container_width=True):
+                # Add to chat
+                user_message = {
+                    "role": "user",
+                    "content": prompt,
+                    "timestamp": datetime.now().isoformat()
                 }
+                st.session_state.messages.append(user_message)
                 
-                result = requests.post("http://localhost:8000/read_neo4j_cypher", json=data, headers=headers, timeout=60)
+                # Process the query
+                with st.spinner("🧠 Processing..."):
+                    result = send_chat_message(prompt)
                 
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, enhanced_node_limit)
-                    logger.info("✅ Schema-aware query successful")
-                else:
-                    answer = f"❌ Query failed: {result.text}"
-                    
-        elif tool == "write_neo4j_cypher":
-            if not query:
-                answer = "⚠️ No modification query generated."
-            else:
-                query_clean = clean_cypher_query(query)
-                data = {"query": query_clean, "params": {}, "node_limit": node_limit}
-                result = requests.post("http://localhost:8000/write_neo4j_cypher", json=data, headers=headers, timeout=45)
+                assistant_message = {
+                    "role": "assistant",
+                    "content": result,
+                    "timestamp": datetime.now().isoformat()
+                }
+                st.session_state.messages.append(assistant_message)
                 
-                if result.ok:
-                    answer, graph_data = format_response_with_graph(result.json(), tool, node_limit)
-                else:
-                    answer = f"❌ Update failed: {result.text}"
-        else:
-            answer = f"❌ Unknown tool: {tool}"
+                # Refresh graph if needed
+                if result.get("tool") == "write_neo4j_cypher" and result.get("success", True):
+                    try:
+                        new_graph_data = get_graph_data(50)
+                        if "error" not in new_graph_data:
+                            st.session_state.graph_data = new_graph_data
+                            st.session_state.last_update_time = datetime.now()
+                    except Exception:
+                        pass
+                
+                st.rerun()
     
-    except Exception as e:
-        logger.error(f"Error in schema-aware execution: {e}")
-        answer = f"⚠️ Execution failed: {str(e)}"
+    # Clear chat
+    st.markdown("---")
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
     
-    return {
-        "question": state.question,
-        "session_id": state.session_id,
-        "tool": tool,
-        "query": query,
-        "trace": trace,
-        "answer": answer,
-        "graph_data": graph_data,
-        "node_limit": node_limit,
-        "schema_info": schema_info
-    }
+    # Session info
+    st.markdown("### 📋 Session Info")
+    st.text(f"ID: {st.session_state.session_id[:8]}...")
+    st.text(f"Messages: {len(st.session_state.messages)}")
+    if st.session_state.graph_data:
+        nodes_count = len(st.session_state.graph_data.get("nodes", []))
+        rels_count = len(st.session_state.graph_data.get("relationships", []))
+        st.text(f"Graph: {nodes_count} nodes, {rels_count} rels")
 
-# ============================================================================
-# AGENT BUILDERS
-# ============================================================================
+# ============================================
+# FOOTER
+# ============================================
 
-def build_agent():
-    """Build the original LangGraph agent (backward compatibility)"""
-    workflow = StateGraph(state_schema=AgentState)
-    
-    # Add nodes
-    workflow.add_node("select_tool", RunnableLambda(select_tool_node))
-    workflow.add_node("execute_tool", RunnableLambda(execute_tool_node))
-    
-    # Set entry point
-    workflow.set_entry_point("select_tool")
-    
-    # Add edges
-    workflow.add_edge("select_tool", "execute_tool")
-    workflow.add_edge("execute_tool", END)
-    
-    # Compile and return
-    agent = workflow.compile()
-    logger.info("🚀 Original LangGraph agent built successfully")
-    return agent
-
-def build_schema_aware_agent():
-    """Build the enhanced schema-aware LangGraph agent"""
-    logger.info("🚀 Building Schema-Aware LangGraph Agent...")
-    
-    # Initialize schema on startup
-    schema_manager.fetch_database_schema()
-    
-    workflow = StateGraph(state_schema=SchemaAwareAgentState)
-    
-    # Add nodes with schema-aware functions
-    workflow.add_node("select_tool", RunnableLambda(schema_aware_select_tool_node))
-    workflow.add_node("execute_tool", RunnableLambda(schema_aware_execute_tool_node))
-    
-    # Set entry point
-    workflow.set_entry_point("select_tool")
-    
-    # Add edges
-    workflow.add_edge("select_tool", "execute_tool")
-    workflow.add_edge("execute_tool", END)
-    
-    # Compile
-    agent = workflow.compile()
-    logger.info("✅ Schema-Aware LangGraph agent built successfully!")
-    
-    return agent
-
-# ============================================================================
-# UTILITY FUNCTIONS FOR EXTERNAL USE
-# ============================================================================
-
-def refresh_schema_cache():
-    """Manually refresh the schema cache"""
-    logger.info("🔄 Manually refreshing schema cache...")
-    return schema_manager.fetch_database_schema()
-
-def get_schema_summary():
-    """Get current schema summary"""
-    return schema_manager.schema_summary
-
-# For testing
-if __name__ == "__main__":
-    # Test both agents
-    print("Testing both agent types...")
-    
-    # Test original agent
-    original_agent = build_agent()
-    print("✅ Original agent built successfully")
-    
-    # Test schema-aware agent
-    schema_agent = build_schema_aware_agent()
-    print("✅ Schema-aware agent built successfully")
-    
-    print("🎉 All agents working!")
+st.markdown("---")
+st.markdown(f"""
+<div style="text-align: center; color: #666; padding: 2rem; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); border-radius: 0.5rem; margin-top: 2rem;">
+    <h3>🧠 Fixed Neo4j Chatbot v5.0</h3>
+    <p><strong>✅ STABLE CONNECTIONS:</strong> Properly connects to {'MCP Server' if USE_MCP_SERVER else 'FastAPI App'}</p>
+    <p><strong>🎨 STABLE GRAPH:</strong> D3.js force layout with visible relationship lines</p>
+    <p><strong>🔄 REAL-TIME UPDATES:</strong> Graph refreshes automatically after changes</p>
+    <p><strong>💡 ENHANCED PROMPTS:</strong> {sum(len(prompts) for prompts in EXAMPLE_PROMPTS.values())} example queries</p>
+    <p><strong>📡 Backend:</strong> {USE_MCP_SERVER and 'MCP Server' or 'FastAPI App'} on port {BACKEND_PORT}</p>
+</div>
+""", unsafe_allow_html=True)
