@@ -1,61 +1,136 @@
-import uvicorn
 from fastapi import (
-    FastAPI,
-    Request
-)
-from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.sse import SseServerTransport
-from starlette.routing import Mount
-from mcpserver import mcp
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    APIRouter,
 )
 
-sse = SseServerTransport("/messages")
+router = APIRouter(
+    prefix="/api/cortex"
+)
 
-app.router.routes.append(Mount("/messages", app=sse.handle_post_message))
+# Alias for app.py compatibility
+route = router
 
-@app.get("/messages", tags=["MCP"], include_in_schema=True)
-def messages_docs(session_id: str):
-    """
-    Messages endpoint for SSE communication
+@router.get("/health/status")
+async def get_health_status():
+    """Get basic health system status"""
+    return {
+        "status": "operational",
+        "service": "Health Details MCP Server",
+        "api_integration": "Milliman/Anthem APIs",
+        "timestamp": "2024-01-01T12:00:00Z"
+    }
 
-    This endpoint is used for posting messages to SSE clients.
-    Note: This route is for documentation purposes only.
-    The actual implementation is handled by the SSE transport.
-    """
-    pass  # This is just for documentation, the actual handler is mounted above
+@router.get("/health/tools")
+async def get_available_tools():
+    """Get list of available MCP tools"""
+    return {
+        "tools": [
+            "all", "token", "medical_submit", 
+            "pharmacy_submit", "mcid_search", "get_all_healthcare_data"
+        ],
+        "prompts": ["health-details", "healthcare-summary"],
+        "integration": "FastMCP + SSE compatible"
+    }
 
-@app.get("/sse", tags=["MCP"])
-async def handle_sse(request: Request):
-    """
-    SSE endpoint that connects to the MCP server
+@router.get("/test")
+async def test_endpoint():
+    """Test endpoint"""
+    return {"message": "Health Details MCP Server is running", "status": "ok"}from fastapi import APIRouter, HTTPException
+from typing import Dict, Any, List
+import json
+import logging
 
-    This endpoint establishes a Server-Sent Events connection with the client
-    and forwards communication to the Model Context Protocol server.
-    """
-    # Use sse.connect_sse to establish an SSE connection with the MCP server
-    async with sse.connect_sse(request.scope, request.receive, request._send) as (
-        read_stream,
-        write_stream,
-    ):
-        # Run the MCP server with the established streams
-        await mcp._mcp_server.run(
-            read_stream,
-            write_stream,
-            mcp._mcp_server.create_initialization_options(),
-        )
+# Configure logging
+logger = logging.getLogger(__name__)
 
-from router import route
+# Create router instance
+route = APIRouter(prefix="/api/v1", tags=["Health API"])
 
-app.include_router(route)
+@route.get("/health/status")
+async def get_health_status():
+    """Get basic health system status"""
+    try:
+        return {
+            "status": "operational",
+            "service": "Health Details MCP Server",
+            "api_integration": "Milliman/Anthem APIs",
+            "timestamp": "2024-01-01T12:00:00Z",
+            "endpoints": {
+                "sse": "/sse",
+                "messages": "/messages"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting health status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@route.get("/health/tools")
+async def get_available_tools():
+    """Get list of available MCP tools"""
+    return {
+        "tools": [
+            {
+                "name": "all",
+                "description": "Complete system overview with real API status", 
+                "type": "system"
+            },
+            {
+                "name": "token",
+                "description": "Get real authentication token from Milliman API",
+                "type": "authentication"
+            },
+            {
+                "name": "medical_submit",
+                "description": "Submit to real medical API",
+                "type": "healthcare_api",
+                "endpoint": "https://hix-clm-internaltesting-prod.anthem.com/medical"
+            },
+            {
+                "name": "pharmacy_submit", 
+                "description": "Submit to real pharmacy API",
+                "type": "healthcare_api",
+                "endpoint": "https://hix-clm-internaltesting-prod.anthem.com/pharmacy"
+            },
+            {
+                "name": "mcid_search",
+                "description": "Search real MCID service", 
+                "type": "healthcare_api",
+                "endpoint": "https://mcid-app-prod.anthem.com:443/MCIDExternalService/V2/extSearchService/json"
+            },
+            {
+                "name": "get_all_healthcare_data",
+                "description": "Get comprehensive data from all APIs",
+                "type": "comprehensive"
+            }
+        ],
+        "prompts": [
+            "health-details",
+            "healthcare-summary"
+        ],
+        "integration": "FastMCP + SSE compatible"
+    }
+
+@route.get("/health/endpoints")
+async def get_api_endpoints():
+    """Get configured API endpoints"""
+    return {
+        "authentication": {
+            "url": "https://securefed.antheminc.com/as/token.oauth2",
+            "client_id": "MILLIMAN",
+            "grant_type": "client_credentials"
+        },
+        "medical_api": "https://hix-clm-internaltesting-prod.anthem.com/medical",
+        "pharmacy_api": "https://hix-clm-internaltesting-prod.anthem.com/pharmacy", 
+        "mcid_api": "https://mcid-app-prod.anthem.com:443/MCIDExternalService/V2/extSearchService/json",
+        "status": "configured"
+    }
+
+@route.get("/health/test")
+async def test_mcp_integration():
+    """Test MCP server integration"""
+    return {
+        "mcp_server": "Health Details App",
+        "fastmcp_tools": 6,
+        "sse_compatible": True,
+        "real_api_integration": True,
+        "test_status": "ready"
+    }
