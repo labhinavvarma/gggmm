@@ -1,309 +1,271 @@
-from fastapi import APIRouter, HTTPException, Request
+import uvicorn
+from fastapi import (
+    FastAPI,
+    Request,
+    HTTPException
+)
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from mcp.server.sse import SseServerTransport
+from starlette.routing import Mount
 import json
-import asyncio
-import httpx
 from datetime import datetime
-import time
 
-# Import your MCP server tools (you'll need to adjust this import path)
-try:
-    from mcpserver import (
-        calculate, test_tool, diagnostic, 
-        wikipedia_search, duckduckgo_search, get_weather,
-        dfw_text2sql, dfw_search
-    )
-    MCP_TOOLS_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Could not import MCP tools: {e}")
-    MCP_TOOLS_AVAILABLE = False
+# Import your MCP server and router
+from mcpserver import mcp
+from router import route
 
-route = APIRouter()
+app = FastAPI(
+    title="DataFlyWheel MCP Server",
+    description="Enhanced MCP server with tool integration and caching",
+    version="2.0.0"
+)
 
-class ToolCallRequest(BaseModel):
-    tool_name: str
-    arguments: Dict[str, Any]
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class ToolCallResponse(BaseModel):
-    success: bool
-    result: Optional[Any] = None
-    error: Optional[str] = None
+# Initialize SSE transport
+sse = SseServerTransport("/messages/")
 
-# Mock context class for tools that need it
-class MockContext:
-    async def info(self, message: str):
-        print(f"ℹ️ INFO: {message}")
+# Mount SSE message handler
+app.router.routes.append(Mount("/messages/", app=sse.handle_post_message))
+
+# Include the router with tool endpoints
+app.include_router(route, prefix="/api/v1", tags=["MCP Tools"])
+
+@app.get("/sse", tags=["MCP"])
+async def handle_sse(request: Request):
+    """
+    SSE endpoint that connects to the MCP server
     
-    async def warning(self, message: str):
-        print(f"⚠️ WARNING: {message}")
-    
-    async def error(self, message: str):
-        print(f"❌ ERROR: {message}")
-
-@route.post("/tool_call", response_model=ToolCallResponse)
-async def handle_tool_call(request: ToolCallRequest):
-    """Handle MCP tool calls via HTTP API"""
+    This endpoint establishes a Server-Sent Events connection with the client
+    and forwards communication to the Model Context Protocol server.
+    """
     try:
-        tool_name = request.tool_name
-        arguments = request.arguments
-        
-        print(f"🔧 Received tool call: {tool_name} with args: {arguments}")
-        
-        if not MCP_TOOLS_AVAILABLE:
-            return ToolCallResponse(
-                success=False,
-                error="MCP tools not available - import failed"
+        # Use sse.connect_sse to establish an SSE connection with the MCP server
+        async with sse.connect_sse(request.scope, request.receive, request._send) as (
+            read_stream,
+            write_stream,
+        ):
+            # Run the MCP server with the established streams
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(),
             )
+    except Exception as e:
+        print(f"SSE connection error: {e}")
+        raise HTTPException(status_code=500, detail=f"SSE connection failed: {str(e)}")
+
+@app.get("/", tags=["Info"])
+async def root():
+    """Root endpoint with server information"""
+    return {
+        "name": "DataFlyWheel MCP Server",
+        "version": "2.0.0",
+        "status": "running",
+        "endpoints": {
+            "sse": "/sse",
+            "tools": "/api/v1/tools", 
+            "tool_call": "/api/v1/tool_call",
+            "health": "/api/v1/health",
+            "weather_cache": "/api/v1/weather_cache"
+        },
+        "features": [
+            "Enhanced Wikipedia search with fresh data",
+            "DuckDuckGo web search with content analysis", 
+            "Weather data with caching and validation",
+            "HEDIS tools integration",
+            "Calculator and diagnostic tools"
+        ],
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/health", tags=["Info"])
+async def health_check():
+    """Enhanced health check endpoint"""
+    try:
+        # Test MCP server availability
+        mcp_status = "available" if mcp else "unavailable"
         
-        # Create mock context for tools that need it
-        ctx = MockContext()
-        
-        # Route to appropriate tool
-        result = None
-        
-        if tool_name == "calculator":
-            expression = arguments.get("expression", "")
-            result = calculate(expression)
-            
-        elif tool_name == "test_tool":
-            message = arguments.get("message", "test")
-            result = await test_tool(message)
-            
-        elif tool_name == "diagnostic":
-            test_type = arguments.get("test_type", "basic")
-            result = await diagnostic(test_type)
-            
-        elif tool_name == "wikipedia_search":
-            query = arguments.get("query", "")
-            max_results = arguments.get("max_results", 3)
-            result = await wikipedia_search(query, ctx, max_results)
-            
-        elif tool_name == "duckduckgo_search":
-            query = arguments.get("query", "")
-            max_results = arguments.get("max_results", 3)
-            result = await duckduckgo_search(query, ctx, max_results)
-            
-        elif tool_name == "get_weather":
-            place = arguments.get("place", "")
-            result = await get_weather(place, ctx)
-            
-        elif tool_name == "DFWAnalyst":
-            prompt = arguments.get("prompt", "")
-            result = await dfw_text2sql(prompt, ctx)
-            
-        elif tool_name == "DFWSearch":
-            query = arguments.get("query", "")
-            result = await dfw_search(ctx, query)
-            
-        else:
-            return ToolCallResponse(
-                success=False,
-                error=f"Unknown tool: {tool_name}"
+        # Check tool availability
+        tool_status = {}
+        try:
+            from mcpserver import (
+                calculate, test_tool, diagnostic,
+                wikipedia_search, duckduckgo_search, get_weather,
+                dfw_text2sql, dfw_search
             )
+            tool_status = {
+                "calculator": "available",
+                "test_tool": "available", 
+                "diagnostic": "available",
+                "wikipedia_search": "available",
+                "duckduckgo_search": "available",
+                "get_weather": "available",
+                "DFWAnalyst": "available",
+                "DFWSearch": "available"
+            }
+        except ImportError as e:
+            tool_status = {"error": f"Tools import failed: {e}"}
         
-        print(f"✅ Tool {tool_name} executed successfully")
+        # Check weather cache
+        cache_status = "unknown"
+        try:
+            from mcpserver import weather_cache
+            cache_status = f"{len(weather_cache)} entries cached"
+        except:
+            cache_status = "cache unavailable"
         
-        return ToolCallResponse(
-            success=True,
-            result=result
-        )
+        return {
+            "status": "healthy",
+            "mcp_server": mcp_status,
+            "tools": tool_status,
+            "weather_cache": cache_status,
+            "timestamp": datetime.now().isoformat()
+        }
         
     except Exception as e:
-        print(f"❌ Tool call error: {e}")
-        return ToolCallResponse(
-            success=False,
-            error=str(e)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "unhealthy", 
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
         )
 
-@route.get("/tools")
-async def list_available_tools():
-    """List all available MCP tools"""
-    if not MCP_TOOLS_AVAILABLE:
-        return {"error": "MCP tools not available"}
-    
-    tools = {
-        "calculator": {
-            "description": "Evaluates basic arithmetic expressions",
-            "args": {"expression": "string"}
-        },
-        "test_tool": {
-            "description": "Simple test tool to verify tool calling works",
-            "args": {"message": "string"}
-        },
-        "diagnostic": {
-            "description": "Diagnostic tool to test MCP functionality",
-            "args": {"test_type": "string"}
-        },
-        "wikipedia_search": {
-            "description": "Search Wikipedia for current information",
-            "args": {"query": "string", "max_results": "integer (optional)"}
-        },
-        "duckduckgo_search": {
-            "description": "Search the web using DuckDuckGo for latest information",
-            "args": {"query": "string", "max_results": "integer (optional)"}
-        },
-        "get_weather": {
-            "description": "Get current weather information for a location",
-            "args": {"place": "string"}
-        },
-        "DFWAnalyst": {
-            "description": "Converts text to valid SQL for HEDIS value sets and code sets",
-            "args": {"prompt": "string"}
-        },
-        "DFWSearch": {
-            "description": "Searches HEDIS measure specification documents",
-            "args": {"query": "string"}
-        }
-    }
-    
-    return {
-        "tools": tools,
-        "count": len(tools),
-        "available": MCP_TOOLS_AVAILABLE
-    }
-
-@route.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "mcp_tools_available": MCP_TOOLS_AVAILABLE
-    }
-
-@route.post("/test_connection")
-async def test_mcp_connection():
-    """Test the MCP connection by calling a simple tool"""
+@app.post("/test_integration", tags=["Testing"])
+async def test_full_integration():
+    """Test the full MCP integration pipeline"""
     try:
+        test_results = []
+        
+        # Test 1: Simple calculator
+        from router import handle_tool_call, ToolCallRequest
+        
+        calc_request = ToolCallRequest(
+            tool_name="calculator",
+            arguments={"expression": "10 + 5 * 2"}
+        )
+        calc_result = await handle_tool_call(calc_request)
+        test_results.append({
+            "test": "calculator", 
+            "success": calc_result.success,
+            "result": calc_result.result if calc_result.success else calc_result.error
+        })
+        
+        # Test 2: Test tool
         test_request = ToolCallRequest(
             tool_name="test_tool",
-            arguments={"message": "connection test"}
+            arguments={"message": "integration test"}
         )
+        test_result = await handle_tool_call(test_request)
+        test_results.append({
+            "test": "test_tool",
+            "success": test_result.success, 
+            "result": test_result.result if test_result.success else test_result.error
+        })
         
-        result = await handle_tool_call(test_request)
+        # Test 3: Weather (with fallback location)
+        weather_request = ToolCallRequest(
+            tool_name="get_weather",
+            arguments={"place": "New York"}
+        )
+        weather_result = await handle_tool_call(weather_request)
+        test_results.append({
+            "test": "weather",
+            "success": weather_result.success,
+            "result": weather_result.result[:200] + "..." if weather_result.success and len(str(weather_result.result)) > 200 else weather_result.result if weather_result.success else weather_result.error
+        })
+        
+        success_count = sum(1 for r in test_results if r["success"])
         
         return {
-            "connection_status": "success" if result.success else "failed",
-            "test_result": result.result if result.success else result.error,
+            "integration_test": "completed",
+            "tests_run": len(test_results),
+            "tests_passed": success_count,
+            "success_rate": f"{success_count}/{len(test_results)}",
+            "results": test_results,
             "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
-        return {
-            "connection_status": "error",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-# Additional endpoint for direct prompt testing
-@route.post("/test_prompt")
-async def test_prompt_with_tool():
-    """Test a prompt that should trigger a tool call"""
-    try:
-        # Test different prompt patterns
-        test_prompts = [
-            "Use the calculator tool to calculate: 25 * 4 + 10",
-            "Use the test_tool with message: prompt test",
-            "Use the diagnostic tool with test_type: basic",
-        ]
-        
-        results = []
-        
-        for prompt in test_prompts:
-            # Simple tool detection logic
-            tool_call = None
-            
-            if "calculator" in prompt.lower():
-                # Extract expression
-                parts = prompt.split(":")
-                if len(parts) > 1:
-                    expression = parts[1].strip()
-                    tool_call = ToolCallRequest(
-                        tool_name="calculator",
-                        arguments={"expression": expression}
-                    )
-            elif "test_tool" in prompt.lower():
-                # Extract message
-                parts = prompt.split(":")
-                if len(parts) > 1:
-                    message = parts[1].strip()
-                    tool_call = ToolCallRequest(
-                        tool_name="test_tool", 
-                        arguments={"message": message}
-                    )
-            elif "diagnostic" in prompt.lower():
-                # Extract test_type
-                parts = prompt.split(":")
-                if len(parts) > 1:
-                    test_type = parts[1].strip()
-                    tool_call = ToolCallRequest(
-                        tool_name="diagnostic",
-                        arguments={"test_type": test_type}
-                    )
-            
-            if tool_call:
-                result = await handle_tool_call(tool_call)
-                results.append({
-                    "prompt": prompt,
-                    "tool_detected": tool_call.tool_name,
-                    "success": result.success,
-                    "result": result.result if result.success else result.error
-                })
-            else:
-                results.append({
-                    "prompt": prompt,
-                    "tool_detected": None,
-                    "success": False,
-                    "result": "No tool detected in prompt"
-                })
-        
-        return {
-            "test_results": results,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        return {
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-# Weather cache endpoint for monitoring
-@route.get("/weather_cache")
-async def get_weather_cache_status():
-    """Get weather cache status"""
-    try:
-        # Import weather cache from mcpserver
-        from mcpserver import weather_cache, is_weather_cache_valid
-        
-        cache_status = {}
-        for location, cache_entry in weather_cache.items():
-            cache_status[location] = {
-                "cached_at": datetime.fromtimestamp(cache_entry['timestamp']).isoformat(),
-                "is_valid": is_weather_cache_valid(cache_entry),
-                "age_seconds": time.time() - cache_entry['timestamp']
+        return JSONResponse(
+            status_code=500,
+            content={
+                "integration_test": "failed",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
             }
-        
-        return {
-            "cache_entries": len(cache_status),
-            "cache_status": cache_status,
+        )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler"""
+    print(f"Global exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "detail": str(exc),
+            "path": str(request.url),
             "timestamp": datetime.now().isoformat()
         }
-        
-    except ImportError:
-        return {
-            "error": "Weather cache not available",
-            "timestamp": datetime.now().isoformat()
-        }
+    )
+
+# Startup and shutdown events
+@app.on_event("startup")
+async def startup_event():
+    """Startup event handler"""
+    print("🚀 DataFlyWheel MCP Server starting up...")
+    print("✅ Server initialized with enhanced tools and caching")
+    
+    # Test basic tool availability
+    try:
+        from mcpserver import calculate
+        test_calc = calculate("2+2")
+        print(f"✅ Calculator tool test: {test_calc}")
+    except Exception as e:
+        print(f"⚠️ Calculator tool test failed: {e}")
+    
+    print("🌐 Server ready for connections")
+
+@app.on_event("shutdown") 
+async def shutdown_event():
+    """Shutdown event handler"""
+    print("🛑 DataFlyWheel MCP Server shutting down...")
+    
+    # Clear weather cache
+    try:
+        from mcpserver import weather_cache
+        cache_size = len(weather_cache)
+        weather_cache.clear()
+        print(f"🧹 Cleared weather cache ({cache_size} entries)")
+    except:
+        pass
+    
+    print("✅ Server shutdown complete")
 
 if __name__ == "__main__":
-    # For testing the router directly
-    import uvicorn
-    from fastapi import FastAPI
+    print("Starting DataFlyWheel MCP Server...")
+    print("Enhanced features:")
+    print("- Fixed Wikipedia search with current data")
+    print("- Enhanced DuckDuckGo search with fresh content")
+    print("- Weather tools with caching and validation") 
+    print("- All prompts now properly invoke tools")
+    print("- Tool call debugging and fallback support")
     
-    app = FastAPI(title="MCP Tool Router Test")
-    app.include_router(route)
-    
-    uvicorn.run(app, host="0.0.0.0", port=8082)
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8081,
+        log_level="info",
+        access_log=True
+    )
