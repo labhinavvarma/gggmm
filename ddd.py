@@ -1,696 +1,913 @@
-import streamlit as st
-import asyncio
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+import httpx
+from dataclasses import dataclass
+from urllib.parse import urlparse
+from pathlib import Path
 import json
-import yaml
-import pkg_resources
 import asyncio
+import snowflake.connector
+import requests
+import os
+from loguru import logger
+import logging
+import re
+import urllib.parse
+from datetime import datetime, timedelta
+from snowflake.connector import SnowflakeConnection
+from ReduceReuseRecycleGENAI.snowflake import snowflake_conn
+from snowflake.connector.errors import DatabaseError
+from snowflake.core import Root
+from typing import Optional, List, Dict
+from fastapi import (
+    HTTPException,
+    status,
+)
+from mcp.server.fastmcp.prompts.base import Message
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp.prompts import Prompt
+import mcp.types as types
+from functools import partial
+import sys
+import traceback
+import time
 
-from mcp.client.sse import sse_client
-from mcp import ClientSession
+# Create a named server
+mcp = FastMCP("DataFlyWheel App")
 
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from dependencies import SnowFlakeConnector
-from llmobjectwrapper import ChatSnowflakeCortex
-from snowflake.snowpark import Session
-from mcp.client.sse import sse_client
-from mcp import ClientSession
-from langchain_mcp_adapters.client import MultiServerMCPClient
+# Constants
+NWS_API_BASE = "https://api.weather.gov"
 
-# Page config
-st.set_page_config(page_title="MCP DEMO - Enhanced Web Research")
-st.title("MCP DEMO - Enhanced with Advanced Web Research & Weather")
+@dataclass
+class AppContext:
+    conn : SnowflakeConnection
+    db: str
+    schema: str
+    host: str
 
-server_url = st.sidebar.text_input("MCP Server URL", "http://10.126.192.183:8001/sse")
-show_server_info = st.sidebar.checkbox("🛡 Show MCP Server Info", value=False)
+class RateLimiter:
+    """Rate limiter to prevent overwhelming external services"""
+    def __init__(self, requests_per_minute: int = 30):
+        self.requests_per_minute = requests_per_minute
+        self.requests = []
 
-# === MOCK LLM ===
-def mock_llm_response(prompt_text: str) -> str:
-    return f"🤖 Mock LLM Response to: '{prompt_text}'"
+    async def acquire(self):
+        now = datetime.now()
+        # Remove requests older than 1 minute
+        self.requests = [
+            req for req in self.requests if now - req < timedelta(minutes=1)
+        ]
 
-# === Server Info ===
-if show_server_info:
-    async def fetch_mcp_info():
-        result = {"resources": [], "tools": [], "prompts": [], "yaml": [], "search": []}
-        try:
-            async with sse_client(url=server_url) as sse_connection:
-                async with ClientSession(*sse_connection) as session:
-                    await session.initialize()
+        if len(self.requests) >= self.requests_per_minute:
+            # Wait until we can make another request
+            wait_time = 60 - (now - self.requests[0]).total_seconds()
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
 
-                    # --- Resources ---
-                    resources = await session.list_resources()
-                    if hasattr(resources, 'resources'):
-                        for r in resources.resources:
-                            result["resources"].append({"name": r.name})
-                   
-                    # --- Tools (filtered) ---
-                    tools = await session.list_tools()
-                    # Hide internal/admin tools but show all research and weather tools
-                    hidden_tools = {"add-frequent-questions", "add-prompts", "suggested_top_prompts"}
-                    if hasattr(tools, 'tools'):
-                        for t in tools.tools:
-                            if t.name not in hidden_tools:
-                                result["tools"].append({
-                                    "name": t.name,
-                                    "description": getattr(t, 'description', '')
-                                })
+        self.requests.append(now)
 
-                    # --- Prompts (filtered to match client expectations) ---
-                    prompts = await session.list_prompts()
-                    # Include new web-research-prompt
-                    expected_prompts = {"hedis-prompt", "caleculator-promt", "weather-prompt", "web-research-prompt", "search-prompt", "test-tool-prompt", "diagnostic-prompt"}
-                    if hasattr(prompts, 'prompts'):
-                        for p in prompts.prompts:
-                            if p.name in expected_prompts:
-                                args = []
-                                if hasattr(p, 'arguments'):
-                                    for arg in p.arguments:
-                                        args.append(f"{arg.name} ({'Required' if arg.required else 'Optional'}): {arg.description}")
-                                result["prompts"].append({
-                                    "name": p.name,
-                                    "description": getattr(p, 'description', ''),
-                                    "args": args
-                                })
+# Initialize rate limiter
+rate_limiter = RateLimiter(requests_per_minute=20)
 
-                    # --- YAML Resources ---
-                    try:
-                        yaml_content = await session.read_resource("schematiclayer://cortex_analyst/schematic_models/hedis_stage_full/list")
-                        if hasattr(yaml_content, 'contents'):
-                            for item in yaml_content.contents:
-                                if hasattr(item, 'text'):
-                                    parsed = yaml.safe_load(item.text)
-                                    result["yaml"].append(yaml.dump(parsed, sort_keys=False))
-                    except Exception as e:
-                        result["yaml"].append(f"YAML error: {e}")
+#Stag name may need to be determined; requires code change
+#Resources; Have access to resources required for the server; Cortex Search; Cortex stage schematic config; stage area should be fully qualified name
 
-                    # --- Search Objects ---
-                    try:
-                        content = await session.read_resource("search://cortex_search/search_obj/list")
-                        if hasattr(content, 'contents'):
-                            for item in content.contents:
-                                if hasattr(item, 'text'):
-                                    objs = json.loads(item.text)
-                                    result["search"].extend(objs)
-                    except Exception as e:
-                        result["search"].append(f"Search error: {e}")
-
-        except Exception as e:
-            st.sidebar.error(f"❌ MCP Connection Error: {e}")
-        return result
-
-    mcp_data = asyncio.run(fetch_mcp_info())
-
-    # Display Resources
-    with st.sidebar.expander("📦 Resources", expanded=False):
-        for r in mcp_data["resources"]:
-            # Match based on pattern inside the name
-            if "cortex_search/search_obj/list" in r["name"]:
-                display_name = "Cortex Search"
-            elif "schematic_models" in r["name"]:
-                display_name = "HEDIS Schematic Models"
-            elif "frequent_questions" in r["name"]:
-                display_name = "Frequent Questions"
-            elif "prompts" in r["name"]:
-                display_name = "Prompt Templates"
-            else:
-                display_name = r["name"]
-            st.markdown(f"**{display_name}**")
-    
-    # --- YAML Section ---
-    with st.sidebar.expander("📋 Schematic Layer", expanded=False):
-        for y in mcp_data["yaml"]:
-            st.code(y, language="yaml")
-
-    # --- Tools Section (Enhanced for FREE Web Search) ---
-    with st.sidebar.expander("🛠 Tools", expanded=False):
-        tool_categories = {
-            "🏥 HEDIS & Analytics": ["DFWAnalyst", "DFWSearch", "calculator"],
-            "🆓 FREE Web Search": ["web_research", "focused_web_search"],
-            "🌤️ Weather": ["get_weather"],
-            "⚙️ System & Testing": ["test_tool", "diagnostic"]
-        }
-        
-        for category, tool_names in tool_categories.items():
-            st.markdown(f"**{category}:**")
-            category_tools = [t for t in mcp_data["tools"] if t['name'] in tool_names]
-            if category_tools:
-                for t in category_tools:
-                    st.markdown(f"  • **{t['name']}**")
-                    if t.get('description'):
-                        st.caption(f"    {t['description'][:100]}{'...' if len(t['description']) > 100 else ''}")
-            else:
-                st.caption("  No tools found in this category")
-
-    # Display Prompts
-    with st.sidebar.expander("🧐 Prompts", expanded=False):
-        for p in mcp_data["prompts"]:
-            prompt_display_names = {
-                "hedis-prompt": "🏥 HEDIS Expert",
-                "caleculator-promt": "🧮 Calculator", 
-                "weather-prompt": "🌤️ Weather Expert",
-                "web-research-prompt": "🆓 FREE Web Search Expert",
-                "test-tool-prompt": "🧪 Test Tool",
-                "diagnostic-prompt": "🔧 Diagnostic"
-            }
-            display_name = prompt_display_names.get(p['name'], p['name'])
-            st.markdown(f"**{display_name}**")
-            if p.get('description'):
-                st.caption(p['description'])
-
-else:
-    # Re-enable Snowflake and LLM chatbot features
-    @st.cache_resource
-    def get_snowflake_connection():
-        return SnowFlakeConnector.get_conn('aedl', '')
-
-    @st.cache_resource
-    def get_model():
-        sf_conn = get_snowflake_connection()
-        return ChatSnowflakeCortex(
-            model="claude-4-sonnet",
-            cortex_function="complete",
-            session=Session.builder.configs({"connection": sf_conn}).getOrCreate()
+@mcp.resource(uri="schematiclayer://cortex_analyst/schematic_models/{stagename}/list",name="hedis_schematic_models",description="Hedis Schematic models")
+async def get_schematic_model(stagename: str):
+    """Cortex analyst scematic layer model, model is in yaml format"""
+    #ctx = mcp.get_context()
+    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
+    conn = snowflake_conn(
+           logger,
+           aplctn_cd="aedl",
+           env="preprod",
+           region_name="us-east-1",
+           warehouse_size_suffix="",
+           prefix=""
         )
-    
-    # Enhanced prompt type selection with FREE web search
-    prompt_type = st.sidebar.radio(
-        "Select Prompt Type", 
-        ["FREE Web Search", "Calculator", "HEDIS Expert", "Weather", "No Context"],
-        help="Choose the type of expert assistance you need. FREE Web Search uses multiple free APIs with no API key required."
-    )
-    
-    prompt_map = {
-        "FREE Web Search": "web-research-prompt",
-        "Calculator": "caleculator-promt",
-        "HEDIS Expert": "hedis-prompt", 
-        "Weather": "weather-prompt",
-        "No Context": None
-    }
+    #conn = ctx.request_context.lifespan_context.conn
+    db = 'POC_SPC_SNOWPARK_DB'
+    schema = 'HEDIS_SCHEMA'
+    cursor = conn.cursor()
+    snfw_model_list = cursor.execute("LIST @{db}.{schema}.{stagename}".format(db=db, schema=schema, stagename=stagename))
+    return [stg_nm[0].split("/")[-1] for stg_nm in snfw_model_list if stg_nm[0].endswith('yaml')]
 
-    examples = {
-        "FREE Web Search": [
-            "Who is the current president of the United States in 2024-2025?",
-            "What are the latest AI developments and breakthroughs this week?", 
-            "Tell me about climate change and recent environmental policies",
-            "What are quantum computers and recent quantum computing developments?",
-            "Find information about electric vehicles and current market trends",
-            "What's happening in the stock market today and recent economic news?",
-            "Tell me about recent space exploration missions and discoveries",
-            "Find information about recent medical breakthroughs and healthcare advances",
-            "What are renewable energy technologies and recent innovations?",
-            "Find information about recent cybersecurity threats and data breaches",
-            "What are cryptocurrency regulations and recent market developments?", 
-            "Tell me about current smartphone technology and recent releases",
-            "Find information about social media platforms and recent policy changes",
-            "What are autonomous vehicles and recent technological developments?",
-            "Find current economic conditions and inflation rates worldwide"
-        ],
-        "Calculator": [
-            "Calculate the expression (4+5)/2.0", 
-            "Calculate the math function sqrt(16) + 7", 
-            "Calculate the expression 3^4 - 12",
-            "What is 15% of 847?",
-            "Calculate compound interest on $1000 at 5% for 3 years"
-        ],
-        "HEDIS Expert": [],
-        "Weather": [
-            "What is the current weather in Richmond, Virginia? (Latitude: 37.5407, Longitude: -77.4360)",
-            "Get weather forecast for Atlanta, Georgia (33.7490, -84.3880)",
-            "What's the weather like in New York City? (40.7128, -74.0060)",
-            "Show me the weather for Denver, Colorado (39.7392, -104.9903)",
-            "Current conditions in Miami, Florida (25.7617, -80.1918)"
-        ],
-        "Legacy Search": [
-            "Who is the current president of the United States?",
-            "What are the latest developments in artificial intelligence this week?",
-            "What's happening with climate change policies in 2024?", 
-            "Find recent renewable energy technology breakthroughs and explain them",
-            "What are today's stock market trends and current market conditions?",
-            "🔧 DEBUG: Use debug_web_scraping to diagnose why web scraping might be failing",
-            "🔧 TEST: Use get_current_info to test if current information retrieval is working"
-        ],
-        "No Context": [
-            "Who won the world cup in 2022?", 
-            "Summarize climate change impact on oceans",
-            "Explain quantum computing basics",
-            "What are the benefits of renewable energy?"
+@mcp.resource("search://cortex_search/search_obj/list")
+async def get_search_service():
+    """Cortex search service"""
+    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
+    conn = snowflake_conn(
+           logger,
+           aplctn_cd="aedl",
+           env="preprod",
+           region_name="us-east-1",
+           warehouse_size_suffix="",
+           prefix=""
+        )
+    #conn = ctx.request_context.lifespan_context.conn
+    db = 'POC_SPC_SNOWPARK_DB'
+    schema = 'HEDIS_SCHEMA'
+    cursor = conn.cursor()
+    snfw_search_objs = cursor.execute("SHOW CORTEX SEARCH SERVICES IN SCHEMA {db}.{schema}".format(db=db, schema=schema))
+    result = [search_obj[1] for search_obj in snfw_search_objs.fetchall()]
+    return result
+
+@mcp.resource("genaiplatform://{aplctn_cd}/frequent_questions/{user_context}")
+async def frequent_questions(aplctn_cd: str, user_context: str) -> List[str]:
+    resource_name = aplctn_cd + "_freq_questions.json"
+    freq_questions = json.load(open(resource_name))
+    aplcn_question = freq_questions.get(aplctn_cd)
+    return [rec["prompt"] for rec in aplcn_question if rec["user_context"] == user_context]
+
+@mcp.resource("genaiplatform://{aplctn_cd}/prompts/{prompt_name}")
+async def prompt_templates(aplctn_cd: str, prompt_name: str) -> List[str]:
+    resource_name = aplctn_cd + "_prompts.json"
+    prompt_data = json.load(open(resource_name))
+    aplcn_prompts = prompt_data.get(aplctn_cd)
+    return [rec["content"] for rec in aplcn_prompts if rec["prompt_name"] == prompt_name]
+
+@mcp.tool(
+        name="add-frequent-questions"
+       ,description="""
+        Tool to add frequent questions to MCP server
+        Example inputs:
+        {
+           "uri"
+        }
+        Args:
+               uri (str):  text to be passed
+               questions (list):
+               [
+                 {
+                   "user_context" (str): "User context for the prompt"
+                   "prompt" (str): "prompt"
+                 }
+               ]
+        """
+)
+async def add_frequent_questions(ctx: Context,uri: str,questions: list) -> list:
+    #Parse and extract aplctn_cd and user_context (urllib)
+    url_path = urlparse(uri)
+    aplctn_cd = url_path.netloc
+    user_context = Path(url_path.path).name
+    file_data = {}
+    file_name = aplctn_cd + "_freq_questions.json"
+    if Path(file_name).exists():
+        file_data  = json.load(open(file_name,'r'))
+        file_data[aplctn_cd].extend(questions)
+    else:
+        file_data[aplctn_cd] =  questions
+    index_dict = {
+        user_context: set()
+    }
+    result = []
+    #Remove duplicates
+    for elm in file_data[aplctn_cd]:
+        if elm["user_context"] == user_context and elm['prompt'] not in index_dict[user_context]:
+            result.append(elm)
+            index_dict[user_context].add(elm['prompt'])
+    file_data[aplctn_cd] = result
+    file = open(file_name,'w')
+    file.write(json.dumps(file_data))
+    return file_data[aplctn_cd]
+
+@mcp.tool(
+        name="add-prompts"
+       ,description="""
+        Tool to add prompts to MCP server
+        Example inputs:
+        {
+           ""
+        }
+        Args:
+               uri (str):  text to be passed
+               prompts (dict):
+                 {
+                   "prompt_name" (str): "Unique name assigned to prompt for a application"
+                   "description" (str): "Prompt description"
+                   "content" (str): "Prompt content"
+                 }
+        """
+)
+async def add_prompts(ctx: Context,uri: str,prompt: dict) -> dict:
+    #Parse and extract aplctn_cd and user_context (urllib)
+    url_path = urlparse(uri)
+    aplctn_cd = url_path.netloc
+    prompt_name = Path(url_path.path).name
+    #Before adding the prompt to file add to the server
+    ##Add prompts to server
+    def func1(query: str ):
+        return [
+            {
+                "role": "user",
+                "content": prompt["content"] + f"\n  {query}"
+            }
+        ]
+    ctx.fastmcp.add_prompt(
+        Prompt.from_function(
+            func1,name = prompt["prompt_name"],description=prompt["description"])
+    )
+    file_data = {}
+    file_name = aplctn_cd + "_prompts.json"
+    if Path(file_name).exists():
+        file = open(file_name,'r')
+        file_data  = json.load(file)
+        file_data[aplctn_cd].append(prompt)
+    else:
+        file_data[aplctn_cd] =  [prompt]
+    file = open(file_name,'w')
+    file.write(json.dumps(file_data))
+    return prompt
+
+#Tools; corex Analyst; Cortex Search; Cortex Complete
+
+@mcp.tool(
+        name="DFWAnalyst"
+       ,description="""
+        Coneverts text to valid SQL which can be executed on HEDIS value sets and code sets.
+        Example inputs:
+           What are the codes in <some value> Value Set?
+        Returns valid sql to retive data from underlying value sets and code sets.
+        Args:
+               prompt (str):  text to be passed
+        """
+)
+async def dfw_text2sql(prompt:str,ctx: Context) -> dict:
+    """Tool to convert natural language text to snowflake sql for hedis system, text should be passed as 'prompt' input perameter"""
+    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
+    conn = snowflake_conn(
+           logger,
+           aplctn_cd="aedl",
+           env="preprod",
+           region_name="us-east-1",
+           warehouse_size_suffix="",
+           prefix=""
+        )
+    #conn = ctx.request_context.lifespan_context.conn
+    db = 'POC_SPC_SNOWPARK_DB'
+    schema = 'HEDIS_SCHEMA'
+    host = HOST
+    stage_name = "hedis_stage_full"
+    file_name = "hedis_semantic_model_complete.yaml"
+    request_body = {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        "semantic_model_file": f"@{db}.{schema}.{stage_name}/{file_name}",
+    }
+    token = conn.rest.token
+    resp = requests.post(
+        url=f"https://{host}/api/v2/cortex/analyst/message",
+        json=request_body,
+        headers={
+            "Authorization": f'Snowflake Token="{token}"',
+            "Content-Type": "application/json",
+        },
+    )
+    return resp.json()
+
+#Need to change the type of serch, implimented in the below code; Revisit
+@mcp.tool(
+        name="DFWSearch"
+       ,description= """
+        Searches HEDIS measure specification documents.
+        Example inputs:
+        What is the age criteria for  BCS Measure ?
+        What is EED Measure in HEDIS?
+        Describe COA Measure?
+        What LOB is COA measure scoped under?
+        Returns information utilizing HEDIS measure speficication documents.
+        Args:
+              query (str): text to be passed
+       """
+)
+async def dfw_search(ctx: Context,query: str):
+    """Tool to provide search againest HEDIS business documents for the year 2024, search string should be provided as 'query' perameter"""
+    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
+    conn = snowflake_conn(
+           logger,
+           aplctn_cd="aedl",
+           env="preprod",
+           region_name="us-east-1",
+           warehouse_size_suffix="",
+           prefix=""
+        )
+    #conn = ctx.request_context.lifespan_context.conn
+    db = 'POC_SPC_SNOWPARK_DB'
+    schema = 'HEDIS_SCHEMA'
+    search_service = 'CS_HEDIS_FULL_2024'
+    columns = ['chunk']
+    limit = 2
+    root = Root(conn)
+    search_service = root.databases[db].schemas[schema].cortex_search_services[search_service]
+    response = search_service.search(
+        query=query,
+        columns=columns,
+        limit=limit
+    )
+    return response.to_json()
+
+@mcp.tool(
+        name="calculator",
+        description="""
+        Evaluates a basic arithmetic expression.
+        Supports: +, -, *, /, parentheses, decimals.
+        Example inputs:
+        3+4/5
+        3.0/6*8
+        Returns decimal result
+        Args:
+             expression (str): Arthamatic expression input
+        """
+)
+def calculate(expression: str) -> str:
+    """
+    Evaluates a basic arithmetic expression.
+    Supports: +, -, *, /, parentheses, decimals.
+    """
+    print(f" calculate() called with expression: {expression}", flush=True)
+    try:
+        allowed_chars = "0123456789+-*/(). "
+        if any(char not in allowed_chars for char in expression):
+            return " Invalid characters in expression."
+        result = eval(expression)
+        return f" Result: {result}"
+    except Exception as e:
+        print(" Error in calculate:", str(e), flush=True)
+        return f" Error: {str(e)}"
+
+#This may required to be integrated in main agent
+@mcp.tool(
+        name="suggested_top_prompts",
+        description="""
+        Suggests requested number of prompts with given context.
+        Example Input:
+        {
+          top_n_suggestions: 3,
+          context: "Initialization" | "The age criteria for the BCS (Breast Cancer Screening) measure is 50-74 years of age."
+          aplctn_cd: "hedis"
+        }
+        Returns List of string values.
+        Args:
+            top_n_suggestions (int): how many suggestions to be generated.
+            context (str): context that need to be used for the promt suggestions.
+            aplctn_cd (str): application code.
+        """
+)
+async def question_suggestions(ctx: Context,aplctn_cd: str, app_lvl_prefix: str, session_id: str, top_n: int = 3,context: str="Initialization",llm_flg: bool = False):
+    """Tool to suggest aditional prompts with in the provided context, context should be passed as 'context' input perameter"""
+    if  not llm_flg:
+        return ctx.read_resource(f"genaiplatform://{aplctn_cd}/frequent_questions/{context}")
+    try:
+        sf_conn = SnowFlakeConnector.get_conn(
+            aplctn_cd,
+            app_lvl_prefix,
+            session_id,
+        )
+    except DatabaseError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authorized to resources"
+        )
+    clnt = httpx.AsyncClient(verify=False)
+    request_body = {
+        "model": "llama3.1-70b-elevance",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"""
+                You are an expert in suggesting hypothetical questions.
+                Suggest a list of {top_n} hypothetical questions that the below context could be used to answer:
+                {context}
+                Return List with hypothetical questions
+                """
+            }
         ]
     }
+    headers = {
+        "Authorization": f'Snowflake Token="{sf_conn.rest.token}"',
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "method":"cortex",
+    }
+    url = "https://jib90126.us-east-1.privatelink.snowflakecomputing.com/api/v2/cortex/inference:complete"
+    response_text = []
+    async with clnt.stream('POST', url, headers=headers, json=request_body) as response:
+        if response.is_client_error:
+            error_message = await response.aread()
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=error_message.decode("utf-8")
+            )
+        if response.is_server_error:
+            error_message = await response.aread()
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=error_message.decode("utf-8")
+            )
+        # Stream the response content
+        async for result_chunk in response.aiter_bytes():
+            for elem in result_chunk.split(b'\n\n'):
+                if b'content' in elem:  # Check for data presence
+                    chunk_dict = json.loads(elem.replace(b'data: ', b''))
+                    print(chunk_dict)
+                    full_response = chunk_dict['choices'][0]['delta']['text']
+                    full_response = full_response
+                    response_text.append(full_response)
+    return json.loads(response_text)
 
-    # Load HEDIS examples dynamically
-    if prompt_type == "HEDIS Expert":
+# === WIKIPEDIA MCP TOOL ===
+@mcp.tool(
+        name="wikipedia_search",
+        description="""
+        Search Wikipedia for information on any topic.
+        Example inputs:
+        "artificial intelligence"
+        "World War II"
+        "Python programming language"
+        Returns Wikipedia article content and summary.
+        Args:
+             query (str): Search query for Wikipedia
+             max_results (int): Maximum number of results to return (default: 3)
+        """
+)
+async def wikipedia_search(query: str, ctx: Context, max_results: int = 3) -> str:
+    """Tool to search Wikipedia for information, query should be passed as 'query' input parameter"""
+    try:
+        await rate_limiter.acquire()
+        await ctx.info(f"🔍 Searching Wikipedia for: {query}")
+        
+        headers = {
+            "User-Agent": "MCP Wikipedia Client (mcp-server@example.com)"
+        }
+        
+        # Search Wikipedia API
+        search_url = "https://en.wikipedia.org/api/rest_v1/page/search"
+        search_params = {
+            "q": query,
+            "limit": max_results
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            search_response = await client.get(search_url, params=search_params, headers=headers)
+            search_response.raise_for_status()
+            search_data = search_response.json()
+            
+            if not search_data.get('pages'):
+                return f"❌ No Wikipedia results found for: {query}"
+            
+            results = []
+            results.append(f"📖 Wikipedia Search Results for '{query}':\n")
+            
+            for i, page in enumerate(search_data['pages'][:max_results], 1):
+                title = page.get('title', 'Unknown')
+                description = page.get('description', 'No description available')
+                excerpt = page.get('excerpt', 'No excerpt available')
+                
+                # Get full article content
+                article_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}"
+                try:
+                    article_response = await client.get(article_url, headers=headers)
+                    if article_response.status_code == 200:
+                        article_data = article_response.json()
+                        extract = article_data.get('extract', excerpt)
+                        page_url = article_data.get('content_urls', {}).get('desktop', {}).get('page', '')
+                    else:
+                        extract = excerpt
+                        page_url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                except:
+                    extract = excerpt
+                    page_url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                
+                results.append(f"## {i}. {title}")
+                results.append(f"**Description:** {description}")
+                results.append(f"**URL:** {page_url}")
+                results.append(f"**Content:** {extract}")
+                results.append("")
+            
+            await ctx.info(f"✅ Wikipedia search completed: {len(search_data['pages'])} results found")
+            return "\n".join(results)
+            
+    except Exception as e:
+        await ctx.error(f"Wikipedia search failed: {str(e)}")
+        return f"❌ Wikipedia search error: {str(e)}"
+
+# === DUCKDUCKGO MCP TOOL ===
+@mcp.tool(
+        name="duckduckgo_search",
+        description="""
+        Search the web using DuckDuckGo search engine.
+        Example inputs:
+        "latest news about AI"
+        "weather in New York"
+        "Python programming tutorial"
+        Returns web search results with links and descriptions.
+        Args:
+             query (str): Search query for DuckDuckGo
+             max_results (int): Maximum number of results to return (default: 5)
+        """
+)
+async def duckduckgo_search(query: str, ctx: Context, max_results: int = 5) -> str:
+    """Tool to search the web using DuckDuckGo, query should be passed as 'query' input parameter"""
+    try:
+        await rate_limiter.acquire()
+        await ctx.info(f"🦆 Searching DuckDuckGo for: {query}")
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        
+        # DuckDuckGo Instant Answer API
+        search_url = "https://api.duckduckgo.com/"
+        search_params = {
+            "q": query,
+            "format": "json",
+            "no_redirect": "1",
+            "no_html": "1",
+            "skip_disambig": "1"
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(search_url, params=search_params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            results = []
+            results.append(f"🦆 DuckDuckGo Search Results for '{query}':\n")
+            
+            # Abstract/Definition
+            if data.get('Abstract'):
+                results.append(f"**Definition:** {data['Abstract']}")
+                if data.get('AbstractURL'):
+                    results.append(f"**Source:** {data['AbstractURL']}")
+                results.append("")
+            
+            # Answer (for factual queries)
+            if data.get('Answer'):
+                results.append(f"**Direct Answer:** {data['Answer']}")
+                if data.get('AnswerType'):
+                    results.append(f"**Type:** {data['AnswerType']}")
+                results.append("")
+            
+            # Related Topics
+            if data.get('RelatedTopics'):
+                results.append("**Related Information:**")
+                for i, topic in enumerate(data['RelatedTopics'][:max_results], 1):
+                    if isinstance(topic, dict) and topic.get('Text'):
+                        results.append(f"{i}. {topic['Text']}")
+                        if topic.get('FirstURL'):
+                            results.append(f"   Source: {topic['FirstURL']}")
+                results.append("")
+            
+            # Results from web search
+            if data.get('Results'):
+                results.append("**Web Results:**")
+                for i, result in enumerate(data['Results'][:max_results], 1):
+                    if result.get('Text') and result.get('FirstURL'):
+                        results.append(f"{i}. {result['Text']}")
+                        results.append(f"   URL: {result['FirstURL']}")
+                results.append("")
+            
+            # If no meaningful results, try web scraping approach
+            if not any([data.get('Abstract'), data.get('Answer'), data.get('RelatedTopics'), data.get('Results')]):
+                await ctx.info("🔍 No direct results, trying alternative search...")
+                
+                # Fallback to HTML search
+                fallback_url = "https://html.duckduckgo.com/html/"
+                fallback_params = {"q": query}
+                
+                try:
+                    fallback_response = await client.get(fallback_url, params=fallback_params, headers=headers)
+                    if fallback_response.status_code == 200:
+                        # Simple regex parsing of HTML results
+                        html_content = fallback_response.text
+                        
+                        # Extract basic results using regex
+                        link_pattern = r'<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>'
+                        matches = re.findall(link_pattern, html_content)
+                        
+                        web_results = []
+                        for url, title in matches[:max_results]:
+                            if url.startswith('http') and len(title.strip()) > 10:
+                                web_results.append(f"• {title.strip()}\n  URL: {url}")
+                        
+                        if web_results:
+                            results.append("**Web Search Results:**")
+                            results.extend(web_results)
+                        else:
+                            results.append(f"❌ No web results found for: {query}")
+                    else:
+                        results.append(f"❌ No results found for: {query}")
+                        
+                except Exception as e:
+                    results.append(f"⚠️ Search partially failed: {str(e)}")
+            
+            await ctx.info(f"✅ DuckDuckGo search completed")
+            return "\n".join(results) if len(results) > 1 else f"❌ No results found for: {query}"
+            
+    except Exception as e:
+        await ctx.error(f"DuckDuckGo search failed: {str(e)}")
+        return f"❌ DuckDuckGo search error: {str(e)}"
+
+# Simple Test Tool - LangChain Compatible
+@mcp.tool(
+        name="test_tool", 
+        description="""Simple test tool to verify tool calling works."""
+)
+async def test_tool(message: str) -> str:
+    """
+    Simple test tool to verify MCP tool calling is working.
+    
+    Args:
+        message: Test message
+    
+    Returns:
+        Test response with current timestamp
+    """
+    import datetime
+    current_time = datetime.datetime.now().isoformat()
+    
+    return f"✅ SUCCESS: Test tool called with message '{message}' at {current_time}"
+
+# Diagnostic Tool - LangChain Compatible
+@mcp.tool(
+        name="diagnostic",
+        description="""Diagnostic tool to test MCP functionality."""
+)
+async def diagnostic(test_type: str = "basic") -> str:
+    """
+    Run diagnostic tests to verify MCP functionality.
+    
+    Args:
+        test_type: Type of test (basic, search, time)
+    
+    Returns:
+        Diagnostic results as formatted string
+    """
+    import datetime
+    
+    current_time = datetime.datetime.now().isoformat()
+    
+    result = f"🔧 Diagnostic Test: {test_type}\n"
+    result += f"⏰ Timestamp: {current_time}\n"
+    result += f"🖥️ MCP Server: DataFlyWheel App\n"
+    result += f"✅ Status: WORKING\n"
+    
+    if test_type == "basic":
+        result += "📝 Message: MCP server is responding correctly\n"
+        result += "🛠️ Tool Execution: SUCCESS\n"
+        
+    elif test_type == "search":
+        # Test if we can make HTTP requests
         try:
-            async def fetch_hedis_examples():
-                async with sse_client(url=server_url) as sse_connection:
-                    async with ClientSession(*sse_connection) as session:
-                        await session.initialize()
-                        content = await session.read_resource("genaiplatform://hedis/frequent_questions/Initialization")
-                        if hasattr(content, "contents"):
-                            for item in content.contents:
-                                if hasattr(item, "text"):
-                                    examples["HEDIS Expert"].extend(json.loads(item.text))
-   
-            asyncio.run(fetch_hedis_examples())
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get("https://httpbin.org/get")
+                http_status = "SUCCESS" if response.status_code == 200 else "FAILED"
         except Exception as e:
-            examples["HEDIS Expert"] = [
-                "What are the codes in BCS Value Set?",
-                "Explain the BCS (Breast Cancer Screening) measure",
-                "What is the age criteria for CBP measure?",
-                "List all HEDIS measures for 2024",
-                f"⚠️ Failed to load dynamic examples: {e}"
-            ]
+            http_status = f"FAILED: {str(e)}"
+            
+        result += f"🌐 HTTP Test: {http_status}\n"
+        result += "🔍 Search Capability: Available\n"
+        
+    elif test_type == "time":
+        import time
+        result += f"🕐 Unix Timestamp: {int(time.time())}\n"
+        result += f"📅 Current Year: {datetime.datetime.now().year}\n" 
+        result += f"📅 Current Month: {datetime.datetime.now().strftime('%B %Y')}\n"
+        
+    return result
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    # Display chat history
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-
-    # Enhanced example queries with better organization
-    with st.sidebar.expander(f"💡 Example Queries - {prompt_type}", expanded=True):
-        if examples[prompt_type]:
-            for i, example in enumerate(examples[prompt_type]):
-                # Create unique keys and handle long examples
-                display_text = example if len(example) <= 60 else example[:57] + "..."
-                if st.button(display_text, key=f"{prompt_type}_{i}_{example[:20]}"):
-                    st.session_state.query_input = example
+@mcp.tool(
+        name="get_weather",
+        description="""Get current weather forecast using the National Weather Service API."""
+)
+def get_weather(latitude: float, longitude: float) -> str:
+    """
+    Get current weather forecast using the National Weather Service API.
+    
+    Args:
+        latitude: Latitude coordinate
+        longitude: Longitude coordinate
+    """
+    try:
+        headers = {
+            "User-Agent": "MCP Weather Client (mcp-weather@example.com)",
+            "Accept": "application/geo+json"
+        }
+        
+        # Get grid point information
+        points_url = f"{NWS_API_BASE}/points/{latitude},{longitude}"
+        points_response = requests.get(points_url, headers=headers, timeout=10)
+        points_response.raise_for_status()
+        points_data = points_response.json()
+        
+        # Extract forecast URL and location info
+        forecast_url = points_data['properties']['forecast']
+        location_info = points_data['properties']['relativeLocation']['properties']
+        location_name = f"{location_info['city']}, {location_info['state']}"
+        
+        # Get forecast data
+        forecast_response = requests.get(forecast_url, headers=headers, timeout=10)
+        forecast_response.raise_for_status()
+        forecast_data = forecast_response.json()
+        
+        # Get current period forecast
+        periods = forecast_data['properties']['periods']
+        current_period = periods[0] if periods else None
+        
+        if current_period:
+            result = f"Weather for {location_name}:\n"
+            result += f"Period: {current_period['name']}\n"
+            result += f"Temperature: {current_period['temperature']}°{current_period['temperatureUnit']}\n"
+            result += f"Forecast: {current_period['detailedForecast']}"
+            
+            # Add additional periods if available
+            if len(periods) > 1:
+                result += f"\n\nNext Period ({periods[1]['name']}):\n"
+                result += f"Temperature: {periods[1]['temperature']}°{periods[1]['temperatureUnit']}\n"
+                result += f"Forecast: {periods[1]['shortForecast']}"
+            
+            return result
         else:
-            st.info("No examples available for this prompt type")
+            return f"Weather data unavailable for {location_name}"
+            
+    except requests.exceptions.Timeout:
+        return "Error: Weather service request timed out"
+    except requests.exceptions.RequestException as e:
+        return f"Error: Failed to fetch weather data - {str(e)}"
+    except KeyError as e:
+        return f"Error: Unexpected weather data format - missing {str(e)}"
+    except Exception as e:
+        return f"Error: An unexpected error occurred while fetching weather data - {str(e)}"
+
+# === PROMPTS ===
+
+@mcp.prompt(
+        name="hedis-prompt",
+        description="HEDIS Expert"
+)
+async def hedis_prompt(query: str)-> List[Message]:
+    return [
+        {
+            "role": "user",
+            "content": f"""You are expert in HEDIS system, HEDIS is a set of standardized measures that aim to improve healthcare quality by promoting accountability and transparency.You are provided with below tools: 1) DFWAnalyst - Generates SQL to retive information for hedis codes and value sets. 2) DFWSearch -  Provides search capability againest HEDIS measures for measurement year.You will respond with the results returned from right tool. {query}"""
+        }
+    ]
+
+@mcp.prompt(
+        name="caleculator-promt",
+        description="Calculator"
+)
+async def caleculator_prompt(query: str)-> List[Message]:
+    return [
+        {
+            "role": "user",
+            "content": f"""You are expert in performing arthametic operations.You are provided with the tool calculator to verify the results.You will respond with the results after verifying with the tool result. {query} """
+        }
+    ]
+
+@mcp.prompt(
+        name="wikipedia-search-prompt",
+        description="Wikipedia Search Expert"
+)
+async def wikipedia_search_prompt(query: str) -> List[Message]:
+    return [
+        {
+            "role": "user",
+            "content": f"""You are a Wikipedia search expert specialized in finding accurate, encyclopedic information from Wikipedia.
+
+Your capabilities include:
+- Searching Wikipedia articles for comprehensive information
+- Providing detailed summaries and extracts
+- Finding related topics and references
+- Accessing reliable, well-sourced content
+
+Available tools:
+- wikipedia_search: Search Wikipedia for detailed information on any topic
+
+For the query "{query}", please:
+1. Use the wikipedia_search tool to find relevant information
+2. Provide a comprehensive summary based on the Wikipedia content
+3. Include key facts, definitions, and context
+4. Cite the Wikipedia sources and URLs when available
+
+Wikipedia Search Query: {query}"""
+        }
+    ]
+
+@mcp.prompt(
+        name="duckduckgo-search-prompt",
+        description="DuckDuckGo Web Search Expert"
+)
+async def duckduckgo_search_prompt(query: str) -> List[Message]:
+    return [
+        {
+            "role": "user",
+            "content": f"""You are a web search expert specialized in finding current, relevant information from the internet using DuckDuckGo.
+
+Your capabilities include:
+- Web search across the internet for current information
+- Finding instant answers and definitions
+- Discovering related topics and web resources
+- Privacy-focused search without tracking
+
+Available tools:
+- duckduckgo_search: Search the web using DuckDuckGo for current information
+
+For the query "{query}", please:
+1. Use the duckduckgo_search tool to find relevant web information
+2. Analyze and summarize the search results
+3. Provide insights from multiple sources
+4. Include relevant URLs and sources when available
+5. Focus on current, up-to-date information
+
+Web Search Query: {query}"""
+        }
+    ]
+
+@mcp.prompt(
+        name="weather-prompt",
+        description="Weather Information Expert"
+)
+async def weather_prompt(query: str) -> List[Message]:
+    return [
+        {
+            "role": "user",
+            "content": f"""You are a weather information expert with access to the National Weather Service API.
+            
+            You have access to the get_weather tool which requires latitude and longitude coordinates to provide:
+            - Current weather conditions
+            - Detailed forecasts  
+            - Temperature information
+            - Weather alerts and warnings
+            
+            When users ask about weather for a location, help them provide coordinates or use your knowledge to suggest approximate coordinates for major cities.
+            
+            Common city coordinates:
+            - Richmond, VA: 37.5407, -77.4360
+            - Atlanta, GA: 33.7490, -84.3880
+            - New York, NY: 40.7128, -74.0060
+            - Denver, CO: 39.7392, -104.9903
+            - Miami, FL: 25.7617, -80.1918
+            
+            If coordinates aren't provided, ask the user for them or suggest coordinates for the nearest major city.
+            Provide detailed, helpful weather information including current conditions and short-term forecasts.
+            
+            Query: {query}"""
+        }
+    ]
+
+# Simplified Test Tool Prompt
+@mcp.prompt(
+        name="test-tool-prompt",
+        description="Test Tool Caller"
+)
+async def test_tool_prompt(message: str = "connectivity test") -> List[Message]:
+    """
+    Simplified test prompt for ChatSnowflakeCortex.
     
-    # Add helpful tips for certain prompt types
-    if prompt_type == "Weather":
-        with st.sidebar.expander("🌍 Weather Tips", expanded=False):
-            st.info("""
-            **Weather queries require coordinates:**
-            • Richmond, VA: 37.5407, -77.4360
-            • Atlanta, GA: 33.7490, -84.3880  
-            • New York, NY: 40.7128, -74.0060
-            • Denver, CO: 39.7392, -104.9903
-            • Miami, FL: 25.7617, -80.1918
-            
-            You can also ask the assistant to look up coordinates for other cities.
-            """)
+    Args:
+        message: Test message to send
     
-    elif prompt_type == "Web Research Expert":
-        with st.sidebar.expander("🔍 Web Research Expert Features", expanded=False):
-            st.info("""
-            **🚀 ADVANCED WEB RESEARCH ENGINE:**
-            
-            **🔍 Multi-Engine Search:**
-            • Searches across Bing, Yahoo, and Searx simultaneously
-            • Removes duplicates and ranks by relevance
-            • Handles rate limiting automatically
-            
-            **📄 Content Analysis:**
-            • Fetches full webpage content
-            • Extracts meaningful text from HTML
-            • Generates intelligent summaries
-            • Calculates relevance scores
-            
-            **🎯 Smart Features:**
-            • Relevance scoring based on query matching
-            • Content enrichment with summaries
-            • Timestamp tracking for freshness
-            • Error handling and debugging
-            
-            **⚡ Tools Available:**
-            • `web_research` - Comprehensive multi-engine research
-            • `focused_web_search` - Quick targeted search
-            
-            **✅ Best For:** 
-            Research projects, current events analysis, comprehensive information gathering, academic research, market analysis.
-            """)
+    Returns:
+        Simple formatted prompt messages
+    """
+    return [
+        {
+            "role": "user",
+            "content": f"""Please test the tool system by calling the test_tool with message: "{message}"
+
+To call the test_tool with ChatSnowflakeCortex, include this:
+{{"invoke_tool": "{{\\"tool_name\\": \\"test_tool\\", \\"args\\": {{\\"message\\": \\"{message}\\"}}}}"}}
+
+Execute the test_tool now."""
+        }
+    ]
+
+# Simplified Diagnostic Prompt  
+@mcp.prompt(
+        name="diagnostic-prompt",
+        description="Diagnostic Tool Caller"
+)
+async def diagnostic_prompt(test_type: str = "basic") -> List[Message]:
+    """
+    Simplified diagnostic prompt for ChatSnowflakeCortex.
     
-    elif prompt_type == "Legacy Search":
-        with st.sidebar.expander("🔍 Legacy Search Tips", expanded=False):
-            st.info("""
-            **🌐 LEGACY SEARCH MODE:**
-            Uses the original DuckDuckGo-based search tools.
-            
-            **Process:**
-            1. 🔍 Searches DuckDuckGo for current information
-            2. 📄 Attempts to scrape content from websites  
-            3. 📊 Analyzes content when available
-            4. 📝 Provides answers with available data
-            
-            **Tools Used:**
-            • force_current_search (enforces live data)
-            • search_and_analyze (comprehensive analysis)
-            • debug_web_scraping (troubleshooting)
-            
-            **⚠️ Note:** 
-            Legacy search may encounter more scraping failures due to bot detection. Use Web Research Expert for better reliability.
-            """)
+    Args:
+        test_type: Type of diagnostic test
+    
+    Returns:
+        Simple formatted prompt messages
+    """
+    return [
+        {
+            "role": "user",
+            "content": f"""Please run a diagnostic test of type: "{test_type}"
 
-    # Chat input handling
-    if query := st.chat_input("Type your query here...") or "query_input" in st.session_state:
+To call the diagnostic tool with ChatSnowflakeCortex, include this:
+{{"invoke_tool": "{{\\"tool_name\\": \\"diagnostic\\", \\"args\\": {{\\"test_type\\": \\"{test_type}\\"}}}}"}}
 
-        if "query_input" in st.session_state:
-            query = st.session_state.query_input
-            del st.session_state.query_input
-       
-        with st.chat_message("user"):
-            st.markdown(query, unsafe_allow_html=True)
-       
-        st.session_state.messages.append({"role": "user", "content": query})
-   
-        async def process_query(query_text):
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                
-                # Show progress steps based on mode
-                if prompt_type == "FREE Web Search":
-                    progress_steps = [
-                        "🤔 Processing your research request...",
-                        "🔗 Connecting to FREE web search APIs...", 
-                        "🛠️ Loading FREE multi-source web search tools...",
-                        "🧠 Creating intelligent FREE search agent...",
-                        "📝 Loading FREE web search expert prompt...",
-                        "🌐 Preparing multi-API search (DuckDuckGo + Wikipedia + Web + News)...",
-                        "📄 Ready to retrieve information from multiple FREE sources...",
-                        "✍️ Generating response with FREE API data..."
-                    ]
-                else:
-                    progress_steps = [
-                        "🤔 Processing your request...",
-                        "🔗 Connecting to MCP server...", 
-                        "🛠️ Loading tools...",
-                        "🧠 Creating intelligent agent...",
-                        "📝 Loading expert prompt...",
-                        "🌐 Preparing to search for information...",
-                        "📄 Ready to analyze content...",
-                        "✍️ Generating response..."
-                    ]
-                
-                step_index = 0
-                message_placeholder.text(progress_steps[step_index])
-                
-                try:
-                    # Initialize MCP client
-                    step_index += 1
-                    message_placeholder.text(progress_steps[step_index])
-                    client = MultiServerMCPClient(
-                        {"DataFlyWheelServer": {"url": server_url, "transport": "sse"}}
-                    )
-                       
-                    model = get_model()
-                    
-                    # Get available tools from MCP server
-                    step_index += 1
-                    message_placeholder.text(progress_steps[step_index])
-                    tools = await client.get_tools()
-                    
-                    # Show which tools are available based on mode
-                    if prompt_type == "FREE Web Search":
-                        free_tools = [t for t in tools if t.name in ['web_research', 'focused_web_search']]
-                        if free_tools:
-                            message_placeholder.text(f"🆓 FREE Web Search Tools Loaded: {', '.join([t.name for t in free_tools])}")
-                        else:
-                            # Fallback to other search tools if available
-                            other_tools = [t for t in tools if 'search' in t.name.lower()]
-                            if other_tools:
-                                message_placeholder.text(f"⚠️ Using Alternative Search Tools: {', '.join([t.name for t in other_tools[:3]])}")
-                            else:
-                                message_placeholder.text("❌ No web search tools found")
-                    else:
-                        # Show relevant tools for other modes
-                        if prompt_type == "Weather":
-                            weather_tools = [t for t in tools if 'weather' in t.name.lower()]
-                            if weather_tools:
-                                message_placeholder.text(f"🌤️ Weather Tools: {', '.join([t.name for t in weather_tools])}")
-                        elif prompt_type == "HEDIS Expert":
-                            hedis_tools = [t for t in tools if 'DFW' in t.name]
-                            if hedis_tools:
-                                message_placeholder.text(f"🏥 HEDIS Tools: {', '.join([t.name for t in hedis_tools])}")
-                    
-                    await asyncio.sleep(1)  # Brief pause to show tool info
-                    
-                    # Create agent with tools
-                    step_index += 1
-                    message_placeholder.text(progress_steps[step_index])
-                    agent = create_react_agent(model=model, tools=tools)
-                    
-                    # Handle prompt selection
-                    prompt_name = prompt_map[prompt_type]
-                    prompt_from_server = None
-                    
-                    if prompt_name is None:
-                        # No context mode - use query directly
-                        prompt_from_server = [{"role": "user", "content": query_text}]
-                    else:  
-                        # Get prompt from server
-                        step_index += 1
-                        message_placeholder.text(progress_steps[step_index])
-                        prompt_from_server = await client.get_prompt(
-                            server_name="DataFlyWheelServer",
-                            prompt_name=prompt_name,
-                            arguments={"query": query_text}
-                        )
-                        
-                        # Handle prompt formatting
-                        if prompt_from_server and len(prompt_from_server) > 0:
-                            if "{query}" in prompt_from_server[0].content:
-                                formatted_content = prompt_from_server[0].content.format(query=query_text)
-                                prompt_from_server[0].content = formatted_content
-                        else:
-                            # Fallback if prompt not found
-                            prompt_from_server = [{"role": "user", "content": query_text}]
-                    
-                    # Show specific mode activation
-                    if prompt_type == "FREE Web Search":
-                        step_index = min(step_index + 1, len(progress_steps) - 1)
-                        message_placeholder.text(f"🆓 FREE Web Search Mode: Activating multi-source free APIs (no API key required)...")
-                        await asyncio.sleep(1)
-                    
-                    step_index = min(step_index + 1, len(progress_steps) - 1)  
-                    message_placeholder.text(progress_steps[step_index])
-                    
-                    # Invoke agent
-                    response = await agent.ainvoke({"messages": prompt_from_server})
-                    
-                    # Extract result
-                    if isinstance(response, dict):
-                        # Try different possible keys for the response
-                        result = None
-                        for key in ['messages', 'output', 'result']:
-                            if key in response:
-                                if isinstance(response[key], list) and len(response[key]) > 0:
-                                    if hasattr(response[key][-1], 'content'):
-                                        result = response[key][-1].content
-                                    else:
-                                        result = str(response[key][-1])
-                                    break
-                                elif isinstance(response[key], str):
-                                    result = response[key]
-                                    break
-                        
-                        if result is None:
-                            # Fallback: try to get any meaningful content
-                            result = str(list(response.values())[0])
-                            if isinstance(list(response.values())[0], list) and len(list(response.values())[0]) > 1:
-                                result = list(response.values())[0][1].content
-                    else:
-                        result = str(response)
-                    
-                    # Enhanced result analysis for FREE Web Search
-                    if prompt_type == "FREE Web Search":
-                        # Look for indicators of free web search success
-                        free_search_indicators = [
-                            "FREE WEB SEARCH RESULTS",
-                            "DuckDuckGo Instant Results",
-                            "Wikipedia Results",
-                            "Live Web Results",
-                            "News Results",
-                            "100% FREE",
-                            "No API keys required",
-                            "Multi-Source",
-                            "Retrieved:",
-                            "free APIs used"
-                        ]
-                        
-                        failure_indicators = [
-                            "FREE WEB RESEARCH ERROR",
-                            "No results found for",
-                            "Free web search error",
-                            "free APIs may be temporarily unavailable",
-                            "No focused search results found"
-                        ]
-                        
-                        free_detected = any(indicator in result for indicator in free_search_indicators)
-                        failure_detected = any(indicator in result for indicator in failure_indicators)
-                        
-                        if free_detected and not failure_detected:
-                            result = f"🆓 **FREE WEB SEARCH: MULTI-SOURCE INFORMATION RETRIEVED** 🆓\n\n{result}"
-                        elif failure_detected:
-                            result = f"""🚨 **FREE WEB SEARCH TEMPORARY ISSUES** 🚨
+Execute the diagnostic tool now."""
+        }
+    ]
 
-The free web search APIs encountered temporary issues.
-
-**🔧 COMMON SOLUTIONS:**
-- **Network Issues**: Check internet connectivity
-- **API Limits**: Free services may have temporary rate limits
-- **Service Outages**: Free APIs occasionally have downtime
-- **Query Too Specific**: Try broader, simpler search terms
-
-**💡 FREE SERVICE LIMITATIONS:**
-- Some free APIs have usage limits
-- Temporary outages are normal for free services
-- Complex queries may not work with instant answer APIs
-- Try rephrasing query in simpler terms
-
-**🔄 SOLUTIONS TO TRY:**
-1. Wait a few minutes and retry
-2. Try simpler, more general search terms
-3. Use "focused_web_search" for quick DuckDuckGo results only
-4. Check if other prompt types work (indicates server is running)
-
-**✅ BENEFITS OF FREE APPROACH:**
-- No costs or API keys ever required
-- Multiple sources provide comprehensive coverage
-- Privacy-friendly (no account tracking)
-
----
-
-**TECHNICAL ERROR DETAILS:**
-
-{result}"""
-                        else:
-                            result = f"ℹ️ **FREE WEB SEARCH RESPONSE** (verification needed)\n\n{result}\n\n⚠️ **Note:** Response may contain mixed free API and training data. Look for DuckDuckGo, Wikipedia, or web scraping attribution to verify free search was used."
-                    
-                    # Enhanced analysis for Legacy Search mode  
-                    elif prompt_type == "Legacy Search":
-                        # Legacy search analysis (same as before)
-                        current_info_indicators = [
-                            "CURRENT INFORMATION RETRIEVED",
-                            "CURRENT WEB CONTENT", 
-                            "MANDATORY WEB SEARCH COMPLETED",
-                            "LIVE SCRAPED CONTENT",
-                            "get_current_info",
-                            "mandatory_web_search",
-                            "Scraped at:",
-                            "characters scraped"
-                        ]
-                        
-                        failure_indicators = [
-                            "SCRAPING FAILED",
-                            "Could not scrape",
-                            "No results found",
-                            "blocking our scraper"
-                        ]
-                        
-                        current_info_detected = any(indicator in result for indicator in current_info_indicators)
-                        failure_detected = any(indicator in result for indicator in failure_indicators)
-                        
-                        if current_info_detected and not failure_detected:
-                            result = f"✅ **LEGACY SEARCH: CURRENT INFORMATION RETRIEVED** ✅\n\n{result}"
-                        elif failure_detected:
-                            result = f"""🚨 **LEGACY SEARCH: WEB SCRAPING FAILED** 🚨
-
-The legacy DuckDuckGo-based search encountered issues.
-
-**💡 RECOMMENDATION:** Switch to "Web Research Expert" mode for better reliability.
-
-**ERROR DETAILS:**
-
-{result}"""
-                    
-                    message_placeholder.markdown(result)
-                    st.session_state.messages.append({"role": "assistant", "content": result})
-                    
-                except Exception as e:
-                    error_message = f"❌ **Error**: {str(e)}\n\n**Troubleshooting:**\n- Check if MCP server is running at {server_url}\n- Verify server URL is correct\n- Ensure Snowflake connection is active\n- For Web Research Expert mode, verify web research tools are properly configured"
-                    message_placeholder.markdown(error_message)
-                    st.session_state.messages.append({"role": "assistant", "content": error_message})
-   
-        if query:
-            asyncio.run(process_query(query))
-   
-        # Enhanced clear chat with confirmation
-        if st.sidebar.button("🗑️ Clear Chat"):
-            st.session_state.messages = []
-            st.rerun()
-            
-    # Add connection status indicator and tool testing
-    with st.sidebar:
-        st.markdown("---")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🔍 Test Connection"):
-                try:
-                    async def test_connection():
-                        async with sse_client(url=server_url) as sse_connection:
-                            async with ClientSession(*sse_connection) as session:
-                                await session.initialize()
-                                return "✅ Connection successful!"
-                    
-                    result = asyncio.run(test_connection())
-                    st.success(result)
-                except Exception as e:
-                    st.error(f"❌ Connection failed: {e}")
-        
-        with col2:
-            if st.button("🧪 Test Tools"):
-                try:
-                    async def test_tools():
-                        async with sse_client(url=server_url) as sse_connection:
-                            async with ClientSession(*sse_connection) as session:
-                                await session.initialize()
-                                tools = await session.list_tools()
-                                if hasattr(tools, 'tools'):
-                                    free_search_tools = [t.name for t in tools.tools if t.name in ['web_research', 'focused_web_search']]
-                                    hedis_tools = [t.name for t in tools.tools if 'DFW' in t.name]
-                                    weather_tools = [t.name for t in tools.tools if 'weather' in t.name.lower()]
-                                    system_tools = [t.name for t in tools.tools if t.name in ['test_tool', 'diagnostic']]
-                                    
-                                    result = "🧪 **Tool Status:**\n"
-                                    if free_search_tools:
-                                        result += f"✅ FREE Web Search: {', '.join(free_search_tools)} (no API key needed)\n"
-                                    else:
-                                        result += "❌ FREE Web Search: Not available\n"
-                                    
-                                    if hedis_tools:
-                                        result += f"✅ HEDIS Analytics: {', '.join(hedis_tools)}\n"
-                                    
-                                    if weather_tools:
-                                        result += f"✅ Weather: {', '.join(weather_tools)}\n"
-                                    
-                                    if system_tools:
-                                        result += f"✅ System Tools: {', '.join(system_tools)}\n"
-                                    
-                                    # Test free web search connectivity
-                                    try:
-                                        diagnostic_result = await session.call_tool("diagnostic", {"test_type": "search"})
-                                        if diagnostic_result and hasattr(diagnostic_result, 'content'):
-                                            result += f"\n🌐 **Free API Connectivity Check:**\n{diagnostic_result.content[0].text}"
-                                    except:
-                                        result += f"\n⚠️ Could not test free API connectivity"
-                                    
-                                    return result
-                                else:
-                                    return "❌ No tools found"
-                    
-                    result = asyncio.run(test_tools())
-                    st.success(result)
-                except Exception as e:
-                    st.error(f"❌ Tool test failed: {e}")
-        
-        # Server info
-        st.caption(f"🌐 Server: {server_url}")
-        st.caption(f"🤖 Mode: {prompt_type}")
-        
-        # Add mode recommendations
-        if prompt_type == "FREE Web Search":
-            st.success("🆓 Using FREE Multi-Source Web Search")
-            st.caption("✅ No API keys required, multiple free sources")
-        
-        # Add free search status
-        if prompt_type == "FREE Web Search":
-            st.markdown("---")
-            st.markdown("**🆓 FREE Search Status:**")
-            st.success("✅ No setup required - ready to use")
-            st.caption("Uses DuckDuckGo, Wikipedia, web scraping, and news APIs")
-            st.caption("All sources are completely free with no API keys needed")
+if __name__ == "__main__":
+    mcp.run(transport="sse")
