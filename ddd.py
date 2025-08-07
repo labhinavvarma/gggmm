@@ -1,290 +1,440 @@
-import streamlit as st
-import asyncio
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
 import json
-import requests
+import asyncio
+import httpx
 from datetime import datetime
+import time
 
-from mcp.client.sse import sse_client
-from mcp import ClientSession
+# Import your MCP server tools and Brave key configuration
+try:
+    from mcpserver import (
+        calculate, test_tool, diagnostic, 
+        get_weather, dfw_text2sql, dfw_search,
+        brave_web_search, brave_local_search,
+        set_brave_api_key  # Function to set the API key
+    )
+    MCP_TOOLS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import MCP tools: {e}")
+    MCP_TOOLS_AVAILABLE = False
 
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from dependencies import SnowFlakeConnector
-from llmobjectwrapper import ChatSnowflakeCortex
-from snowflake.snowpark import Session
+route = APIRouter()
 
-# Page config
-st.set_page_config(page_title="MCP Client with Brave Search", page_icon="🚀")
-st.title("🚀 MCP Client - DataFlyWheel Edition with Brave Search")
-st.markdown("*Configure Brave API key and use the enhanced MCP server*")
+class ToolCallRequest(BaseModel):
+    tool_name: str
+    arguments: Dict[str, Any]
 
-# Server URL configuration
-server_url = st.sidebar.text_input("MCP Server URL", "http://10.126.192.183:8082/sse")
+class ToolCallResponse(BaseModel):
+    success: bool
+    result: Optional[Any] = None
+    error: Optional[str] = None
 
-# Brave API Key Configuration
-st.sidebar.markdown("### 🔍 Brave Search Configuration")
-brave_api_key = st.sidebar.text_input(
-    "Brave API Key", 
-    value="BSA-FDD7EPTjkdgDqW_znc5uhZledvE", 
-    type="password",
-    help="Enter your Brave Search API key"
-)
+class BraveKeyRequest(BaseModel):
+    api_key: str
 
-# Configure API key in server
-if brave_api_key and st.sidebar.button("🔑 Configure API Key"):
+# Mock context class for tools that need it
+class MockContext:
+    async def info(self, message: str):
+        print(f"ℹ️ INFO: {message}")
+    
+    async def warning(self, message: str):
+        print(f"⚠️ WARNING: {message}")
+    
+    async def error(self, message: str):
+        print(f"❌ ERROR: {message}")
+
+@route.post("/configure_brave_key")
+async def configure_brave_key(request: BraveKeyRequest):
+    """Configure Brave API key from the client"""
     try:
-        # Send API key to server (you'll need to implement this endpoint)
-        base_url = server_url.replace('/sse', '')
-        config_response = requests.post(
-            f"{base_url}/configure_brave_key",
-            json={"api_key": brave_api_key},
-            timeout=5
-        )
-        if config_response.status_code == 200:
-            st.sidebar.success("✅ Brave API key configured!")
-        else:
-            st.sidebar.error("❌ Failed to configure API key")
-    except Exception as e:
-        st.sidebar.error(f"❌ Error: {e}")
-
-# Enhanced connection status check
-@st.cache_data(ttl=15)
-def check_server_connection(url):
-    try:
-        base_url = url.replace('/sse', '')
-        health_response = requests.get(f"{base_url}/health", timeout=5)
-        if health_response.status_code == 200:
-            health_data = health_response.json()
-            return {
-                "connected": True,
-                "status": health_data.get("status", "unknown"),
-                "tools_available": len(health_data.get("tools", {})),
-                "details": health_data
-            }
-        else:
-            basic_response = requests.get(base_url, timeout=5)
-            return {
-                "connected": basic_response.status_code == 200,
-                "status": "basic_connection",
-                "tools_available": "unknown",
-                "details": {}
-            }
+        if not MCP_TOOLS_AVAILABLE:
+            return {"success": False, "error": "MCP tools not available"}
+        
+        # Set the API key in the MCP server
+        set_brave_api_key(request.api_key)
+        
+        return {
+            "success": True,
+            "message": "Brave API key configured successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+        
     except Exception as e:
         return {
-            "connected": False,
-            "status": f"error: {str(e)}",
-            "tools_available": 0,
-            "details": {}
+            "success": False,
+            "error": f"Failed to configure API key: {str(e)}",
+            "timestamp": datetime.now().isoformat()
         }
 
-server_status = check_server_connection(server_url)
-status_indicator = "🟢 Connected" if server_status["connected"] else "🔴 Disconnected"
-st.sidebar.markdown(f"**Server Status:** {status_indicator}")
-
-if server_status["connected"] and server_status.get("tools_available") != "unknown":
-    st.sidebar.markdown(f"**Tools Available:** {server_status['tools_available']}")
-
-# Get model functions
-@st.cache_resource
-def get_snowflake_connection():
+@route.post("/tool_call", response_model=ToolCallResponse)
+async def handle_tool_call(request: ToolCallRequest):
+    """Handle MCP tool calls via HTTP API (Updated with Brave Search)"""
     try:
-        return SnowFlakeConnector.get_conn('aedl', '')
-    except Exception as e:
-        st.error(f"❌ Failed to connect to Snowflake: {e}")
-        return None
-
-@st.cache_resource
-def get_model():
-    try:
-        sf_conn = get_snowflake_connection()
-        if sf_conn:
-            return ChatSnowflakeCortex(
-                model="claude-4-sonnet", 
-                cortex_function="complete",
-                session=Session.builder.configs({"connection": sf_conn}).getOrCreate(),
-                mcp_server_url=server_url
+        tool_name = request.tool_name
+        arguments = request.arguments
+        
+        print(f"🔧 Received tool call: {tool_name} with args: {arguments}")
+        
+        if not MCP_TOOLS_AVAILABLE:
+            return ToolCallResponse(
+                success=False,
+                error="MCP tools not available - import failed"
             )
-        else:
-            return ChatSnowflakeCortex(
-                model="claude-4-sonnet",
-                cortex_function="complete",
-                mcp_server_url=server_url
-            )
-    except Exception as e:
-        st.error(f"❌ Failed to initialize model: {e}")
-        return None
-
-# Expert mode selection
-prompt_type = st.sidebar.radio(
-    "🎯 Select Expert Mode", 
-    ["Calculator", "HEDIS Expert", "Weather", "Web Search", "Local Search", "General AI"],
-    help="Choose the type of expert assistance you need"
-)
-
-# Prompt mapping
-prompt_map = {
-    "Calculator": "calculator-prompt",
-    "HEDIS Expert": "hedis-prompt",
-    "Weather": "weather-prompt",
-    "Web Search": "brave-web-search-prompt",
-    "Local Search": "brave-local-search-prompt",
-    "General AI": None
-}
-
-# Example queries
-examples = {
-    "Calculator": [
-        "Calculate 25 * 4 + 10",
-        "What is 15% of 847?",
-        "Calculate compound interest on $1000 at 5% for 3 years"
-    ],
-    "HEDIS Expert": [
-        "What are the codes in BCS Value Set?",
-        "Explain the BCS measure",
-        "What is the age criteria for CBP measure?"
-    ],
-    "Weather": [
-        "What's the current weather in New York?",
-        "Get weather forecast for London, UK",
-        "Show me the weather for Tokyo, Japan"
-    ],
-    "Web Search": [
-        "latest AI developments 2025",
-        "current renewable energy trends", 
-        "recent space exploration missions"
-    ],
-    "Local Search": [
-        "pizza restaurants near Central Park",
-        "coffee shops in Manhattan",
-        "gas stations in San Francisco"
-    ],
-    "General AI": [
-        "Explain quantum computing",
-        "What are the benefits of renewable energy?",
-        "How does machine learning work?"
-    ]
-}
-
-# Initialize session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# Example queries sidebar
-with st.sidebar.expander(f"💡 Example Queries - {prompt_type}", expanded=True):
-    if examples[prompt_type]:
-        for i, example in enumerate(examples[prompt_type]):
-            if st.button(example, key=f"{prompt_type}_{i}", use_container_width=True):
-                st.session_state.query_input = example
-
-# Chat input handling
-if query := st.chat_input("Type your query here...") or "query_input" in st.session_state:
-    
-    if "query_input" in st.session_state:
-        query = st.session_state.query_input
-        del st.session_state.query_input
-
-    with st.chat_message("user"):
-        st.markdown(query)
-
-    st.session_state.messages.append({"role": "user", "content": query})
-
-    async def process_query(query_text):
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            message_placeholder.text("🤔 Processing your request...")
+        
+        # Create mock context for tools that need it
+        ctx = MockContext()
+        
+        # Route to appropriate tool (now includes Brave Search)
+        result = None
+        
+        if tool_name == "calculator":
+            expression = arguments.get("expression", "")
+            result = calculate(expression)
             
-            try:
-                # Check server connection
-                if not server_status["connected"]:
-                    raise Exception("MCP server is not accessible. Please check the server URL.")
-                
-                message_placeholder.text("🔌 Connecting to MCP server...")
-                
-                client = MultiServerMCPClient(
-                    {"DataFlyWheelServer": {"url": server_url, "transport": "sse"}}
-                )
+        elif tool_name == "test_tool":
+            message = arguments.get("message", "test")
+            result = await test_tool(message)
+            
+        elif tool_name == "diagnostic":
+            test_type = arguments.get("test_type", "basic")
+            result = await diagnostic(test_type)
+            
+        elif tool_name == "get_weather":
+            place = arguments.get("place", "")
+            result = await get_weather(place, ctx)
+            
+        elif tool_name == "DFWAnalyst":
+            prompt = arguments.get("prompt", "")
+            result = await dfw_text2sql(prompt, ctx)
+            
+        elif tool_name == "DFWSearch":
+            query = arguments.get("query", "")
+            result = await dfw_search(ctx, query)
+            
+        elif tool_name == "brave_web_search":
+            query = arguments.get("query", "")
+            count = arguments.get("count", 10)
+            offset = arguments.get("offset", 0)
+            result = await brave_web_search(query, ctx, count, offset)
+            
+        elif tool_name == "brave_local_search":
+            query = arguments.get("query", "")
+            count = arguments.get("count", 5)
+            result = await brave_local_search(query, ctx, count)
+            
+        else:
+            return ToolCallResponse(
+                success=False,
+                error=f"Unknown tool: {tool_name}. Available tools: calculator, test_tool, diagnostic, get_weather, DFWAnalyst, DFWSearch, brave_web_search, brave_local_search"
+            )
+        
+        print(f"✅ Tool {tool_name} executed successfully")
+        
+        return ToolCallResponse(
+            success=True,
+            result=result
+        )
+        
+    except Exception as e:
+        print(f"❌ Tool call error: {e}")
+        return ToolCallResponse(
+            success=False,
+            error=str(e)
+        )
 
-                model = get_model()
-                if not model:
-                    raise Exception("Failed to initialize the AI model.")
-                
-                # Get tools and create agent
-                message_placeholder.text("🛠️ Loading tools from server...")
-                tools = await client.get_tools()
-                
-                if not tools:
-                    raise Exception("No tools available from the MCP server.")
-                
-                message_placeholder.text(f"🤖 Creating AI agent with {len(tools)} tools...")
-                agent = create_react_agent(model=model, tools=tools)
-                
-                # Handle prompt selection
-                prompt_name = prompt_map[prompt_type]
-                
-                if prompt_name is None:
-                    # General AI mode
-                    message_placeholder.text("💭 Processing in general AI mode...")
-                    messages = [{"role": "user", "content": query_text}]
-                else:  
-                    # Get specific prompt from server
-                    message_placeholder.text(f"📝 Loading {prompt_type} expert prompt...")
-                    try:
-                        prompt_from_server = await client.get_prompt(
-                            server_name="DataFlyWheelServer",
-                            prompt_name=prompt_name,
-                            arguments={"query": query_text}
-                        )
-                        
-                        if prompt_from_server and len(prompt_from_server) > 0:
-                            first_prompt = prompt_from_server[0]
-                            
-                            if hasattr(first_prompt, 'content'):
-                                content = first_prompt.content
-                            elif hasattr(first_prompt, 'text'):
-                                content = first_prompt.text
-                            else:
-                                content = str(first_prompt)
-                            
-                            # Handle template substitution
-                            if "{query}" in content:
-                                content = content.format(query=query_text)
-                            
-                            messages = [{"role": "user", "content": content}]
-                            message_placeholder.text(f"✅ Loaded {prompt_type} expert prompt")
-                        else:
-                            st.warning(f"⚠️ {prompt_type} prompt not found. Using direct mode.")
-                            messages = [{"role": "user", "content": query_text}]
-                            
-                    except Exception as prompt_error:
-                        st.warning(f"⚠️ Could not load {prompt_type} prompt: {prompt_error}. Using direct mode.")
-                        messages = [{"role": "user", "content": query_text}]
+@route.get("/tools")
+async def list_available_tools():
+    """List all available MCP tools (Updated with Brave Search)"""
+    if not MCP_TOOLS_AVAILABLE:
+        return {"error": "MCP tools not available"}
+    
+    tools = {
+        "calculator": {
+            "description": "Evaluates basic arithmetic expressions",
+            "args": {"expression": "string"}
+        },
+        "test_tool": {
+            "description": "Simple test tool to verify tool calling works",
+            "args": {"message": "string"}
+        },
+        "diagnostic": {
+            "description": "Diagnostic tool to test MCP functionality",
+            "args": {"test_type": "string"}
+        },
+        "get_weather": {
+            "description": "Get current weather information for a location",
+            "args": {"place": "string"}
+        },
+        "DFWAnalyst": {
+            "description": "Converts text to valid SQL for HEDIS value sets and code sets",
+            "args": {"prompt": "string"}
+        },
+        "DFWSearch": {
+            "description": "Searches HEDIS measure specification documents",
+            "args": {"query": "string"}
+        },
+        "brave_web_search": {
+            "description": "Search the web using Brave Search API for fresh, unbiased results",
+            "args": {"query": "string", "count": "integer (optional)", "offset": "integer (optional)"}
+        },
+        "brave_local_search": {
+            "description": "Search for local businesses and places using Brave Search API",
+            "args": {"query": "string", "count": "integer (optional)"}
+        }
+    }
+    
+    return {
+        "tools": tools,
+        "count": len(tools),
+        "available": MCP_TOOLS_AVAILABLE,
+        "brave_search": "integrated_server_side"
+    }
 
-                message_placeholder.text("🧠 Generating response...")
-                
-                # Invoke agent
-                try:
-                    response = await asyncio.wait_for(
-                        agent.ainvoke({"messages": messages}), 
-                        timeout=120.0
+@route.get("/health")
+async def health_check():
+    """Health check endpoint (Updated with Brave Search)"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "mcp_tools_available": MCP_TOOLS_AVAILABLE,
+        "total_tools": 8,  # Updated count
+        "search_integration": "brave_search_server_side",
+        "features": ["HEDIS", "Weather", "Calculator", "Brave Search", "Diagnostics"]
+    }
+
+@route.post("/test_connection")
+async def test_mcp_connection():
+    """Test the MCP connection by calling a simple tool (Updated)"""
+    try:
+        test_request = ToolCallRequest(
+            tool_name="test_tool",
+            arguments={"message": "connection test"}
+        )
+        
+        result = await handle_tool_call(test_request)
+        
+        return {
+            "connection_status": "success" if result.success else "failed",
+            "test_result": result.result if result.success else result.error,
+            "timestamp": datetime.now().isoformat(),
+            "available_tools": [
+                "calculator", "test_tool", "diagnostic", "get_weather", 
+                "DFWAnalyst", "DFWSearch", "brave_web_search", "brave_local_search"
+            ]
+        }
+        
+    except Exception as e:
+        return {
+            "connection_status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@route.post("/test_prompt")
+async def test_prompt_with_tool():
+    """Test a prompt that should trigger a tool call (Updated with Brave Search)"""
+    try:
+        # Test different prompt patterns (updated with Brave Search)
+        test_prompts = [
+            "Use the calculator tool to calculate: 25 * 4 + 10",
+            "Use the test_tool with message: prompt test",
+            "Use the diagnostic tool with test_type: basic",
+            "Use the get_weather tool for: New York",
+            "Use the brave_web_search tool to search for: latest AI news",
+            "Use the brave_local_search tool to find: pizza restaurants NYC"
+        ]
+        
+        results = []
+        
+        for prompt in test_prompts:
+            # Simple tool detection logic
+            tool_call = None
+            
+            if "calculator" in prompt.lower():
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    expression = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="calculator",
+                        arguments={"expression": expression}
                     )
-                except asyncio.TimeoutError:
-                    raise Exception("Request timed out. Please try again.")
-                
-                # Extract result
-                result = None
-                
-                if isinstance(response, dict):
-                    if 'messages' in response:
-                        messages_list = response['messages']
-                        if isinstance(messages_list, list):
-                            for msg in reversed(messages_list):
-                                if hasattr(msg, 'content') and hasattr(msg, 'type'):
-                                    if getattr(msg, 'type', None) == 'ai' or not result:
-                                        result = msg.content
-                                        break
-                                elif
+            elif "test_tool" in prompt.lower():
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    message = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="test_tool", 
+                        arguments={"message": message}
+                    )
+            elif "diagnostic" in prompt.lower():
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    test_type = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="diagnostic",
+                        arguments={"test_type": test_type}
+                    )
+            elif "weather" in prompt.lower():
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    place = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="get_weather",
+                        arguments={"place": place}
+                    )
+            elif "brave_web_search" in prompt.lower():
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    query = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="brave_web_search",
+                        arguments={"query": query, "count": 3}
+                    )
+            elif "brave_local_search" in prompt.lower():
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    query = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="brave_local_search",
+                        arguments={"query": query, "count": 3}
+                    )
+            
+            if tool_call:
+                result = await handle_tool_call(tool_call)
+                results.append({
+                    "prompt": prompt,
+                    "tool_detected": tool_call.tool_name,
+                    "success": result.success,
+                    "result": result.result if result.success else result.error
+                })
+            else:
+                results.append({
+                    "prompt": prompt,
+                    "tool_detected": None,
+                    "success": False,
+                    "result": "No tool detected in prompt"
+                })
+        
+        return {
+            "test_results": results,
+            "timestamp": datetime.now().isoformat(),
+            "brave_search": "integrated_in_server"
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+# Weather cache endpoint for monitoring
+@route.get("/weather_cache")
+async def get_weather_cache_status():
+    """Get weather cache status"""
+    try:
+        # Import weather cache from mcpserver
+        from mcpserver import weather_cache, is_weather_cache_valid
+        
+        cache_status = {}
+        for location, cache_entry in weather_cache.items():
+            cache_status[location] = {
+                "cached_at": datetime.fromtimestamp(cache_entry['timestamp']).isoformat(),
+                "is_valid": is_weather_cache_valid(cache_entry),
+                "age_seconds": time.time() - cache_entry['timestamp']
+            }
+        
+        return {
+            "cache_entries": len(cache_status),
+            "cache_status": cache_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except ImportError:
+        return {
+            "error": "Weather cache not available",
+            "timestamp": datetime.now().isoformat()
+        }
+
+# Brave Search cache endpoint
+@route.get("/brave_cache")
+async def get_brave_cache_status():
+    """Get Brave search cache status"""
+    try:
+        # Import Brave cache from mcpserver
+        from mcpserver import brave_search_cache, is_brave_cache_valid
+        
+        cache_status = {}
+        for search_key, cache_entry in brave_search_cache.items():
+            cache_status[search_key] = {
+                "cached_at": datetime.fromtimestamp(cache_entry['timestamp']).isoformat(),
+                "is_valid": is_brave_cache_valid(cache_entry),
+                "age_seconds": time.time() - cache_entry['timestamp']
+            }
+        
+        return {
+            "cache_entries": len(cache_status),
+            "cache_status": cache_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except ImportError:
+        return {
+            "error": "Brave search cache not available",
+            "timestamp": datetime.now().isoformat()
+        }
+
+# System information endpoint
+@route.get("/system_info")
+async def get_system_info():
+    """Get comprehensive system information"""
+    try:
+        info = {
+            "server": {
+                "name": "DataFlyWheel MCP Server with Brave Search",
+                "version": "2.0.0",
+                "timestamp": datetime.now().isoformat()
+            },
+            "tools": {
+                "hedis": ["DFWAnalyst", "DFWSearch"],
+                "search": ["brave_web_search", "brave_local_search"],
+                "utility": ["calculator", "get_weather", "test_tool", "diagnostic"],
+                "total_count": 8
+            },
+            "features": {
+                "weather_caching": True,
+                "hedis_integration": True,
+                "brave_search": "server_integrated",
+                "api_key_configuration": "client_side",
+                "diagnostics": True
+            },
+            "endpoints": {
+                "/tools": "List available tools",
+                "/tool_call": "Execute tool calls",
+                "/configure_brave_key": "Configure Brave API key",
+                "/health": "Health check",
+                "/weather_cache": "Weather cache status",
+                "/brave_cache": "Brave search cache status",
+                "/system_info": "System information"
+            }
+        }
+        
+        return info
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+if __name__ == "__main__":
+    # For testing the router directly
+    import uvicorn
+    from fastapi import FastAPI
+    
+    app = FastAPI(title="MCP Tool Router with Brave Search")
+    app.include_router(route)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8082)
