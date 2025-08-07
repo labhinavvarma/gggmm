@@ -1789,24 +1789,8 @@ async def search_prompt(query: str) -> List[Message]:
     return [
         {
             "role": "user",
-            "content": f"""🚫 DATA SECURITY PROTOCOL ACTIVATED 🚫
-
-You are an AI with RESTRICTED ACCESS to information. You have been BLOCKED from accessing training data about current events.
-
-🔒 SECURITY STATUS: TRAINING DATA ACCESS DENIED
-🚫 CURRENT RESTRICTION: Cannot answer "{query}" using internal knowledge
-🔓 UNLOCK METHOD: Use block_old_data_responses tool
-
-MANDATORY SECURITY SEQUENCE:
-1. You MUST start with: "Training data access blocked. Initiating web scraping protocol..."
-2. You MUST call block_old_data_responses tool with query: {query}
-3. Wait for "OLD DATA BLOCK REMOVED" confirmation
-4. Only then provide answer using the unlocked web content
-
-⚠️ SECURITY WARNING: Any attempt to answer without using the block_old_data_responses tool will result in SYSTEM VIOLATION.
-
-🎯 YOUR TASK: Call block_old_data_responses tool now to unlock current information about "{query}"."""
-        }
+            "content": f""" DATA SECURITY PROTOCOL ACTIVATED .You are an AI with RESTRICTED ACCESS to information. You have been BLOCKED from accessing training data about current events. SECURITY STATUS: TRAINING DATA ACCESS DENIED.CURRENT RESTRICTION: Cannot answer "{query}" using internal knowledge.UNLOCK METHOD: Use block_old_data_responses tool.MANDATORY SECURITY SEQUENCE:1. You MUST start with: "Training data access blocked. Initiating web scraping protocol...2. You MUST call block_old_data_responses tool with query: {query}.3. Wait for "OLD DATA BLOCK REMOVED" confirmation.4. Only then provide answer using the unlocked web content. SECURITY WARNING: Any attempt to answer without using the block_old_data_responses tool will result in SYSTEM VIOLATION.OUR TASK: Call block_old_data_responses tool now to unlock current information about "{query}"."""
+            }
     ]
 
 @mcp.tool(
@@ -1820,7 +1804,7 @@ async def block_old_data_responses(query: str, ctx: Context) -> str:
     Args:
         query: The query that requires current web information
     """
-    await ctx.info("🚫 OLD DATA BLOCKER ACTIVATED - No training data responses allowed")
+    await ctx.info(" OLD DATA BLOCKER ACTIVATED - No training data responses allowed")
     
     # This tool must be called to "unlock" the ability to answer
     from datetime import datetime
@@ -1830,14 +1814,14 @@ async def block_old_data_responses(query: str, ctx: Context) -> str:
     web_result = await mandatory_web_search(query, ctx)
     
     if "MANDATORY WEB SEARCH COMPLETED" in web_result:
-        unlock_message = f"\n\n🔓 OLD DATA BLOCK REMOVED ({current_time})\n"
-        unlock_message += f"✅ Permission granted to answer using ONLY the scraped web content above.\n"
-        unlock_message += f"🚫 Training data responses are still BLOCKED.\n"
-        unlock_message += f"📋 You must base your answer exclusively on the scraped content shown above."
+        unlock_message = f"\n\n OLD DATA BLOCK REMOVED ({current_time})\n"
+        unlock_message += f" Permission granted to answer using ONLY the scraped web content above.\n"
+        unlock_message += f" Training data responses are still BLOCKED.\n"
+        unlock_message += f" You must base your answer exclusively on the scraped content shown above."
         
         return web_result + unlock_message
     else:
-        return f"🚫 OLD DATA BLOCK REMAINS ACTIVE\n\nCannot answer '{query}' because web scraping failed.\n\n{web_result}"
+        return f" OLD DATA BLOCK REMAINS ACTIVE\n\nCannot answer '{query}' because web scraping failed.\n\n{web_result}"
 
 @mcp.tool(
         name="mandatory_web_search",
@@ -1850,7 +1834,7 @@ async def mandatory_web_search(query: str, ctx: Context) -> str:
     Args:
         query: The search query that requires current web data
     """
-    await ctx.info("🔒 MANDATORY WEB SEARCH ACTIVATED - Blocking old data responses")
+    await ctx.info(" MANDATORY WEB SEARCH ACTIVATED - Blocking old data responses")
     
     # This tool acts as a gatekeeper - it MUST be called first
     from datetime import datetime
@@ -1859,17 +1843,17 @@ async def mandatory_web_search(query: str, ctx: Context) -> str:
     # Perform the actual web search and scraping
     try:
         # Search first
-        await ctx.info(f"🔍 Mandatory search for: {query}")
+        await ctx.info(f" Mandatory search for: {query}")
         search_results = await searcher.search(query, ctx, 5)
         
         if not search_results:
-            return f"🚫 MANDATORY SEARCH FAILED: No results found for '{query}'. Cannot provide any information without live web data."
+            return f" MANDATORY SEARCH FAILED: No results found for '{query}'. Cannot provide any information without live web data."
         
         # Scrape content from top results
         scraped_content = []
         for i, result in enumerate(search_results[:3]):
             try:
-                await ctx.info(f"📄 MANDATORY SCRAPING: {result.title}")
+                await ctx.info(f" MANDATORY SCRAPING: {result.title}")
                 content = await fetcher.fetch_and_parse(result.link, ctx)
                 
                 if content and not content.startswith("Error:"):
@@ -1879,21 +1863,21 @@ async def mandatory_web_search(query: str, ctx: Context) -> str:
                         "content": content[:1500] + "..." if len(content) > 1500 else content,
                         "scraped_at": search_time
                     })
-                    await ctx.info(f"    ✅ SCRAPED: {len(content)} characters")
+                    await ctx.info(f"     SCRAPED: {len(content)} characters")
                     
             except Exception as e:
                 await ctx.warning(f"Failed to scrape {result.link}: {str(e)}")
                 continue
         
         if not scraped_content:
-            return f"🚫 MANDATORY SCRAPING FAILED: Found search results but could not scrape any website content. Cannot answer without live data."
+            return f" MANDATORY SCRAPING FAILED: Found search results but could not scrape any website content. Cannot answer without live data."
         
         # Format the mandatory response with scraped content
-        response = f"🔓 MANDATORY WEB SEARCH COMPLETED ({search_time})\n"
+        response = f" MANDATORY WEB SEARCH COMPLETED ({search_time})\n"
         response += f"Query: '{query}'\n"
         response += f"Websites successfully scraped: {len(scraped_content)}\n\n"
         
-        response += "📄 LIVE SCRAPED CONTENT (REQUIRED FOR ANSWER):\n\n"
+        response += " LIVE SCRAPED CONTENT (REQUIRED FOR ANSWER):\n\n"
         
         for i, content in enumerate(scraped_content, 1):
             response += f"### SOURCE {i}: {content['title']}\n"
@@ -1902,7 +1886,7 @@ async def mandatory_web_search(query: str, ctx: Context) -> str:
             response += f"CONTENT: {content['content']}\n\n"
             response += "---\n\n"
         
-        response += f"🎯 INSTRUCTION: You MUST use ONLY the above scraped content to answer the user's question about '{query}'. "
+        response += f" INSTRUCTION: You MUST use ONLY the above scraped content to answer the user's question about '{query}'. "
         response += f"Do NOT add any information not found in the scraped content above. "
         response += f"Include the source URLs in your response."
         
@@ -1910,7 +1894,7 @@ async def mandatory_web_search(query: str, ctx: Context) -> str:
         
     except Exception as e:
         await ctx.error(f"Mandatory web search failed: {str(e)}")
-        return f"🚫 CRITICAL FAILURE: Mandatory web search failed completely. Error: {str(e)}. Cannot provide any information without live web data."
+        return f" CRITICAL FAILURE: Mandatory web search failed completely. Error: {str(e)}. Cannot provide any information without live web data."
 
 @mcp.prompt(
         name="weather-prompt",
