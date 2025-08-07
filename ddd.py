@@ -23,8 +23,6 @@ except ImportError as e:
 from dependencies import SnowFlakeConnector
 from llmobjectwrapper import ChatSnowflakeCortex
 from snowflake.snowpark import Session
-from ReduceReuseRecycleGENAI.snowflake import snowflake_conn
-from snowflake.core import Root
 from loguru import logger
 
 # Page config
@@ -601,16 +599,13 @@ async def process_query_with_mcp(query: str, prompt_type: str) -> str:
         raise Exception(f"MCP processing failed: {str(e)}")
 
 async def process_query_standalone(query: str, prompt_type: str) -> str:
-    """Process query using standalone implementations"""
+    """Process query using standalone implementations (no HEDIS - MCP only)"""
     
     query_lower = query.lower()
     
-    # HEDIS Expert Logic
+    # HEDIS Expert Logic - Requires MCP server
     if prompt_type == "HEDIS Expert":
-        if any(keyword in query_lower for keyword in ["sql", "codes", "value set", "measure"]):
-            return standalone_hedis_text2sql(query)
-        else:
-            return standalone_hedis_search(query)
+        return "🏥 **HEDIS functionality requires MCP server connection.** Please enable MCP mode and ensure the server is running to access HEDIS tools (DFWAnalyst and DFWSearch)."
     
     # Calculator Logic
     elif prompt_type == "Calculator":
@@ -627,7 +622,103 @@ async def process_query_standalone(query: str, prompt_type: str) -> str:
             if match:
                 if pattern == r'[\d\+\-\*\/\(\)\.\s]+':
                     # Direct mathematical expression
-                    if re.match(r'^[\d\+\-\*\/\(\)\.\s]+$', query.strip()):
+                    if re.match(r'^[\d\+\-\*\/\(\)\.\s]+
+
+async def process_query_hybrid(query: str, prompt_type: str) -> str:
+    """Process query using MCP if available, fallback to standalone"""
+    
+    # Try MCP first if enabled and connected
+    if use_mcp and mcp_connection_status == "connected":
+        try:
+            return await process_query_with_mcp(query, prompt_type)
+        except Exception as e:
+            st.warning(f"⚠️ MCP processing failed, falling back to standalone: {str(e)}")
+    
+    # Fallback to standalone processing
+    return await process_query_standalone(query, prompt_type)
+
+# === STREAMLIT UI ===
+
+# Initialize chat messages
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Display chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Chat input
+if query := st.chat_input("Type your query here...") or st.session_state.get("query_input"):
+    
+    if "query_input" in st.session_state:
+        query = st.session_state.query_input
+        del st.session_state.query_input
+    
+    # Display user message
+    with st.chat_message("user"):
+        st.markdown(query)
+    
+    st.session_state.messages.append({"role": "user", "content": query})
+    
+    # Process and display assistant response
+    with st.chat_message("assistant"):
+        with st.spinner(f"🤔 Processing with {prompt_type} mode..."):
+            try:
+                response = asyncio.run(process_query_hybrid(query, prompt_type))
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+            except Exception as e:
+                error_msg = f"❌ **Error**: {str(e)}"
+                st.markdown(error_msg)
+                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
+# Sidebar controls
+with st.sidebar:
+    st.markdown("---")
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+    
+    # Connection test
+    if st.button("🔍 Test Connections", use_container_width=True):
+        test_results = []
+        
+        # Test MCP connection
+        if use_mcp:
+            try:
+                async def test_mcp():
+                    async with sse_client(url=server_url) as sse_connection:
+                        async with ClientSession(*sse_connection) as session:
+                            await session.initialize()
+                            tools = await session.list_tools()
+                            tool_count = len(tools.tools) if hasattr(tools, 'tools') else 0
+                            return f"✅ MCP connection: OK ({tool_count} tools)"
+                
+                result = asyncio.run(test_mcp())
+                test_results.append(result)
+            except Exception as e:
+                test_results.append(f"❌ MCP connection: Failed - {str(e)}")
+        
+        # Test external APIs
+        try:
+            response = requests.get("https://httpbin.org/get", timeout=5)
+            if response.status_code == 200:
+                test_results.append("✅ Internet connectivity: OK")
+            else:
+                test_results.append("❌ Internet connectivity: Failed")
+        except:
+            test_results.append("❌ Internet connectivity: Failed")
+        
+        for result in test_results:
+            if "✅" in result:
+                st.success(result)
+            else:
+                st.error(result)
+    
+    st.caption(f"🤖 Mode: {prompt_type}")
+    st.caption(f"🔧 Status: {mode_text}")
+, query.strip()):
                         return standalone_calculate(query.strip())
                 else:
                     # Extract expression from sentence
@@ -672,7 +763,113 @@ async def process_query_standalone(query: str, prompt_type: str) -> str:
     # No Context - Smart routing
     else:
         # Check for calculator patterns
-        if re.match(r'^[\d\+\-\*\/\(\)\.\s]+$', query.strip()):
+        if re.match(r'^[\d\+\-\*\/\(\)\.\s]+
+
+async def process_query_hybrid(query: str, prompt_type: str) -> str:
+    """Process query using MCP if available, fallback to standalone"""
+    
+    # Try MCP first if enabled and connected
+    if use_mcp and mcp_connection_status == "connected":
+        try:
+            return await process_query_with_mcp(query, prompt_type)
+        except Exception as e:
+            st.warning(f"⚠️ MCP processing failed, falling back to standalone: {str(e)}")
+    
+    # Fallback to standalone processing
+    return await process_query_standalone(query, prompt_type)
+
+# === STREAMLIT UI ===
+
+# Initialize chat messages
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Display chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Chat input
+if query := st.chat_input("Type your query here...") or st.session_state.get("query_input"):
+    
+    if "query_input" in st.session_state:
+        query = st.session_state.query_input
+        del st.session_state.query_input
+    
+    # Display user message
+    with st.chat_message("user"):
+        st.markdown(query)
+    
+    st.session_state.messages.append({"role": "user", "content": query})
+    
+    # Process and display assistant response
+    with st.chat_message("assistant"):
+        with st.spinner(f"🤔 Processing with {prompt_type} mode..."):
+            try:
+                response = asyncio.run(process_query_hybrid(query, prompt_type))
+                st.markdown(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+            except Exception as e:
+                error_msg = f"❌ **Error**: {str(e)}"
+                st.markdown(error_msg)
+                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
+# Sidebar controls
+with st.sidebar:
+    st.markdown("---")
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+    
+    # Connection test
+    if st.button("🔍 Test Connections", use_container_width=True):
+        test_results = []
+        
+        # Test MCP connection
+        if use_mcp:
+            try:
+                async def test_mcp():
+                    async with sse_client(url=server_url) as sse_connection:
+                        async with ClientSession(*sse_connection) as session:
+                            await session.initialize()
+                            tools = await session.list_tools()
+                            tool_count = len(tools.tools) if hasattr(tools, 'tools') else 0
+                            return f"✅ MCP connection: OK ({tool_count} tools)"
+                
+                result = asyncio.run(test_mcp())
+                test_results.append(result)
+            except Exception as e:
+                test_results.append(f"❌ MCP connection: Failed - {str(e)}")
+        
+        # Test external APIs
+        try:
+            response = requests.get("https://httpbin.org/get", timeout=5)
+            if response.status_code == 200:
+                test_results.append("✅ Internet connectivity: OK")
+            else:
+                test_results.append("❌ Internet connectivity: Failed")
+        except:
+            test_results.append("❌ Internet connectivity: Failed")
+        
+        # Test Snowflake (for HEDIS)
+        try:
+            conn = get_hedis_connection()
+            if conn:
+                test_results.append("✅ Snowflake HEDIS: Connected")
+            else:
+                test_results.append("❌ Snowflake HEDIS: Failed")
+        except Exception as e:
+            test_results.append(f"❌ Snowflake HEDIS: {str(e)}")
+        
+        for result in test_results:
+            if "✅" in result:
+                st.success(result)
+            else:
+                st.error(result)
+    
+    st.caption(f"🤖 Mode: {prompt_type}")
+    st.caption(f"🔧 Status: {mode_text}")
+, query.strip()):
             return standalone_calculate(query.strip())
         
         # Check for weather patterns
@@ -681,7 +878,7 @@ async def process_query_standalone(query: str, prompt_type: str) -> str:
         
         # Check for HEDIS patterns
         if any(keyword in query_lower for keyword in ["hedis", "measure", "bcs", "coa", "eed"]):
-            return f"🏥 For HEDIS queries, please switch to 'HEDIS Expert' mode."
+            return f"🏥 For HEDIS queries, please enable MCP mode and ensure the server is running."
         
         # Default to search
         if any(keyword in query_lower for keyword in ["what", "who", "when", "where", "how", "define"]):
