@@ -26,7 +26,7 @@ from fastapi import (
     status,
 )
 from mcp.server.fastmcp.prompts.base import Message
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import Prompt
 import mcp.types as types
 from functools import partial
@@ -855,141 +855,97 @@ async def diagnostic(test_type: str = "basic") -> str:
         
     return result
 
-# === ENHANCED OPEN-METEO WEATHER TOOL ===
-@mcp.tool(
-    name="open_meteo_weather",
-    description="""
-    Get current weather (temperature, wind, precipitation) from Open-Meteo (no API key required).
-    Args:
-      latitude (float): Latitude of the location.
-      longitude (float): Longitude of the location.
-    Returns:
-      A human-readable summary of current conditions.
-    """
-)
-async def open_meteo_weather(ctx: Context, latitude: float, longitude: float) -> str:
-    """Get current weather from Open-Meteo API"""
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "current_weather": True,
-        "hourly": ["temperature_2m", "precipitation", "weather_code"],
-        "daily": ["temperature_2m_max", "temperature_2m_min", "precipitation_sum"],
-        "timezone": "auto",
-        "forecast_days": 3
-    }
-    try:
-        await ctx.info(f"🌤️ Fetching current weather for {latitude}, {longitude}")
-        
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        
-        # Current weather
-        cw = data.get("current_weather", {})
-        temp = cw.get("temperature")
-        wind = cw.get("windspeed")
-        wind_dir = cw.get("winddirection")
-        weather_code = cw.get("weathercode")
-        
-        # Enhanced weather code mapping
-        codes = {
-            0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-            45: "Fog", 48: "Depositing rime fog",
-            51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
-            61: "Light rain", 63: "Moderate rain", 65: "Heavy rain",
-            71: "Light snow", 73: "Moderate snow", 75: "Heavy snow",
-            80: "Light rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
-            95: "Thunderstorm", 96: "Thunderstorm with hail"
-        }
-        desc = codes.get(weather_code, f"Weather code {weather_code}")
-        
-        # Get daily forecast
-        daily = data.get("daily", {})
-        today_max = daily.get("temperature_2m_max", [None])[0]
-        today_min = daily.get("temperature_2m_min", [None])[0]
-        today_precip = daily.get("precipitation_sum", [None])[0]
-        
-        result = f"🌤️ **Current Weather Report**\n\n"
-        result += f"📍 **Location:** {latitude}°, {longitude}°\n"
-        result += f"🌡️ **Current Temperature:** {temp}°C\n"
-        result += f"☁️ **Conditions:** {desc}\n"
-        result += f"💨 **Wind:** {wind} km/h from {wind_dir}°\n"
-        
-        if today_max and today_min:
-            result += f"📊 **Today's Range:** {today_min}°C - {today_max}°C\n"
-        
-        if today_precip and today_precip > 0:
-            result += f"🌧️ **Precipitation:** {today_precip}mm\n"
-        
-        # Add 3-day forecast
-        if len(daily.get("temperature_2m_max", [])) >= 3:
-            result += f"\n**📅 3-Day Forecast:**\n"
-            for i in range(3):
-                day_max = daily["temperature_2m_max"][i]
-                day_min = daily["temperature_2m_min"][i]
-                day_precip = daily["precipitation_sum"][i]
-                day_name = ["Today", "Tomorrow", "Day After"][i]
-                result += f"• **{day_name}:** {day_min}°C - {day_max}°C"
-                if day_precip > 0:
-                    result += f", {day_precip}mm rain"
-                result += "\n"
-        
-        await ctx.info("✅ Weather data retrieved successfully")
-        return result
-        
-    except Exception as e:
-        await ctx.error(f"Open-Meteo request failed: {e}")
-        return f"❌ Failed to fetch weather from Open-Meteo: {e}"
-
+# === WEATHER TOOL USING NWS API WITH GEOCODING ===
 @mcp.tool(
     name="get_weather",
-    description="""
-    Get current weather conditions for a location using NWS (real-time observation, then forecast) with fallback to Open-Meteo. Avoids stale data. Args: latitude (float), longitude (float), location_name (str, optional). Returns: human-readable weather summary string.
-    """
+    description="Get weather forecast for a place (e.g., 'New York, NY'). No API key required. Works for US locations."
 )
-async def get_weather(ctx: Context, latitude: float, longitude: float, location_name: str = "Location") -> str:
-    """Get current weather using NWS (observation, then forecast) with fallback to Open-Meteo."""
-    import requests
-    from datetime import datetime
-    headers = {"User-Agent": "weather-app/1.0"}
-    # Try NWS real-time observation
+async def get_weather(place: str, ctx: Context) -> str:
+    """
+    Get weather forecast for a place (e.g., 'New York') using NWS API with geocoding.
+    
+    Args:
+        place: The location name (e.g., 'New York, NY')
+        ctx: MCP context for logging
+        
+    Returns:
+        Formatted weather forecast string or error message
+    """
+    await ctx.info(f"Fetching weather for: {place}")
+    
     try:
-        obs_str = get_nws_current_observation(latitude, longitude, location_name)
-        if obs_str and "Current at" in obs_str:
-            await ctx.info("✅ NWS real-time observation used")
-            return obs_str
-    except Exception as e:
-        await ctx.error(f"NWS observation fetch failed: {e}")
-    # Try NWS forecast
-    try:
-        # 1. Get forecast URL
-        points_url = f"https://api.weather.gov/points/{latitude},{longitude}"
-        points_data = requests.get(points_url, headers=headers, timeout=8).json()
+        # Step 1: Get coordinates using Nominatim (no key needed)
+        nominatim_url = f"https://nominatim.openstreetmap.org/search?q={place}&format=json&limit=1&countrycodes=us"
+        response = requests.get(nominatim_url, headers={"User-Agent": "MCP Weather Tool"}, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            error_msg = f"Could not find location: {place}. Please try a more specific city name."
+            await ctx.error(error_msg)
+            return error_msg
+
+        latitude = data[0]["lat"]
+        longitude = data[0]["lon"]
+        display_name = data[0].get("display_name", place)
+        
+        await ctx.info(f"Found coordinates: {latitude}, {longitude} for {display_name}")
+
+        # Step 2: Use NWS API to get forecast
+        nws_url = f"https://api.weather.gov/points/{latitude},{longitude}"
+        headers = {"User-Agent": "MCP Weather Tool", "Accept": "application/geo+json"}
+        
+        points_resp = requests.get(nws_url, headers=headers, timeout=10)
+       
+        if points_resp.status_code == 404:
+            error_msg = f"Weather service not available for {place}. The National Weather Service only covers US locations."
+            await ctx.error(error_msg)
+            return error_msg
+       
+        points_resp.raise_for_status()
+        points_data = points_resp.json()
+
         forecast_url = points_data["properties"]["forecast"]
-        forecast_data = requests.get(forecast_url, headers=headers, timeout=8).json()
-        period = select_nws_period_for_today(forecast_data)
-        if period:
-            start_time = period.get("startTime", "")
-            detailed = period.get("detailedForecast") or period.get("shortForecast")
-            temp = period.get("temperature")
-            unit = period.get("temperatureUnit", "°C")
-            date_str = start_time.split("T")[0] if start_time else ""
-            result = f"NWS Forecast for {location_name} ({date_str}): {temp}{unit}, {detailed}"
-            await ctx.info("✅ NWS forecast used")
-            return result
-    except Exception as e:
-        await ctx.error(f"NWS forecast fetch failed: {e}")
-    # Fallback to Open-Meteo
-    try:
-        result = await open_meteo_weather(ctx, latitude, longitude)
-        await ctx.info("✅ Open-Meteo fallback used")
+        city = points_data["properties"]["relativeLocation"]["properties"]["city"]
+        state = points_data["properties"]["relativeLocation"]["properties"]["state"]
+
+        forecast_resp = requests.get(forecast_url, headers=headers, timeout=10)
+        forecast_resp.raise_for_status()
+        forecast_data = forecast_resp.json()
+
+        # Get current or next period
+        periods = forecast_data["properties"]["periods"]
+        if not periods:
+            error_msg = "No forecast data available."
+            await ctx.error(error_msg)
+            return error_msg
+            
+        period = periods[0]  # Current or next period
+        
+        # Format the response
+        result = (
+            f"🌤️ Weather for {city}, {state}:\n"
+            f"📅 {period['name']}\n"
+            f"🌡️ Temp: {period['temperature']}°{period['temperatureUnit']}\n"
+            f"🌬️ Wind: {period['windSpeed']} {period['windDirection']}\n"
+            f"📝 {period['detailedForecast']}"
+        )
+        
+        await ctx.info(f"Successfully retrieved weather for {city}, {state}")
         return result
+
+    except requests.exceptions.Timeout:
+        error_msg = "Weather service request timed out. Please try again later."
+        await ctx.error(error_msg)
+        return error_msg
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Error fetching weather data: {str(e)}"
+        await ctx.error(error_msg)
+        return error_msg
     except Exception as e:
-        await ctx.error(f"All weather sources failed: {e}")
-        return f"❌ Failed to fetch weather from all sources: {e}"
+        error_msg = f"Unexpected error: {str(e)}"
+        await ctx.error(error_msg)
+        return error_msg
 
 # === FIXED PROMPTS TO ENSURE TOOL INVOCATION ===
 
@@ -1086,31 +1042,30 @@ Please use the duckduckgo_search tool to find relevant current web information a
 
 @mcp.prompt(
         name="weather-prompt",
-        description="Weather Information Expert using NWS and Open-Meteo"
+        description="Weather Information Expert using NWS"
 )
 async def weather_prompt(query: str) -> List[Message]:
     return [
         {
             "role": "user",
-            "content": f"""You are a weather information expert with access to multiple weather data sources.
+            "content": f"""You are a weather information expert with access to the National Weather Service (NWS) API.
 
-You have access to the 'get_weather' tool which requires latitude and longitude coordinates to provide current weather conditions and forecasts. This tool will first try to get real-time data from the National Weather Service (NWS), then fall back to NWS forecasts, and finally to Open-Meteo if needed.
+You have access to the 'get_weather' tool which takes a location name (city, state) and returns current weather conditions and forecast.
 
 IMPORTANT: You MUST use the get_weather tool to get weather information. Do not provide weather information from your general knowledge.
 
 Available tool:
-- get_weather: Get current weather conditions using NWS (real-time observation, then forecast) with fallback to Open-Meteo. Requires latitude and longitude coordinates.
+- get_weather: Get current weather forecast for a location (e.g., 'New York, NY'). Works for US locations. No need to provide coordinates.
 
-Common city coordinates for reference:
-- Richmond, VA: 37.5407, -77.4360
-- Atlanta, GA: 33.7490, -84.3880
-- New York, NY: 40.7128, -74.0060
-- Denver, CO: 39.7392, -104.9903
-- Miami, FL: 25.7617, -80.1918
+Examples of valid queries:
+- What's the weather in New York, NY?
+- Show me the forecast for San Francisco
+- Weather in 90210
+- What's the temperature in Chicago, IL?
 
 User Query: {query}
 
-If the query mentions a city, extract or look up the coordinates and use the get_weather tool. If coordinates aren't clear from the query, ask the user to provide them or suggest coordinates for the nearest major city."""
+If the query mentions a location, extract just the location name (city, state) and use the get_weather tool. If the location isn't clear, ask the user to specify the city and state."""
         }
     ]
 
