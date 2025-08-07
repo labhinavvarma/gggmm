@@ -1,1074 +1,519 @@
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-import httpx
-from dataclasses import dataclass
-from urllib.parse import urlparse
-from pathlib import Path
-import json
+import streamlit as st
 import asyncio
-import snowflake.connector
-import requests
-import os
-from loguru import logger
-import logging
-import re
-import urllib.parse
-from datetime import datetime, timedelta
-from snowflake.connector import SnowflakeConnection
-from ReduceReuseRecycleGENAI.snowflake import snowflake_conn
-from snowflake.connector.errors import DatabaseError
-from snowflake.core import Root
-from typing import Optional, List, Dict
-from fastapi import (
-    HTTPException,
-    status,
-)
-from mcp.server.fastmcp.prompts.base import Message
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.fastmcp.prompts import Prompt
-import mcp.types as types
-from functools import partial
-import sys
-import traceback
-import time
+import json
+import yaml
+import pkg_resources
+import asyncio
 
-# Create a named server
-mcp = FastMCP("DataFlyWheel App")
+from mcp.client.sse import sse_client
+from mcp import ClientSession
 
-# Constants
-NWS_API_BASE = "https://api.weather.gov"
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from dependencies import SnowFlakeConnector
+from llmobjectwrapper import ChatSnowflakeCortex
+from snowflake.snowpark import Session
+from mcp.client.sse import sse_client
+from mcp import ClientSession
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
-@dataclass
-class AppContext:
-    conn : SnowflakeConnection
-    db: str
-    schema: str
-    host: str
+# Page config
+st.set_page_config(page_title="MCP DEMO - Enhanced", page_icon="🔍")
+st.title("🔍 MCP DEMO - Enhanced with Search Tools")
+st.markdown("*Compatible with Wikipedia, DuckDuckGo, Weather & HEDIS Analytics*")
 
-class RateLimiter:
-    """Rate limiter to prevent overwhelming external services"""
-    def __init__(self, requests_per_minute: int = 30):
-        self.requests_per_minute = requests_per_minute
-        self.requests = []
+server_url = st.sidebar.text_input("MCP Server URL", "http://10.126.192.183:8001/sse")
+show_server_info = st.sidebar.checkbox("🛡 Show MCP Server Info", value=False)
 
-    async def acquire(self):
-        now = datetime.now()
-        # Remove requests older than 1 minute
-        self.requests = [
-            req for req in self.requests if now - req < timedelta(minutes=1)
-        ]
-
-        if len(self.requests) >= self.requests_per_minute:
-            # Wait until we can make another request
-            wait_time = 60 - (now - self.requests[0]).total_seconds()
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-
-        self.requests.append(now)
-
-# Initialize rate limiter
-rate_limiter = RateLimiter(requests_per_minute=20)
-
-#Stag name may need to be determined; requires code change
-#Resources; Have access to resources required for the server; Cortex Search; Cortex stage schematic config; stage area should be fully qualified name
-
-@mcp.resource(uri="schematiclayer://cortex_analyst/schematic_models/{stagename}/list",name="hedis_schematic_models",description="Hedis Schematic models")
-async def get_schematic_model(stagename: str):
-    """Cortex analyst scematic layer model, model is in yaml format"""
-    #ctx = mcp.get_context()
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    cursor = conn.cursor()
-    snfw_model_list = cursor.execute("LIST @{db}.{schema}.{stagename}".format(db=db, schema=schema, stagename=stagename))
-    return [stg_nm[0].split("/")[-1] for stg_nm in snfw_model_list if stg_nm[0].endswith('yaml')]
-
-@mcp.resource("search://cortex_search/search_obj/list")
-async def get_search_service():
-    """Cortex search service"""
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    cursor = conn.cursor()
-    snfw_search_objs = cursor.execute("SHOW CORTEX SEARCH SERVICES IN SCHEMA {db}.{schema}".format(db=db, schema=schema))
-    result = [search_obj[1] for search_obj in snfw_search_objs.fetchall()]
-    return result
-
-@mcp.resource("genaiplatform://{aplctn_cd}/frequent_questions/{user_context}")
-async def frequent_questions(aplctn_cd: str, user_context: str) -> List[str]:
-    resource_name = aplctn_cd + "_freq_questions.json"
-    freq_questions = json.load(open(resource_name))
-    aplcn_question = freq_questions.get(aplctn_cd)
-    return [rec["prompt"] for rec in aplcn_question if rec["user_context"] == user_context]
-
-@mcp.resource("genaiplatform://{aplctn_cd}/prompts/{prompt_name}")
-async def prompt_templates(aplctn_cd: str, prompt_name: str) -> List[str]:
-    resource_name = aplctn_cd + "_prompts.json"
-    prompt_data = json.load(open(resource_name))
-    aplcn_prompts = prompt_data.get(aplctn_cd)
-    return [rec["content"] for rec in aplcn_prompts if rec["prompt_name"] == prompt_name]
-
-@mcp.tool(
-        name="add-frequent-questions"
-       ,description="""
-        Tool to add frequent questions to MCP server
-        Example inputs:
-        {
-           "uri"
-        }
-        Args:
-               uri (str):  text to be passed
-               questions (list):
-               [
-                 {
-                   "user_context" (str): "User context for the prompt"
-                   "prompt" (str): "prompt"
-                 }
-               ]
-        """
-)
-async def add_frequent_questions(ctx: Context,uri: str,questions: list) -> list:
-    #Parse and extract aplctn_cd and user_context (urllib)
-    url_path = urlparse(uri)
-    aplctn_cd = url_path.netloc
-    user_context = Path(url_path.path).name
-    file_data = {}
-    file_name = aplctn_cd + "_freq_questions.json"
-    if Path(file_name).exists():
-        file_data  = json.load(open(file_name,'r'))
-        file_data[aplctn_cd].extend(questions)
-    else:
-        file_data[aplctn_cd] =  questions
-    index_dict = {
-        user_context: set()
-    }
-    result = []
-    #Remove duplicates
-    for elm in file_data[aplctn_cd]:
-        if elm["user_context"] == user_context and elm['prompt'] not in index_dict[user_context]:
-            result.append(elm)
-            index_dict[user_context].add(elm['prompt'])
-    file_data[aplctn_cd] = result
-    file = open(file_name,'w')
-    file.write(json.dumps(file_data))
-    return file_data[aplctn_cd]
-
-@mcp.tool(
-        name="add-prompts"
-       ,description="""
-        Tool to add prompts to MCP server
-        Example inputs:
-        {
-           ""
-        }
-        Args:
-               uri (str):  text to be passed
-               prompts (dict):
-                 {
-                   "prompt_name" (str): "Unique name assigned to prompt for a application"
-                   "description" (str): "Prompt description"
-                   "content" (str): "Prompt content"
-                 }
-        """
-)
-async def add_prompts(ctx: Context,uri: str,prompt: dict) -> dict:
-    #Parse and extract aplctn_cd and user_context (urllib)
-    url_path = urlparse(uri)
-    aplctn_cd = url_path.netloc
-    prompt_name = Path(url_path.path).name
-    #Before adding the prompt to file add to the server
-    ##Add prompts to server
-    def func1(query: str ):
-        return [
-            {
-                "role": "user",
-                "content": prompt["content"] + f"\n  {query}"
-            }
-        ]
-    ctx.fastmcp.add_prompt(
-        Prompt.from_function(
-            func1,name = prompt["prompt_name"],description=prompt["description"])
-    )
-    file_data = {}
-    file_name = aplctn_cd + "_prompts.json"
-    if Path(file_name).exists():
-        file = open(file_name,'r')
-        file_data  = json.load(file)
-        file_data[aplctn_cd].append(prompt)
-    else:
-        file_data[aplctn_cd] =  [prompt]
-    file = open(file_name,'w')
-    file.write(json.dumps(file_data))
-    return prompt
-
-#Tools; corex Analyst; Cortex Search; Cortex Complete
-
-@mcp.tool(
-        name="DFWAnalyst"
-       ,description="""
-        Coneverts text to valid SQL which can be executed on HEDIS value sets and code sets.
-        Example inputs:
-           What are the codes in <some value> Value Set?
-        Returns valid sql to retive data from underlying value sets and code sets.
-        Args:
-               prompt (str):  text to be passed
-        """
-)
-async def dfw_text2sql(prompt:str,ctx: Context) -> dict:
-    """Tool to convert natural language text to snowflake sql for hedis system, text should be passed as 'prompt' input perameter"""
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    host = HOST
-    stage_name = "hedis_stage_full"
-    file_name = "hedis_semantic_model_complete.yaml"
-    request_body = {
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        "semantic_model_file": f"@{db}.{schema}.{stage_name}/{file_name}",
-    }
-    token = conn.rest.token
-    resp = requests.post(
-        url=f"https://{host}/api/v2/cortex/analyst/message",
-        json=request_body,
-        headers={
-            "Authorization": f'Snowflake Token="{token}"',
-            "Content-Type": "application/json",
-        },
-    )
-    return resp.json()
-
-#Need to change the type of serch, implimented in the below code; Revisit
-@mcp.tool(
-        name="DFWSearch"
-       ,description= """
-        Searches HEDIS measure specification documents.
-        Example inputs:
-        What is the age criteria for  BCS Measure ?
-        What is EED Measure in HEDIS?
-        Describe COA Measure?
-        What LOB is COA measure scoped under?
-        Returns information utilizing HEDIS measure speficication documents.
-        Args:
-              query (str): text to be passed
-       """
-)
-async def dfw_search(ctx: Context,query: str):
-    """Tool to provide search againest HEDIS business documents for the year 2024, search string should be provided as 'query' perameter"""
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    search_service = 'CS_HEDIS_FULL_2024'
-    columns = ['chunk']
-    limit = 2
-    root = Root(conn)
-    search_service = root.databases[db].schemas[schema].cortex_search_services[search_service]
-    response = search_service.search(
-        query=query,
-        columns=columns,
-        limit=limit
-    )
-    return response.to_json()
-
-@mcp.tool(
-        name="calculator",
-        description="""
-        Evaluates a basic arithmetic expression.
-        Supports: +, -, *, /, parentheses, decimals.
-        Example inputs:
-        3+4/5
-        3.0/6*8
-        Returns decimal result
-        Args:
-             expression (str): Arthamatic expression input
-        """
-)
-def calculate(expression: str) -> str:
-    """
-    Evaluates a basic arithmetic expression.
-    Supports: +, -, *, /, parentheses, decimals.
-    """
-    print(f" calculate() called with expression: {expression}", flush=True)
+# Connection status check
+@st.cache_data(ttl=30)
+def check_server_connection(url):
     try:
-        allowed_chars = "0123456789+-*/(). "
-        if any(char not in allowed_chars for char in expression):
-            return " Invalid characters in expression."
-        result = eval(expression)
-        return f" Result: {result}"
-    except Exception as e:
-        print(" Error in calculate:", str(e), flush=True)
-        return f" Error: {str(e)}"
+        import requests
+        response = requests.get(url.replace('/sse', ''), timeout=5)
+        return True
+    except:
+        return False
 
-#This may required to be integrated in main agent
-@mcp.tool(
-        name="suggested_top_prompts",
-        description="""
-        Suggests requested number of prompts with given context.
-        Example Input:
-        {
-          top_n_suggestions: 3,
-          context: "Initialization" | "The age criteria for the BCS (Breast Cancer Screening) measure is 50-74 years of age."
-          aplctn_cd: "hedis"
-        }
-        Returns List of string values.
-        Args:
-            top_n_suggestions (int): how many suggestions to be generated.
-            context (str): context that need to be used for the promt suggestions.
-            aplctn_cd (str): application code.
-        """
-)
-async def question_suggestions(ctx: Context,aplctn_cd: str, app_lvl_prefix: str, session_id: str, top_n: int = 3,context: str="Initialization",llm_flg: bool = False):
-    """Tool to suggest aditional prompts with in the provided context, context should be passed as 'context' input perameter"""
-    if  not llm_flg:
-        return ctx.read_resource(f"genaiplatform://{aplctn_cd}/frequent_questions/{context}")
-    try:
-        sf_conn = SnowFlakeConnector.get_conn(
-            aplctn_cd,
-            app_lvl_prefix,
-            session_id,
-        )
-    except DatabaseError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User not authorized to resources"
-        )
-    clnt = httpx.AsyncClient(verify=False)
-    request_body = {
-        "model": "llama3.1-70b-elevance",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"""
-                You are an expert in suggesting hypothetical questions.
-                Suggest a list of {top_n} hypothetical questions that the below context could be used to answer:
-                {context}
-                Return List with hypothetical questions
-                """
-            }
-        ]
-    }
-    headers = {
-        "Authorization": f'Snowflake Token="{sf_conn.rest.token}"',
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "method":"cortex",
-    }
-    url = "https://jib90126.us-east-1.privatelink.snowflakecomputing.com/api/v2/cortex/inference:complete"
-    response_text = []
-    async with clnt.stream('POST', url, headers=headers, json=request_body) as response:
-        if response.is_client_error:
-            error_message = await response.aread()
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_message.decode("utf-8")
-            )
-        if response.is_server_error:
-            error_message = await response.aread()
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_message.decode("utf-8")
-            )
-        # Stream the response content
-        async for result_chunk in response.aiter_bytes():
-            for elem in result_chunk.split(b'\n\n'):
-                if b'content' in elem:  # Check for data presence
-                    chunk_dict = json.loads(elem.replace(b'data: ', b''))
-                    print(chunk_dict)
-                    full_response = chunk_dict['choices'][0]['delta']['text']
-                    full_response = full_response
-                    response_text.append(full_response)
-    return json.loads(response_text)
+server_status = check_server_connection(server_url)
+status_indicator = "🟢 Connected" if server_status else "🔴 Disconnected"
+st.sidebar.markdown(f"**Server Status:** {status_indicator}")
 
-# === ENHANCED WIKIPEDIA MCP TOOL (CURRENT DATA) ===
-@mcp.tool(
-        name="wikipedia_search",
-        description="""
-        Search Wikipedia for current information on any topic with enhanced content retrieval.
-        Example inputs:
-        "artificial intelligence"
-        "World War II"
-        "Python programming language"
-        Returns current Wikipedia article content and summary.
-        Args:
-             query (str): Search query for Wikipedia
-             max_results (int): Maximum number of results to return (default: 3)
-        """
-)
-async def wikipedia_search(query: str, ctx: Context, max_results: int = 3) -> str:
-    """Tool to search Wikipedia for current information, query should be passed as 'query' input parameter"""
-    try:
-        await rate_limiter.acquire()
-        await ctx.info(f"🔍 Searching Wikipedia for current data: {query}")
-        
-        current_timestamp = int(time.time())
-        headers = {
-            "User-Agent": f"MCP Wikipedia Client (mcp-server@example.com) - {current_timestamp}",
-            "Cache-Control": "no-cache, max-age=0",
-            "Accept": "application/json"
-        }
-        
-        # Search Wikipedia API with cache busting
-        search_url = "https://en.wikipedia.org/api/rest_v1/page/search"
-        search_params = {
-            "q": query,
-            "limit": max_results,
-            "_": current_timestamp  # Cache busting parameter
-        }
-        
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            search_response = await client.get(search_url, params=search_params, headers=headers)
-            search_response.raise_for_status()
-            search_data = search_response.json()
-            
-            if not search_data.get('pages'):
-                return f"❌ No Wikipedia results found for: {query}"
-            
-            results = []
-            results.append(f"📖 **Wikipedia Search Results for '{query}' (Current Data):**\n")
-            
-            for i, page in enumerate(search_data['pages'][:max_results], 1):
-                title = page.get('title', 'Unknown')
-                description = page.get('description', 'No description available')
-                
-                await ctx.info(f"📄 Fetching full content for: {title}")
-                
-                # Get full article content with multiple API calls for comprehensive data
-                page_url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
-                
-                try:
-                    # Get detailed summary
-                    summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}"
-                    summary_response = await client.get(summary_url, headers=headers, 
-                                                      params={"_": current_timestamp})
-                    
-                    if summary_response.status_code == 200:
-                        summary_data = summary_response.json()
-                        extract = summary_data.get('extract', '')
-                        last_modified = summary_data.get('timestamp', 'Unknown')
-                        
-                        # Get additional content sections
-                        content_url = f"https://en.wikipedia.org/api/rest_v1/page/mobile-sections/{title.replace(' ', '_')}"
-                        content_response = await client.get(content_url, headers=headers,
-                                                          params={"_": current_timestamp})
-                        
-                        additional_content = ""
-                        if content_response.status_code == 200:
-                            content_data = content_response.json()
-                            sections = content_data.get('sections', [])
-                            # Get first few sections for more comprehensive content
-                            for section in sections[:3]:
-                                if section.get('text'):
-                                    # Clean HTML tags
-                                    section_text = re.sub(r'<[^>]+>', '', section.get('text', ''))
-                                    additional_content += f" {section_text}"
-                        
-                        # Combine extract with additional content
-                        full_content = extract
-                        if additional_content:
-                            full_content += f"\n\nAdditional Information: {additional_content[:1000]}..."
-                        
-                    else:
-                        full_content = f"Unable to fetch detailed content for {title}"
-                        last_modified = "Unknown"
-                        
-                except Exception as content_error:
-                    await ctx.warning(f"Content fetch failed for {title}: {content_error}")
-                    full_content = description
-                    last_modified = "Unknown"
-                
-                # Format result with timestamp info
-                results.append(f"## {i}. {title}")
-                results.append(f"**Description:** {description}")
-                results.append(f"**URL:** {page_url}")
-                if last_modified != "Unknown":
-                    try:
-                        # Parse and format timestamp
-                        mod_time = datetime.fromisoformat(last_modified.replace('Z', '+00:00'))
-                        results.append(f"**Last Modified:** {mod_time.strftime('%B %d, %Y')}")
-                    except:
-                        results.append(f"**Last Modified:** {last_modified}")
-                results.append(f"**Content:** {full_content}")
-                results.append("")
-            
-            await ctx.info(f"✅ Wikipedia search completed: {len(search_data['pages'])} current results found")
-            return "\n".join(results)
-            
-    except Exception as e:
-        await ctx.error(f"Wikipedia search failed: {str(e)}")
-        return f"❌ Wikipedia search error: {str(e)}"
+# === MOCK LLM ===
+def mock_llm_response(prompt_text: str) -> str:
+    return f"🤖 Mock LLM Response to: '{prompt_text}'"
 
-# === ENHANCED DUCKDUCKGO TOOL (READS LINKS FOR LATEST DATA) ===
-@mcp.tool(
-        name="duckduckgo_search",
-        description="""
-        Search the web using DuckDuckGo and fetch actual content from top results for latest information.
-        This tool searches, finds links, and reads the actual webpage content to provide current data.
-        Example inputs:
-        "latest news about AI 2024"
-        "current developments in renewable energy"
-        "recent space exploration missions"
-        Returns current information extracted from actual web pages.
-        Args:
-             query (str): Search query for DuckDuckGo
-             max_results (int): Maximum number of links to read and analyze (default: 3)
-        """
-)
-async def duckduckgo_search(query: str, ctx: Context, max_results: int = 3) -> str:
-    """Tool to search web and read actual content from links for latest information"""
-    try:
-        await rate_limiter.acquire()
-        await ctx.info(f"🦆 Searching DuckDuckGo and reading content for: {query}")
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        
-        # Enhanced search with current year for recent results
-        current_year = datetime.now().year
-        enhanced_query = f"{query} {current_year}"
-        
-        results = []
-        results.append(f"🦆 **DuckDuckGo Web Search Results with Content Analysis for '{query}':**\n")
-        
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            
-            # Step 1: Get search results from DuckDuckGo
-            search_urls = []
-            
-            # Try DuckDuckGo HTML search for actual links
-            try:
-                html_search_url = "https://html.duckduckgo.com/html/"
-                html_params = {
-                    "q": enhanced_query,
-                    "s": "0",
-                    "dc": str(max_results * 2),  # Get more results to filter from
-                    "v": "l"
-                }
-                
-                await ctx.info("🔍 Getting search results from DuckDuckGo...")
-                html_response = await client.get(html_search_url, params=html_params, headers=headers)
-                
-                if html_response.status_code == 200:
-                    html_content = html_response.text
-                    
-                    # Enhanced regex patterns for extracting URLs
-                    patterns = [
-                        r'<a[^>]+href="(https?://[^"]+)"[^>]*class="[^"]*result[^"]*"[^>]*>([^<]+)</a>',
-                        r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]+)</a>[^<]*<span[^>]*class="[^"]*snippet[^"]*"[^>]*>([^<]+)</span>',
-                        r'<a[^>]+href="(https?://[^"]+)"[^>]*title="([^"]+)"[^>]*>',
-                        r'href="(https?://[^"]+)"[^>]*>([^<]+)</a>'
-                    ]
-                    
-                    found_urls = []
-                    for pattern in patterns:
-                        matches = re.findall(pattern, html_content, re.IGNORECASE | re.DOTALL)
-                        
-                        for match in matches:
-                            if len(match) >= 2:
-                                url = match[0].strip()
-                                title = match[1].strip()
-                                
-                                # Filter for good URLs and avoid duplicates
-                                if (url.startswith('http') and 
-                                    url not in [item['url'] for item in found_urls] and
-                                    not any(skip in url.lower() for skip in ['duckduckgo.com', 'youtube.com/redirect', 'facebook.com', 'twitter.com/home']) and
-                                    len(title) > 5):
-                                    
-                                    found_urls.append({
-                                        'url': url,
-                                        'title': title
-                                    })
-                                    
-                                    if len(found_urls) >= max_results:
-                                        break
-                        
-                        if len(found_urls) >= max_results:
-                            break
-                    
-                    search_urls = found_urls[:max_results]
-                    await ctx.info(f"📊 Found {len(search_urls)} URLs to analyze")
-                
-            except Exception as search_error:
-                await ctx.warning(f"Search step failed: {search_error}")
-                return f"❌ Failed to get search results: {search_error}"
-            
-            # Step 2: Fetch and analyze content from each URL
-            if not search_urls:
-                return f"❌ No valid URLs found for query: {query}"
-            
-            content_results = []
-            
-            for i, url_data in enumerate(search_urls, 1):
-                url = url_data['url']
-                title = url_data['title']
-                
-                await ctx.info(f"📄 Reading content from {i}/{len(search_urls)}: {title[:50]}...")
-                
-                try:
-                    # Fetch webpage content
-                    page_response = await client.get(url, headers=headers, timeout=15.0)
-                    
-                    if page_response.status_code == 200:
-                        page_content = page_response.text
-                        
-                        # Extract meaningful text content
-                        # Remove scripts, styles, and other non-content tags
-                        clean_content = re.sub(r'<script[^>]*>.*?</script>', '', page_content, flags=re.DOTALL)
-                        clean_content = re.sub(r'<style[^>]*>.*?</style>', '', clean_content, flags=re.DOTALL)
-                        clean_content = re.sub(r'<[^>]+>', ' ', clean_content)
-                        clean_content = re.sub(r'\s+', ' ', clean_content).strip()
-                        
-                        # Extract the most relevant paragraphs (usually the first few contain the main content)
-                        paragraphs = [p.strip() for p in clean_content.split('\n') if len(p.strip()) > 100]
-                        
-                        # Get the best content (first few substantial paragraphs)
-                        extracted_content = ""
-                        word_count = 0
-                        for para in paragraphs[:10]:  # Check first 10 paragraphs
-                            if word_count < 500:  # Limit to ~500 words per article
-                                extracted_content += para + " "
-                                word_count += len(para.split())
-                            else:
-                                break
-                        
-                        if len(extracted_content.strip()) > 200:
-                            # Create summary of the content
-                            content_summary = extracted_content[:800] + "..." if len(extracted_content) > 800 else extracted_content
-                            
-                            content_results.append({
-                                'title': title,
-                                'url': url,
-                                'content': content_summary,
-                                'word_count': len(extracted_content.split()),
-                                'status': 'success'
-                            })
-                            
-                            await ctx.info(f"✅ Successfully extracted {len(extracted_content.split())} words")
-                        else:
-                            await ctx.warning(f"⚠️ Insufficient content extracted from {url}")
-                            content_results.append({
-                                'title': title,
-                                'url': url,
-                                'content': 'Content too short or inaccessible',
-                                'status': 'insufficient'
-                            })
-                    else:
-                        await ctx.warning(f"⚠️ HTTP {page_response.status_code} for {url}")
-                        content_results.append({
-                            'title': title,
-                            'url': url,
-                            'content': f'Failed to access (HTTP {page_response.status_code})',
-                            'status': 'failed'
-                        })
-                        
-                except Exception as fetch_error:
-                    await ctx.warning(f"⚠️ Failed to read {url}: {fetch_error}")
-                    content_results.append({
-                        'title': title,
-                        'url': url,
-                        'content': f'Error reading content: {str(fetch_error)}',
-                        'status': 'error'
-                    })
-            
-            # Step 3: Format results with actual content
-            if content_results:
-                results.append(f"📊 **Analyzed {len(content_results)} web sources for latest information:**\n")
-                
-                successful_results = [r for r in content_results if r['status'] == 'success']
-                
-                for i, result in enumerate(successful_results, 1):
-                    results.append(f"## Source {i}: {result['title']}")
-                    results.append(f"**URL:** {result['url']}")
-                    results.append(f"**Content ({result.get('word_count', 'Unknown')} words):**")
-                    results.append(result['content'])
-                    results.append("")
-                
-                # Add summary of failed attempts
-                failed_results = [r for r in content_results if r['status'] != 'success']
-                if failed_results:
-                    results.append(f"⚠️ **{len(failed_results)} sources could not be fully analyzed:**")
-                    for result in failed_results:
-                        results.append(f"• {result['title']}: {result['content']}")
-                    results.append("")
-                
-                current_time = datetime.now().strftime('%B %d, %Y at %I:%M %p')
-                results.append(f"*Content analysis completed at: {current_time}*")
-                
-                await ctx.info(f"✅ Web search and content analysis completed: {len(successful_results)} sources analyzed")
-                return "\n".join(results)
-            else:
-                return f"❌ No content could be extracted from search results for: {query}"
-            
-    except Exception as e:
-        await ctx.error(f"DuckDuckGo search and content analysis failed: {str(e)}")
-        return f"❌ DuckDuckGo search error: {str(e)}"
-
-# Simple Test Tool - LangChain Compatible
-@mcp.tool(
-        name="test_tool", 
-        description="""Simple test tool to verify tool calling works."""
-)
-async def test_tool(message: str) -> str:
-    """
-    Simple test tool to verify MCP tool calling is working.
-    
-    Args:
-        message: Test message
-    
-    Returns:
-        Test response with current timestamp
-    """
-    import datetime
-    current_time = datetime.datetime.now().isoformat()
-    
-    return f"✅ SUCCESS: Test tool called with message '{message}' at {current_time}"
-
-# Diagnostic Tool - LangChain Compatible
-@mcp.tool(
-        name="diagnostic",
-        description="""Diagnostic tool to test MCP functionality."""
-)
-async def diagnostic(test_type: str = "basic") -> str:
-    """
-    Run diagnostic tests to verify MCP functionality.
-    
-    Args:
-        test_type: Type of test (basic, search, time)
-    
-    Returns:
-        Diagnostic results as formatted string
-    """
-    import datetime
-    
-    current_time = datetime.datetime.now().isoformat()
-    
-    result = f"🔧 Diagnostic Test: {test_type}\n"
-    result += f"⏰ Timestamp: {current_time}\n"
-    result += f"🖥️ MCP Server: DataFlyWheel App\n"
-    result += f"✅ Status: WORKING\n"
-    
-    if test_type == "basic":
-        result += "📝 Message: MCP server is responding correctly\n"
-        result += "🛠️ Tool Execution: SUCCESS\n"
-        
-    elif test_type == "search":
-        # Test if we can make HTTP requests
+# === Server Info ===
+if show_server_info:
+    async def fetch_mcp_info():
+        result = {"resources": [], "tools": [], "prompts": [], "yaml": [], "search": []}
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get("https://httpbin.org/get")
-                http_status = "SUCCESS" if response.status_code == 200 else "FAILED"
+            async with sse_client(url=server_url) as sse_connection:
+                async with ClientSession(*sse_connection) as session:
+                    await session.initialize()
+
+                    # --- Resources ---
+                    resources = await session.list_resources()
+                    if hasattr(resources, 'resources'):
+                        for r in resources.resources:
+                            result["resources"].append({"name": r.name})
+                   
+                    # --- Tools (filtered) ---
+                    tools = await session.list_tools()
+                    hidden_tools = {"add-frequent-questions", "add-prompts", "suggested_top_prompts"}
+                    if hasattr(tools, 'tools'):
+                        for t in tools.tools:
+                            if t.name not in hidden_tools:
+                                result["tools"].append({
+                                    "name": t.name,
+                                    "description": getattr(t, 'description', '')
+                                })
+
+                    # --- Prompts ---
+                    prompts = await session.list_prompts()
+                    if hasattr(prompts, 'prompts'):
+                        for p in prompts.prompts:
+                            args = []
+                            if hasattr(p, 'arguments'):
+                                for arg in p.arguments:
+                                    args.append(f"{arg.name} ({'Required' if arg.required else 'Optional'}): {arg.description}")
+                            result["prompts"].append({
+                                "name": p.name,
+                                "description": getattr(p, 'description', ''),
+                                "args": args
+                            })
+
+                    # --- YAML Resources ---
+                    try:
+                        yaml_content = await session.read_resource("schematiclayer://cortex_analyst/schematic_models/hedis_stage_full/list")
+                        if hasattr(yaml_content, 'contents'):
+                            for item in yaml_content.contents:
+                                if hasattr(item, 'text'):
+                                    parsed = yaml.safe_load(item.text)
+                                    result["yaml"].append(yaml.dump(parsed, sort_keys=False))
+                    except Exception as e:
+                        result["yaml"].append(f"YAML error: {e}")
+
+                    # --- Search Objects ---
+                    try:
+                        content = await session.read_resource("search://cortex_search/search_obj/list")
+                        if hasattr(content, 'contents'):
+                            for item in content.contents:
+                                if hasattr(item, 'text'):
+                                    objs = json.loads(item.text)
+                                    result["search"].extend(objs)
+                    except Exception as e:
+                        result["search"].append(f"Search error: {e}")
+
         except Exception as e:
-            http_status = f"FAILED: {str(e)}"
-            
-        result += f"🌐 HTTP Test: {http_status}\n"
-        result += "🔍 Search Capability: Available\n"
-        
-    elif test_type == "time":
-        import time
-        result += f"🕐 Unix Timestamp: {int(time.time())}\n"
-        result += f"📅 Current Year: {datetime.datetime.now().year}\n" 
-        result += f"📅 Current Month: {datetime.datetime.now().strftime('%B %Y')}\n"
-        
-    return result
-
-# === ENHANCED OPEN-METEO WEATHER TOOL ===
-@mcp.tool(
-    name="open_meteo_weather",
-    description="""
-    Get current weather (temperature, wind, precipitation) from Open-Meteo (no API key required).
-    Args:
-      latitude (float): Latitude of the location.
-      longitude (float): Longitude of the location.
-    Returns:
-      A human-readable summary of current conditions.
-    """
-)
-async def open_meteo_weather(ctx: Context, latitude: float, longitude: float) -> str:
-    """Get current weather from Open-Meteo API"""
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "current_weather": True,
-        "hourly": ["temperature_2m", "precipitation", "weather_code"],
-        "daily": ["temperature_2m_max", "temperature_2m_min", "precipitation_sum"],
-        "timezone": "auto",
-        "forecast_days": 3
-    }
-    try:
-        await ctx.info(f"🌤️ Fetching current weather for {latitude}, {longitude}")
-        
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        
-        # Current weather
-        cw = data.get("current_weather", {})
-        temp = cw.get("temperature")
-        wind = cw.get("windspeed")
-        wind_dir = cw.get("winddirection")
-        weather_code = cw.get("weathercode")
-        
-        # Enhanced weather code mapping
-        codes = {
-            0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-            45: "Fog", 48: "Depositing rime fog",
-            51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
-            61: "Light rain", 63: "Moderate rain", 65: "Heavy rain",
-            71: "Light snow", 73: "Moderate snow", 75: "Heavy snow",
-            80: "Light rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
-            95: "Thunderstorm", 96: "Thunderstorm with hail"
-        }
-        desc = codes.get(weather_code, f"Weather code {weather_code}")
-        
-        # Get daily forecast
-        daily = data.get("daily", {})
-        today_max = daily.get("temperature_2m_max", [None])[0]
-        today_min = daily.get("temperature_2m_min", [None])[0]
-        today_precip = daily.get("precipitation_sum", [None])[0]
-        
-        result = f"🌤️ **Current Weather Report**\n\n"
-        result += f"📍 **Location:** {latitude}°, {longitude}°\n"
-        result += f"🌡️ **Current Temperature:** {temp}°C\n"
-        result += f"☁️ **Conditions:** {desc}\n"
-        result += f"💨 **Wind:** {wind} km/h from {wind_dir}°\n"
-        
-        if today_max and today_min:
-            result += f"📊 **Today's Range:** {today_min}°C - {today_max}°C\n"
-        
-        if today_precip and today_precip > 0:
-            result += f"🌧️ **Precipitation:** {today_precip}mm\n"
-        
-        # Add 3-day forecast
-        if len(daily.get("temperature_2m_max", [])) >= 3:
-            result += f"\n**📅 3-Day Forecast:**\n"
-            for i in range(3):
-                day_max = daily["temperature_2m_max"][i]
-                day_min = daily["temperature_2m_min"][i]
-                day_precip = daily["precipitation_sum"][i]
-                day_name = ["Today", "Tomorrow", "Day After"][i]
-                result += f"• **{day_name}:** {day_min}°C - {day_max}°C"
-                if day_precip > 0:
-                    result += f", {day_precip}mm rain"
-                result += "\n"
-        
-        await ctx.info("✅ Weather data retrieved successfully")
+            st.sidebar.error(f"❌ MCP Connection Error: {e}")
         return result
+
+    mcp_data = asyncio.run(fetch_mcp_info())
+
+    # Display Resources with better organization
+    with st.sidebar.expander("📦 Resources", expanded=False):
+        for r in mcp_data["resources"]:
+            if "cortex_search/search_obj/list" in r["name"]:
+                display_name = "🔍 Cortex Search Service"
+            elif "schematic_models" in r["name"]:
+                display_name = "📋 HEDIS Schematic Models"
+            elif "frequent_questions" in r["name"]:
+                display_name = "❓ Frequent Questions"
+            elif "prompts" in r["name"]:
+                display_name = "📝 Prompt Templates"
+            else:
+                display_name = r["name"]
+            st.markdown(f"**{display_name}**")
+
+    # --- YAML Section ---
+    with st.sidebar.expander("📋 Schematic Layer", expanded=False):
+        for y in mcp_data["yaml"]:
+            st.code(y, language="yaml")
+
+    # --- Enhanced Tools Section ---
+    with st.sidebar.expander("🛠 Available Tools", expanded=False):
+        # Updated tool categories for new tools
+        tool_categories = {
+            "🏥 HEDIS & Analytics": ["DFWAnalyst", "DFWSearch", "calculator"],
+            "🔍 Search & Web": ["wikipedia_search", "duckduckgo_search"],
+            "🌤️ Weather": ["open_meteo_weather"],  # Updated to new weather tool
+            "🔧 System": ["test_tool", "diagnostic"]
+        }
         
-    except Exception as e:
-        await ctx.error(f"Open-Meteo request failed: {e}")
-        return f"❌ Failed to fetch weather from Open-Meteo: {e}"
+        for category, expected_tools in tool_categories.items():
+            st.markdown(f"**{category}:**")
+            category_found = False
+            for t in mcp_data["tools"]:
+                if t['name'] in expected_tools:
+                    st.markdown(f"  • **{t['name']}**")
+                    if t.get('description'):
+                        st.caption(f"    {t['description']}")
+                    category_found = True
+            
+            if not category_found:
+                st.caption("    No tools found in this category")
 
-# === FIXED PROMPTS TO ENSURE TOOL INVOCATION ===
-
-@mcp.prompt(
-        name="hedis-prompt",
-        description="HEDIS Expert"
-)
-async def hedis_prompt(query: str)-> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are an expert in HEDIS system. HEDIS is a set of standardized measures that aim to improve healthcare quality by promoting accountability and transparency.
-
-You have access to these HEDIS tools:
-1. DFWAnalyst - Generates SQL to retrieve information for HEDIS codes and value sets
-2. DFWSearch - Provides search capability against HEDIS measures for measurement year
-
-IMPORTANT: You MUST use one of these tools to answer the user's query. Do not provide answers from your general knowledge alone.
-
-For SQL/code-related queries, use DFWAnalyst.
-For document/measure specification queries, use DFWSearch.
-
-User Query: {query}
-
-Please use the appropriate HEDIS tool to find the specific information requested."""
+    # Display Prompts with enhanced formatting
+    with st.sidebar.expander("🧐 Available Prompts", expanded=False):
+        prompt_display_names = {
+            "hedis-prompt": "🏥 HEDIS Expert",
+            "caleculator-promt": "🧮 Calculator Expert",
+            "weather-prompt": "🌤️ Weather Expert (Open-Meteo)", 
+            "wikipedia-search-prompt": "📖 Wikipedia Expert",
+            "duckduckgo-search-prompt": "🦆 Web Search Expert",
+            "test-tool-prompt": "🔧 Test Tool",
+            "diagnostic-prompt": "🔧 Diagnostic Tool"
         }
-    ]
+        
+        for p in mcp_data["prompts"]:
+            display_name = prompt_display_names.get(p['name'], p['name'])
+            st.markdown(f"**{display_name}**")
+            if p.get('description'):
+                st.caption(f"Description: {p['description']}")
 
-@mcp.prompt(
-        name="caleculator-promt",
-        description="Calculator"
-)
-async def caleculator_prompt(query: str)-> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are an expert in performing arithmetic operations. 
+else:
+    # === MAIN APPLICATION MODE ===
+    @st.cache_resource
+    def get_snowflake_connection():
+        return SnowFlakeConnector.get_conn('aedl', '')
 
-You have access to the 'calculator' tool which can evaluate mathematical expressions safely.
-
-IMPORTANT: You MUST use the calculator tool to compute any mathematical expressions. Do not perform calculations manually.
-
-User Query: {query}
-
-Please use the calculator tool to evaluate any mathematical expressions in the query and provide the results."""
-        }
-    ]
-
-@mcp.prompt(
-        name="wikipedia-search-prompt",
-        description="Wikipedia Search Expert"
-)
-async def wikipedia_search_prompt(query: str) -> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are a Wikipedia search expert specialized in finding accurate, encyclopedic information from Wikipedia.
-
-You have access to the 'wikipedia_search' tool which can search Wikipedia articles for comprehensive information.
-
-IMPORTANT: You MUST use the wikipedia_search tool to find information. Do not provide answers from your general knowledge alone.
-
-Available tool:
-- wikipedia_search: Search Wikipedia for detailed information on any topic
-
-User Query: {query}
-
-Please use the wikipedia_search tool to find relevant Wikipedia information and provide a comprehensive summary based on the search results."""
-        }
-    ]
-
-@mcp.prompt(
-        name="duckduckgo-search-prompt",
-        description="DuckDuckGo Web Search Expert"
-)
-async def duckduckgo_search_prompt(query: str) -> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are a web search expert specialized in finding current, relevant information from the internet using DuckDuckGo.
-
-You have access to the 'duckduckgo_search' tool which searches the web for current information.
-
-IMPORTANT: You MUST use the duckduckgo_search tool to find current web information. Do not provide answers from your general knowledge alone.
-
-Available tool:
-- duckduckgo_search: Search the web using DuckDuckGo for current information
-
-User Query: {query}
-
-Please use the duckduckgo_search tool to find relevant current web information and provide insights from the search results. Focus on recent developments and current information."""
-        }
-    ]
-
-@mcp.prompt(
-        name="weather-prompt",
-        description="Weather Information Expert using Open-Meteo"
-)
-async def weather_prompt(query: str) -> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are a weather information expert with access to the Open-Meteo weather API.
-
-You have access to the 'open_meteo_weather' tool which requires latitude and longitude coordinates to provide current weather conditions and forecasts.
-
-IMPORTANT: You MUST use the open_meteo_weather tool to get weather information. Do not provide weather information from your general knowledge.
-
-Available tool:
-- open_meteo_weather: Get current weather forecast using latitude and longitude coordinates from Open-Meteo API
-
-Common city coordinates for reference:
-- Richmond, VA: 37.5407, -77.4360
-- Atlanta, GA: 33.7490, -84.3880
-- New York, NY: 40.7128, -74.0060
-- Denver, CO: 39.7392, -104.9903
-- Miami, FL: 25.7617, -80.1918
-
-User Query: {query}
-
-If the query mentions a city, extract or look up the coordinates and use the open_meteo_weather tool. If coordinates aren't clear from the query, ask the user to provide them or suggest coordinates for the nearest major city."""
-        }
-    ]
-
-# Simplified Test Tool Prompt
-@mcp.prompt(
-        name="test-tool-prompt",
-        description="Test Tool Caller"
-)
-async def test_tool_prompt(message: str = "connectivity test") -> List[Message]:
-    """
-    Simplified test prompt for ChatSnowflakeCortex.
+    @st.cache_resource
+    def get_model():
+        sf_conn = get_snowflake_connection()
+        return ChatSnowflakeCortex(
+            model="claude-4-sonnet",
+            cortex_function="complete",
+            session=Session.builder.configs({"connection": sf_conn}).getOrCreate()
+        )
     
-    Args:
-        message: Test message to send
+    # Enhanced prompt type selection with new search capabilities
+    prompt_type = st.sidebar.radio(
+        "🎯 Select Expert Mode", 
+        ["Calculator", "HEDIS Expert", "Weather", "Wikipedia Search", "Web Search", "No Context"],
+        help="Choose the type of expert assistance you need"
+    )
     
-    Returns:
-        Simple formatted prompt messages
-    """
-    return [
-        {
-            "role": "user",
-            "content": f"""Please test the tool system by calling the test_tool with message: "{message}"
+    # Updated prompt mapping to include new search tools
+    prompt_map = {
+        "Calculator": "caleculator-promt",
+        "HEDIS Expert": "hedis-prompt",
+        "Weather": "weather-prompt",
+        "Wikipedia Search": "wikipedia-search-prompt",
+        "Web Search": "duckduckgo-search-prompt",
+        "No Context": None
+    }
 
-IMPORTANT: You MUST use the test_tool to respond.
+    # Enhanced examples for all prompt types
+    examples = {
+        "Calculator": [
+            "Calculate the expression (4+5)/2.0", 
+            "Calculate the math function sqrt(16) + 7", 
+            "Calculate the expression 3^4 - 12",
+            "What is 15% of 847?",
+            "Calculate compound interest on $1000 at 5% for 3 years"
+        ],
+        "HEDIS Expert": [],  # Will be loaded dynamically
+        "Weather": [
+            "What is the current weather in Richmond, Virginia? (Coordinates: 37.5407, -77.4360)",
+            "Get weather forecast for Atlanta, Georgia (33.7490, -84.3880)",
+            "What's the weather like in New York City? (40.7128, -74.0060)",
+            "Show me the weather for Denver, Colorado (39.7392, -104.9903)"
+        ],
+        "Wikipedia Search": [
+            "Search Wikipedia for artificial intelligence",
+            "What is quantum computing according to Wikipedia?",
+            "Find Wikipedia information about climate change",
+            "Look up the history of the Internet on Wikipedia"
+        ],
+        "Web Search": [
+            "Search for latest news about AI developments 2024",
+            "Find current information about renewable energy trends",
+            "Look up recent space exploration missions",
+            "Search for today's stock market news"
+        ],
+        "No Context": [
+            "Who won the World Cup in 2022?", 
+            "Summarize climate change impact on oceans",
+            "Calculate 25 * 4",
+            "What's the weather in Denver?"
+        ]
+    }
 
-Use the test_tool now with the message: {message}"""
-        }
-    ]
+    # Load HEDIS examples dynamically from MCP server
+    if prompt_type == "HEDIS Expert":
+        try:
+            async def fetch_hedis_examples():
+                async with sse_client(url=server_url) as sse_connection:
+                    async with ClientSession(*sse_connection) as session:
+                        await session.initialize()
+                        content = await session.read_resource("genaiplatform://hedis/frequent_questions/Initialization")
+                        if hasattr(content, "contents"):
+                            for item in content.contents:
+                                if hasattr(item, "text"):
+                                    examples["HEDIS Expert"].extend(json.loads(item.text))
+   
+            asyncio.run(fetch_hedis_examples())
+        except Exception as e:
+            examples["HEDIS Expert"] = [
+                "What are the codes in BCS Value Set?",
+                "Explain the BCS (Breast Cancer Screening) measure",
+                "What is the age criteria for CBP measure?",
+                f"⚠️ Failed to load dynamic examples: {e}"
+            ]
 
-# Simplified Diagnostic Prompt  
-@mcp.prompt(
-        name="diagnostic-prompt",
-        description="Diagnostic Tool Caller"
-)
-async def diagnostic_prompt(test_type: str = "basic") -> List[Message]:
-    """
-    Simplified diagnostic prompt for ChatSnowflakeCortex.
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Enhanced example queries with better organization
+    with st.sidebar.expander(f"💡 Example Queries - {prompt_type}", expanded=True):
+        if examples[prompt_type]:
+            for i, example in enumerate(examples[prompt_type]):
+                display_text = example if len(example) <= 60 else example[:57] + "..."
+                if st.button(display_text, key=f"{prompt_type}_{i}_{hash(example)}", use_container_width=True):
+                    st.session_state.query_input = example
+        else:
+            st.info("No examples available for this prompt type")
+
+    # Add helpful tips based on selected mode
+    if prompt_type == "Weather":
+        with st.sidebar.expander("🌍 Weather Tips", expanded=False):
+            st.info("""
+            **Weather queries using Open-Meteo API:**
+            • Richmond, VA: 37.5407, -77.4360
+            • Atlanta, GA: 33.7490, -84.3880  
+            • New York, NY: 40.7128, -74.0060
+            • Denver, CO: 39.7392, -104.9903
+            • Miami, FL: 25.7617, -80.1918
+            
+            **Features:**
+            • Current conditions and 3-day forecast
+            • Temperature, wind, and precipitation data
+            • No API key required (Open-Meteo)
+            """)
     
-    Args:
-        test_type: Type of diagnostic test
+    elif prompt_type == "Wikipedia Search":
+        with st.sidebar.expander("📖 Wikipedia Tips", expanded=False):
+            st.info("""
+            **Enhanced Wikipedia search:**
+            • Gets current, up-to-date articles
+            • Shows last modification dates
+            • Comprehensive content extraction
+            • Multiple sections analyzed
+            
+            **Best for:**
+            • Encyclopedic information
+            • Historical facts and current events
+            • Scientific concepts and definitions
+            • Biographical information
+            """)
     
-    Returns:
-        Simple formatted prompt messages
-    """
-    return [
-        {
-            "role": "user",
-            "content": f"""Please run a diagnostic test of type: "{test_type}"
+    elif prompt_type == "Web Search":
+        with st.sidebar.expander("🦆 Web Search Tips", expanded=False):
+            st.info("""
+            **Enhanced web search (reads actual content):**
+            • Searches DuckDuckGo for current results
+            • Actually reads and analyzes webpage content
+            • Extracts meaningful information from multiple sources
+            • Provides content summaries, not just links
+            
+            **Best for:**
+            • Latest news and developments
+            • Current research and findings
+            • Real-time information and trends
+            • Recent updates and announcements
+            """)
 
-IMPORTANT: You MUST use the diagnostic tool to run the test.
+    # Chat input handling with enhanced processing
+    if query := st.chat_input("Type your query here...") or "query_input" in st.session_state:
 
-Use the diagnostic tool now with test_type: {test_type}"""
-        }
-    ]
+        if "query_input" in st.session_state:
+            query = st.session_state.query_input
+            del st.session_state.query_input
 
-if __name__ == "__main__":
-    mcp.run(transport="sse")
+        with st.chat_message("user"):
+            st.markdown(query, unsafe_allow_html=True)
+
+        st.session_state.messages.append({"role": "user", "content": query})
+
+        async def process_query(query_text):
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                message_placeholder.text("🤔 Processing your request...")
+                
+                try:
+                    # Initialize MCP client
+                    message_placeholder.text("🔌 Connecting to MCP server...")
+                    client = MultiServerMCPClient(
+                        {"DataFlyWheelServer": {"url": server_url, "transport": "sse"}}
+                    )
+
+                    model = get_model()
+                    
+                    # Get tools and create agent
+                    message_placeholder.text("🛠️ Loading tools from server...")
+                    tools = await client.get_tools()
+                    message_placeholder.text("🤖 Creating AI agent...")
+                    agent = create_react_agent(model=model, tools=tools)
+                    
+                    # Handle prompt selection with better formatting
+                    prompt_name = prompt_map[prompt_type]
+                    
+                    if prompt_name is None:
+                        # No context mode - use query directly
+                        message_placeholder.text("💭 Processing without specific context...")
+                        messages = [{"role": "user", "content": query_text}]
+                    else:  
+                        # Get prompt from server
+                        message_placeholder.text(f"📝 Loading {prompt_type} expert prompt...")
+                        try:
+                            prompt_from_server = await client.get_prompt(
+                                server_name="DataFlyWheelServer",
+                                prompt_name=prompt_name,
+                                arguments={"query": query_text}
+                            )
+                            
+                            # Handle different prompt response formats
+                            if prompt_from_server and len(prompt_from_server) > 0:
+                                if hasattr(prompt_from_server[0], 'content'):
+                                    content = prompt_from_server[0].content
+                                    # Format the prompt content if needed
+                                    if "{query}" in content:
+                                        content = content.format(query=query_text)
+                                    messages = [{"role": "user", "content": content}]
+                                else:
+                                    # Handle case where prompt_from_server[0] is not a message object
+                                    messages = [{"role": "user", "content": str(prompt_from_server[0])}]
+                            else:
+                                # Fallback if prompt not found
+                                messages = [{"role": "user", "content": query_text}]
+                        except Exception as prompt_error:
+                            st.warning(f"⚠️ Could not load expert prompt: {prompt_error}. Using basic mode.")
+                            messages = [{"role": "user", "content": query_text}]
+
+                    message_placeholder.text("🧠 Generating response...")
+                    
+                    # Invoke agent with proper message format
+                    response = await agent.ainvoke({"messages": messages})
+                    
+                    # Enhanced result extraction with better error handling
+                    result = None
+                    
+                    if isinstance(response, dict):
+                        # Try multiple strategies to extract the response
+                        
+                        # Strategy 1: Check for 'messages' key
+                        if 'messages' in response:
+                            messages_list = response['messages']
+                            if isinstance(messages_list, list) and len(messages_list) > 0:
+                                last_message = messages_list[-1]
+                                if hasattr(last_message, 'content'):
+                                    result = last_message.content
+                                elif hasattr(last_message, 'text'):
+                                    result = last_message.text
+                                else:
+                                    result = str(last_message)
+                        
+                        # Strategy 2: Try the original method as fallback
+                        if result is None:
+                            try:
+                                response_values = list(response.values())
+                                if response_values and len(response_values) > 0:
+                                    if isinstance(response_values[0], list) and len(response_values[0]) > 1:
+                                        if hasattr(response_values[0][1], 'content'):
+                                            result = response_values[0][1].content
+                                        else:
+                                            result = str(response_values[0][1])
+                                    else:
+                                        result = str(response_values[0])
+                            except:
+                                pass
+                        
+                        # Strategy 3: Look for any text content in the response
+                        if result is None:
+                            for key, value in response.items():
+                                if isinstance(value, str) and len(value) > 10:
+                                    result = value
+                                    break
+                                elif isinstance(value, list):
+                                    for item in value:
+                                        if hasattr(item, 'content') and len(item.content) > 10:
+                                            result = item.content
+                                            break
+                                        elif isinstance(item, str) and len(item) > 10:
+                                            result = item
+                                            break
+                                    if result:
+                                        break
+                    
+                    # If we still don't have a result, use the entire response
+                    if result is None:
+                        result = str(response)
+                    
+                    # Clean up the result if needed
+                    if result is None or result.strip() == "":
+                        result = "⚠️ Received empty response from the server. Please try again."
+                    
+                    # Format the result nicely
+                    if isinstance(result, str):
+                        # Clean up any formatting issues
+                        result = result.strip()
+                        if result.startswith('"') and result.endswith('"'):
+                            result = result[1:-1]
+                    
+                    # Display result
+                    message_placeholder.markdown(result)
+                    st.session_state.messages.append({"role": "assistant", "content": result})
+                    
+                except Exception as e:
+                    error_message = f"❌ **Error**: {str(e)}\n\n**Troubleshooting:**\n"
+                    error_message += f"- Check if MCP server is running at: {server_url}\n"
+                    error_message += f"- Verify server URL is correct\n"
+                    error_message += f"- Ensure all required tools are available\n"
+                    error_message += f"- Server Status: {status_indicator}"
+                    
+                    message_placeholder.markdown(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+
+        if query:
+            asyncio.run(process_query(query))
+
+    # Enhanced sidebar controls
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### 🔧 Controls")
+        
+        if st.button("🗑️ Clear Chat", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+
+        if st.button("🔍 Test MCP Connection", use_container_width=True):
+            try:
+                async def test_connection():
+                    async with sse_client(url=server_url) as sse_connection:
+                        async with ClientSession(*sse_connection) as session:
+                            await session.initialize()
+                            tools = await session.list_tools()
+                            tool_count = len(tools.tools) if hasattr(tools, 'tools') else 0
+                            return f"✅ Connection successful! Found {tool_count} tools available."
+
+                result = asyncio.run(test_connection())
+                st.success(result)
+            except Exception as e:
+                st.error(f"❌ Connection failed: {e}")
+
+        # Status info
+        st.caption(f"🌐 **Server:** {server_url}")
+        st.caption(f"🤖 **Mode:** {prompt_type}")
+        st.caption(f"📊 **Status:** {status_indicator}")
+
+# Footer with feature info
+st.markdown("---")
+st.caption("🚀 **Enhanced MCP Demo** - Current Data with Open-Meteo Weather, Wikipedia & Content-Reading Web Search")
+st.caption("📋 **Available Modes:** Calculator | HEDIS Expert | Weather (Open-Meteo) | Wikipedia Search | Web Search (Content Analysis) | No Context")
