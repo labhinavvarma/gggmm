@@ -1,506 +1,309 @@
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
 import json
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Type,
-    Union,
-)
 import asyncio
 import httpx
-import re
+from datetime import datetime
+import time
 
-from langchain_core.callbacks.manager import CallbackManagerForLLMRun
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    ChatMessage,
-    HumanMessage,
-    SystemMessage,
-)
-from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.tools import BaseTool
-from langchain_core.utils import (
-    convert_to_secret_str,
-    get_from_dict_or_env,
-    get_pydantic_field_names,
-)
-from langchain_core.utils.function_calling import convert_to_openai_tool
-from langchain_core.utils.utils import _build_model_kwargs
-from pydantic import Field, SecretStr, model_validator
+# Import your MCP server tools (you'll need to adjust this import path)
+try:
+    from mcpserver import (
+        calculate, test_tool, diagnostic, 
+        wikipedia_search, duckduckgo_search, get_weather,
+        dfw_text2sql, dfw_search
+    )
+    MCP_TOOLS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import MCP tools: {e}")
+    MCP_TOOLS_AVAILABLE = False
 
-SUPPORTED_ROLES: List[str] = [
-    "system",
-    "user", 
-    "assistant",
-]
+route = APIRouter()
 
-class ChatSnowflakeCortexError(Exception):
-    """Error with Snowpark client."""
+class ToolCallRequest(BaseModel):
+    tool_name: str
+    arguments: Dict[str, Any]
 
-def _convert_message_to_dict(message: BaseMessage) -> dict:
-    """Convert a LangChain message to a dictionary.
+class ToolCallResponse(BaseModel):
+    success: bool
+    result: Optional[Any] = None
+    error: Optional[str] = None
 
-    Args:
-        message: The LangChain message.
+# Mock context class for tools that need it
+class MockContext:
+    async def info(self, message: str):
+        print(f"ℹ️ INFO: {message}")
+    
+    async def warning(self, message: str):
+        print(f"⚠️ WARNING: {message}")
+    
+    async def error(self, message: str):
+        print(f"❌ ERROR: {message}")
 
-    Returns:
-        The dictionary.
-    """
-    message_dict: Dict[str, Any] = {
-        "content": message.content,
+@route.post("/tool_call", response_model=ToolCallResponse)
+async def handle_tool_call(request: ToolCallRequest):
+    """Handle MCP tool calls via HTTP API"""
+    try:
+        tool_name = request.tool_name
+        arguments = request.arguments
+        
+        print(f"🔧 Received tool call: {tool_name} with args: {arguments}")
+        
+        if not MCP_TOOLS_AVAILABLE:
+            return ToolCallResponse(
+                success=False,
+                error="MCP tools not available - import failed"
+            )
+        
+        # Create mock context for tools that need it
+        ctx = MockContext()
+        
+        # Route to appropriate tool
+        result = None
+        
+        if tool_name == "calculator":
+            expression = arguments.get("expression", "")
+            result = calculate(expression)
+            
+        elif tool_name == "test_tool":
+            message = arguments.get("message", "test")
+            result = await test_tool(message)
+            
+        elif tool_name == "diagnostic":
+            test_type = arguments.get("test_type", "basic")
+            result = await diagnostic(test_type)
+            
+        elif tool_name == "wikipedia_search":
+            query = arguments.get("query", "")
+            max_results = arguments.get("max_results", 3)
+            result = await wikipedia_search(query, ctx, max_results)
+            
+        elif tool_name == "duckduckgo_search":
+            query = arguments.get("query", "")
+            max_results = arguments.get("max_results", 3)
+            result = await duckduckgo_search(query, ctx, max_results)
+            
+        elif tool_name == "get_weather":
+            place = arguments.get("place", "")
+            result = await get_weather(place, ctx)
+            
+        elif tool_name == "DFWAnalyst":
+            prompt = arguments.get("prompt", "")
+            result = await dfw_text2sql(prompt, ctx)
+            
+        elif tool_name == "DFWSearch":
+            query = arguments.get("query", "")
+            result = await dfw_search(ctx, query)
+            
+        else:
+            return ToolCallResponse(
+                success=False,
+                error=f"Unknown tool: {tool_name}"
+            )
+        
+        print(f"✅ Tool {tool_name} executed successfully")
+        
+        return ToolCallResponse(
+            success=True,
+            result=result
+        )
+        
+    except Exception as e:
+        print(f"❌ Tool call error: {e}")
+        return ToolCallResponse(
+            success=False,
+            error=str(e)
+        )
+
+@route.get("/tools")
+async def list_available_tools():
+    """List all available MCP tools"""
+    if not MCP_TOOLS_AVAILABLE:
+        return {"error": "MCP tools not available"}
+    
+    tools = {
+        "calculator": {
+            "description": "Evaluates basic arithmetic expressions",
+            "args": {"expression": "string"}
+        },
+        "test_tool": {
+            "description": "Simple test tool to verify tool calling works",
+            "args": {"message": "string"}
+        },
+        "diagnostic": {
+            "description": "Diagnostic tool to test MCP functionality",
+            "args": {"test_type": "string"}
+        },
+        "wikipedia_search": {
+            "description": "Search Wikipedia for current information",
+            "args": {"query": "string", "max_results": "integer (optional)"}
+        },
+        "duckduckgo_search": {
+            "description": "Search the web using DuckDuckGo for latest information",
+            "args": {"query": "string", "max_results": "integer (optional)"}
+        },
+        "get_weather": {
+            "description": "Get current weather information for a location",
+            "args": {"place": "string"}
+        },
+        "DFWAnalyst": {
+            "description": "Converts text to valid SQL for HEDIS value sets and code sets",
+            "args": {"prompt": "string"}
+        },
+        "DFWSearch": {
+            "description": "Searches HEDIS measure specification documents",
+            "args": {"query": "string"}
+        }
+    }
+    
+    return {
+        "tools": tools,
+        "count": len(tools),
+        "available": MCP_TOOLS_AVAILABLE
     }
 
-    # Populate role and additional message data
-    if isinstance(message, ChatMessage) and message.role in SUPPORTED_ROLES:
-        message_dict["role"] = message.role
-    elif isinstance(message, SystemMessage):
-        message_dict["role"] = "system"
-    elif isinstance(message, HumanMessage):
-        message_dict["role"] = "user"
-    elif isinstance(message, AIMessage):
-        message_dict["role"] = "assistant"
-    else:
-        raise TypeError(f"Got unknown type {message}")
-    return message_dict
+@route.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "mcp_tools_available": MCP_TOOLS_AVAILABLE
+    }
 
-def _truncate_at_stop_tokens(
-    text: str,
-    stop: Optional[List[str]],
-) -> str:
-    """Truncates text at the earliest stop token found."""
-    if stop is None:
-        return text
-
-    for stop_token in stop:
-        stop_token_idx = text.find(stop_token)
-        if stop_token_idx != -1:
-            text = text[:stop_token_idx]
-    return text
-
-class ChatSnowflakeCortex(BaseChatModel):
-    """Enhanced Snowflake Cortex Chat model with MCP tool integration"""
-    
-    # MCP server configuration
-    mcp_server_url: str = Field(default="http://localhost:8081/sse")
-    """URL of the MCP server"""
-    
-    test_tools: Dict[str, Union[Dict[str, Any], Type, Callable, BaseTool]] = Field(
-        default_factory=dict
-    )
-
-    session: Any = None
-    """Snowpark session object."""
-
-    model: str = "mistral-large"
-    """Snowflake cortex hosted LLM model name, defaulted to `mistral-large`."""
-
-    cortex_function: str = "complete"
-    """Cortex function to use, defaulted to `complete`."""
-
-    temperature: float = 0
-    """Model temperature. Value should be >= 0 and <= 1.0"""
-
-    max_tokens: Optional[int] = None
-    """The maximum number of output tokens in the response."""
-
-    top_p: Optional[float] = 0
-    """top_p adjusts the number of choices for each predicted tokens based on
-        cumulative probabilities. Value should be ranging between 0.0 and 1.0.
-    """
-
-    snowflake_username: Optional[str] = Field(default=None, alias="username")
-    """Automatically inferred from env var `SNOWFLAKE_USERNAME` if not provided."""
-    snowflake_password: Optional[SecretStr] = Field(default=None, alias="password")
-    """Automatically inferred from env var `SNOWFLAKE_PASSWORD` if not provided."""
-    snowflake_account: Optional[str] = Field(default=None, alias="account")
-    """Automatically inferred from env var `SNOWFLAKE_ACCOUNT` if not provided."""
-    snowflake_database: Optional[str] = Field(default=None, alias="database")
-    """Automatically inferred from env var `SNOWFLAKE_DATABASE` if not provided."""
-    snowflake_schema: Optional[str] = Field(default=None, alias="schema")
-    """Automatically inferred from env var `SNOWFLAKE_SCHEMA` if not provided."""
-    snowflake_warehouse: Optional[str] = Field(default=None, alias="warehouse")
-    """Automatically inferred from env var `SNOWFLAKE_WAREHOUSE` if not provided."""
-    snowflake_role: Optional[str] = Field(default=None, alias="role")
-    """Automatically inferred from env var `SNOWFLAKE_ROLE` if not provided."""
-
-    def bind_tools(
-        self,
-        tools: Sequence[Union[Dict[str, Any], Type, Callable, BaseTool]],
-        *,
-        tool_choice: Optional[
-            Union[dict, str, Literal["auto", "any", "none"], bool]
-        ] = "auto",
-        **kwargs: Any,
-    ) -> "ChatSnowflakeCortex":
-        """Bind tool-like objects to this chat model, ensuring they conform to
-        expected formats."""
-
-        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
-        formatted_tools_dict = {
-            tool["name"]: tool for tool in formatted_tools if "name" in tool
+@route.post("/test_connection")
+async def test_mcp_connection():
+    """Test the MCP connection by calling a simple tool"""
+    try:
+        test_request = ToolCallRequest(
+            tool_name="test_tool",
+            arguments={"message": "connection test"}
+        )
+        
+        result = await handle_tool_call(test_request)
+        
+        return {
+            "connection_status": "success" if result.success else "failed",
+            "test_result": result.result if result.success else result.error,
+            "timestamp": datetime.now().isoformat()
         }
-        self.test_tools.update(formatted_tools_dict)
+        
+    except Exception as e:
+        return {
+            "connection_status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
-        print("Tools bound to chat model:")
-        print(f"Number of tools: {len(formatted_tools_dict)}")
-        for tool_name in formatted_tools_dict.keys():
-            print(f"- {tool_name}")
-        print("########################################")
-        return self
-
-    @model_validator(mode="before")
-    @classmethod
-    def build_extra(cls, values: Dict[str, Any]) -> Any:
-        """Build extra kwargs from additional params that were passed in."""
-        all_required_field_names = get_pydantic_field_names(cls)
-        values = _build_model_kwargs(values, all_required_field_names)
-        return values
-
-    def __del__(self) -> None:
-        if getattr(self, "session", None) is not None:
-            self.session.close()
-
-    @property
-    def _llm_type(self) -> str:
-        """Get the type of language model used by this chat model."""
-        return f"snowflake-cortex-{self.model}"
-
-    async def _call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Call MCP tool via HTTP API"""
-        try:
-            print(f"🔧 Calling MCP tool: {tool_name} with args: {arguments}")
+# Additional endpoint for direct prompt testing
+@route.post("/test_prompt")
+async def test_prompt_with_tool():
+    """Test a prompt that should trigger a tool call"""
+    try:
+        # Test different prompt patterns
+        test_prompts = [
+            "Use the calculator tool to calculate: 25 * 4 + 10",
+            "Use the test_tool with message: prompt test",
+            "Use the diagnostic tool with test_type: basic",
+        ]
+        
+        results = []
+        
+        for prompt in test_prompts:
+            # Simple tool detection logic
+            tool_call = None
             
-            # Create the MCP tool call request
-            tool_call_data = {
-                "tool_name": tool_name,
-                "arguments": arguments
-            }
-            
-            # Make HTTP request to MCP server
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # Try calling the tool endpoint
-                try:
-                    response = await client.post(
-                        f"{self.mcp_server_url.rstrip('/sse')}/tool_call",
-                        json=tool_call_data,
-                        headers={"Content-Type": "application/json"}
+            if "calculator" in prompt.lower():
+                # Extract expression
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    expression = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="calculator",
+                        arguments={"expression": expression}
                     )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        return str(result.get('result', 'No result returned'))
-                    else:
-                        print(f"❌ MCP tool call failed with status {response.status_code}: {response.text}")
-                        return f"Tool call failed: HTTP {response.status_code}"
-                        
-                except Exception as http_error:
-                    print(f"❌ HTTP request to MCP server failed: {http_error}")
-                    # Fallback: try to call tool directly if it's a simple one
-                    return await self._fallback_tool_call(tool_name, arguments)
-                    
-        except Exception as e:
-            print(f"❌ MCP tool call error: {e}")
-            return f"Error calling tool {tool_name}: {str(e)}"
-
-    async def _fallback_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Fallback method to call tools directly"""
-        try:
-            print(f"🔄 Using fallback for tool: {tool_name}")
+            elif "test_tool" in prompt.lower():
+                # Extract message
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    message = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="test_tool", 
+                        arguments={"message": message}
+                    )
+            elif "diagnostic" in prompt.lower():
+                # Extract test_type
+                parts = prompt.split(":")
+                if len(parts) > 1:
+                    test_type = parts[1].strip()
+                    tool_call = ToolCallRequest(
+                        tool_name="diagnostic",
+                        arguments={"test_type": test_type}
+                    )
             
-            # Handle specific tools that we can simulate
-            if tool_name == "calculator":
-                expression = arguments.get("expression", "")
-                if expression:
-                    try:
-                        # Safe evaluation for simple math
-                        allowed_chars = "0123456789+-*/(). "
-                        if all(char in allowed_chars for char in expression):
-                            result = eval(expression)
-                            return f"Result: {result}"
-                        else:
-                            return "Invalid characters in expression."
-                    except Exception as e:
-                        return f"Error: {str(e)}"
-                        
-            elif tool_name == "test_tool":
-                message = arguments.get("message", "test")
-                from datetime import datetime
-                current_time = datetime.now().isoformat()
-                return f"✅ SUCCESS: Test tool called with message '{message}' at {current_time}"
-                
-            elif tool_name == "diagnostic":
-                test_type = arguments.get("test_type", "basic")
-                from datetime import datetime
-                current_time = datetime.now().isoformat()
-                
-                result = f"🔧 Diagnostic Test: {test_type}\n"
-                result += f"⏰ Timestamp: {current_time}\n"
-                result += f"🖥️ MCP Server: DataFlyWheel App (Fallback Mode)\n"
-                result += f"✅ Status: WORKING\n"
-                
-                if test_type == "basic":
-                    result += "📝 Message: MCP server is responding correctly\n"
-                    result += "🛠️ Tool Execution: SUCCESS (Fallback)\n"
-                    
-                return result
-                
+            if tool_call:
+                result = await handle_tool_call(tool_call)
+                results.append({
+                    "prompt": prompt,
+                    "tool_detected": tool_call.tool_name,
+                    "success": result.success,
+                    "result": result.result if result.success else result.error
+                })
             else:
-                return f"Tool {tool_name} not available in fallback mode. Please check MCP server connection."
-                
-        except Exception as e:
-            return f"Fallback tool call failed: {str(e)}"
-
-    def _detect_tool_calls(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
-        """Detect if messages contain tool call requests"""
-        tool_calls = []
+                results.append({
+                    "prompt": prompt,
+                    "tool_detected": None,
+                    "success": False,
+                    "result": "No tool detected in prompt"
+                })
         
-        for message in messages:
-            content = str(message.content).lower()
-            
-            # Look for tool call patterns
-            tool_patterns = {
-                "calculator": r"(?:use|call).*calculator.*(?:with|tool).*(?:expression|calculate)[:=]\s*([^\\n]+)",
-                "test_tool": r"(?:use|call).*test_tool.*(?:with|message)[:=]\s*([^\\n]+)",
-                "diagnostic": r"(?:use|call).*diagnostic.*(?:with|test_type)[:=]\s*([^\\n]+)",
-                "wikipedia_search": r"(?:use|call).*wikipedia_search.*(?:with|about|for)[:=]\s*([^\\n]+)",
-                "duckduckgo_search": r"(?:use|call).*duckduckgo_search.*(?:with|about|for)[:=]\s*([^\\n]+)",
-                "get_weather": r"(?:use|call).*get_weather.*(?:with|for)[:=]\s*([^\\n]+)",
-                "DFWAnalyst": r"(?:use|call).*DFWAnalyst.*(?:with|prompt)[:=]\s*([^\\n]+)",
-                "DFWSearch": r"(?:use|call).*DFWSearch.*(?:with|query)[:=]\s*([^\\n]+)"
-            }
-            
-            for tool_name, pattern in tool_patterns.items():
-                match = re.search(pattern, content, re.IGNORECASE)
-                if match:
-                    argument_value = match.group(1).strip().strip('"\'')
-                    
-                    # Determine the argument name based on tool
-                    arg_name = "expression" if tool_name == "calculator" else \
-                              "message" if tool_name == "test_tool" else \
-                              "test_type" if tool_name == "diagnostic" else \
-                              "query" if tool_name in ["wikipedia_search", "duckduckgo_search", "DFWSearch"] else \
-                              "place" if tool_name == "get_weather" else \
-                              "prompt" if tool_name == "DFWAnalyst" else "query"
-                    
-                    tool_calls.append({
-                        "tool_name": tool_name,
-                        "arguments": {arg_name: argument_value}
-                    })
-                    break
-            
-            # Also check for explicit tool mentions
-            explicit_tools = ["calculator", "test_tool", "diagnostic", "wikipedia_search", 
-                            "duckduckgo_search", "get_weather", "DFWAnalyst", "DFWSearch"]
-            
-            for tool in explicit_tools:
-                if tool in content and not any(tc["tool_name"] == tool for tc in tool_calls):
-                    # Extract argument from context
-                    lines = str(message.content).split('\n')
-                    for line in lines:
-                        if tool in line.lower():
-                            # Try to extract argument after colon
-                            if ':' in line:
-                                arg_value = line.split(':', 1)[1].strip()
-                                if arg_value:
-                                    arg_name = "expression" if tool == "calculator" else \
-                                              "message" if tool == "test_tool" else \
-                                              "test_type" if tool == "diagnostic" else \
-                                              "query" if tool in ["wikipedia_search", "duckduckgo_search", "DFWSearch"] else \
-                                              "place" if tool == "get_weather" else \
-                                              "prompt" if tool == "DFWAnalyst" else "query"
-                                    
-                                    tool_calls.append({
-                                        "tool_name": tool,
-                                        "arguments": {arg_name: arg_value}
-                                    })
-                                    break
-        
-        return tool_calls
-
-    def _generate(
-        self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        print(f"🚀 Starting generation with {len(messages)} messages")
-        
-        # Detect tool calls in messages
-        tool_calls = self._detect_tool_calls(messages)
-        
-        # Execute tool calls if detected
-        tool_results = []
-        if tool_calls:
-            print(f"🔧 Detected {len(tool_calls)} tool calls")
-            for tool_call in tool_calls:
-                try:
-                    # Use asyncio to call async tool function
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Create a new event loop in a thread if one is already running
-                        import concurrent.futures
-                        import threading
-                        
-                        def run_in_thread():
-                            new_loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(new_loop)
-                            try:
-                                return new_loop.run_until_complete(
-                                    self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
-                                )
-                            finally:
-                                new_loop.close()
-                        
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(run_in_thread)
-                            result = future.result(timeout=30)
-                    else:
-                        result = loop.run_until_complete(
-                            self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
-                        )
-                    
-                    tool_results.append({
-                        "tool_name": tool_call["tool_name"],
-                        "result": result
-                    })
-                    print(f"✅ Tool {tool_call['tool_name']} executed successfully")
-                    
-                except Exception as e:
-                    print(f"❌ Tool {tool_call['tool_name']} failed: {e}")
-                    tool_results.append({
-                        "tool_name": tool_call["tool_name"],
-                        "result": f"Tool execution failed: {str(e)}"
-                    })
-
-        # Prepare messages for Snowflake
-        message_dicts = [_convert_message_to_dict(m) for m in messages]
-        
-        # Add tool results to the conversation
-        if tool_results:
-            tool_response = "Tool execution results:\n\n"
-            for tool_result in tool_results:
-                tool_response += f"**{tool_result['tool_name']}**: {tool_result['result']}\n\n"
-            
-            message_dicts.append({
-                "role": "assistant",
-                "content": tool_response
-            })
-
-        # Prepare the request for Snowflake Cortex
-        message_json = json.dumps(message_dicts)
-        message_json = message_json.replace("'", "''")  # Escape single quotes for SQL
-
-        options = {
-            "temperature": self.temperature,
-            "top_p": self.top_p if self.top_p is not None else 1.0,
-            "max_tokens": self.max_tokens if self.max_tokens is not None else 2048,
+        return {
+            "test_results": results,
+            "timestamp": datetime.now().isoformat()
         }
-        options_json = json.dumps(options)
-
-        sql_stmt = f"""
-            select snowflake.cortex.{self.cortex_function}(
-                '{self.model}',
-                parse_json(${message_json}$),
-                parse_json('{options_json}')
-            ) as llm_stream_response;
-        """
-
-        try:
-            # Use the Snowflake Cortex Complete function
-            if self.session:
-                self.session.sql(
-                    f"USE WAREHOUSE {self.session.get_current_warehouse()};"
-                ).collect()
-                l_rows = self.session.sql(sql_stmt).collect()
-                
-                response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
-                ai_message_content = response["choices"][0]["messages"]
-                
-                content = _truncate_at_stop_tokens(ai_message_content, stop)
-                
-                # If we had tool results, include them in the response
-                if tool_results:
-                    final_content = ""
-                    for tool_result in tool_results:
-                        final_content += f"🔧 **{tool_result['tool_name']}**:\n{tool_result['result']}\n\n"
-                    final_content += f"\n**AI Response:**\n{content}"
-                    content = final_content
-                
-                message = AIMessage(
-                    content=content,
-                    response_metadata=response.get("usage", {}),
-                )
-                generation = ChatGeneration(message=message)
-                return ChatResult(generations=[generation])
-            else:
-                # If no session, return tool results only
-                if tool_results:
-                    content = ""
-                    for tool_result in tool_results:
-                        content += f"🔧 **{tool_result['tool_name']}**:\n{tool_result['result']}\n\n"
-                    
-                    message = AIMessage(content=content)
-                    generation = ChatGeneration(message=message)
-                    return ChatResult(generations=[generation])
-                else:
-                    raise ChatSnowflakeCortexError("No Snowflake session available and no tool calls detected")
-                
-        except Exception as e:
-            print(f"❌ Snowflake Cortex error: {e}")
-            
-            # Fallback: return tool results if available
-            if tool_results:
-                content = "⚠️ Snowflake Cortex unavailable, showing tool results only:\n\n"
-                for tool_result in tool_results:
-                    content += f"🔧 **{tool_result['tool_name']}**:\n{tool_result['result']}\n\n"
-                
-                message = AIMessage(content=content)
-                generation = ChatGeneration(message=message)
-                return ChatResult(generations=[generation])
-            else:
-                raise ChatSnowflakeCortexError(
-                    f"Error while making request to Snowflake Cortex: {e}"
-                )
-
-    def _stream_content(
-        self, content: str, stop: Optional[List[str]]
-    ) -> Iterator[ChatGenerationChunk]:
-        """Stream the output of the model in chunks to return ChatGenerationChunk."""
-        chunk_size = 50  # Define a reasonable chunk size for streaming
-        truncated_content = _truncate_at_stop_tokens(content, stop)
-
-        for i in range(0, len(truncated_content), chunk_size):
-            chunk_content = truncated_content[i : i + chunk_size]
-            yield ChatGenerationChunk(message=AIMessageChunk(content=chunk_content))
-
-    def _stream(
-        self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> Iterator[ChatGenerationChunk]:
-        """Stream the output of the model in chunks to return ChatGenerationChunk."""
         
-        # For streaming, we'll use the regular generate method and then stream the result
-        try:
-            result = self._generate(messages, stop, run_manager, **kwargs)
-            content = result.generations[0].message.content
-            
-            # Stream the content
-            for chunk in self._stream_content(content, stop):
-                yield chunk
-                
-        except Exception as e:
-            # Yield error as chunk
-            error_content = f"Streaming error: {str(e)}"
-            yield ChatGenerationChunk(message=AIMessageChunk(content=error_content))
+    except Exception as e:
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+# Weather cache endpoint for monitoring
+@route.get("/weather_cache")
+async def get_weather_cache_status():
+    """Get weather cache status"""
+    try:
+        # Import weather cache from mcpserver
+        from mcpserver import weather_cache, is_weather_cache_valid
+        
+        cache_status = {}
+        for location, cache_entry in weather_cache.items():
+            cache_status[location] = {
+                "cached_at": datetime.fromtimestamp(cache_entry['timestamp']).isoformat(),
+                "is_valid": is_weather_cache_valid(cache_entry),
+                "age_seconds": time.time() - cache_entry['timestamp']
+            }
+        
+        return {
+            "cache_entries": len(cache_status),
+            "cache_status": cache_status,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except ImportError:
+        return {
+            "error": "Weather cache not available",
+            "timestamp": datetime.now().isoformat()
+        }
+
+if __name__ == "__main__":
+    # For testing the router directly
+    import uvicorn
+    from fastapi import FastAPI
+    
+    app = FastAPI(title="MCP Tool Router Test")
+    app.include_router(route)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8022)
