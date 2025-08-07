@@ -8,17 +8,56 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mcp.server.sse import SseServerTransport
 from starlette.routing import Mount
+from contextlib import asynccontextmanager
 import json
 from datetime import datetime
+import asyncio
 
 # Import your MCP server and router
 from mcpserver import mcp
 from router import route
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    
+    # === STARTUP ===
+    print("🚀 DataFlyWheel MCP Server starting up...")
+    print("✅ Server initialized with enhanced tools and caching")
+    
+    # Test basic tool availability
+    try:
+        from mcpserver import calculate
+        test_calc = calculate("2+2")
+        print(f"✅ Calculator tool test: {test_calc}")
+    except Exception as e:
+        print(f"⚠️ Calculator tool test failed: {e}")
+    
+    print("🌐 Server ready for connections")
+    
+    # Yield control to the application
+    yield
+    
+    # === SHUTDOWN ===
+    print("🛑 DataFlyWheel MCP Server shutting down...")
+    
+    # Clear weather cache
+    try:
+        from mcpserver import weather_cache
+        cache_size = len(weather_cache)
+        weather_cache.clear()
+        print(f"🧹 Cleared weather cache ({cache_size} entries)")
+    except Exception as e:
+        print(f"⚠️ Failed to clear weather cache: {e}")
+    
+    print("✅ Server shutdown complete")
+
+# Create FastAPI app with lifespan handler
 app = FastAPI(
     title="DataFlyWheel MCP Server",
     description="Enhanced MCP server with tool integration and caching",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -120,8 +159,8 @@ async def health_check():
         try:
             from mcpserver import weather_cache
             cache_status = f"{len(weather_cache)} entries cached"
-        except:
-            cache_status = "cache unavailable"
+        except Exception as e:
+            cache_status = f"cache unavailable: {e}"
         
         return {
             "status": "healthy",
@@ -220,38 +259,20 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-# Startup and shutdown events
-@app.on_event("startup")
-async def startup_event():
-    """Startup event handler"""
-    print("🚀 DataFlyWheel MCP Server starting up...")
-    print("✅ Server initialized with enhanced tools and caching")
+# Port detection and management
+def find_available_port(start_port=8081, max_attempts=10):
+    """Find an available port starting from start_port"""
+    import socket
     
-    # Test basic tool availability
-    try:
-        from mcpserver import calculate
-        test_calc = calculate("2+2")
-        print(f"✅ Calculator tool test: {test_calc}")
-    except Exception as e:
-        print(f"⚠️ Calculator tool test failed: {e}")
+    for port in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(('0.0.0.0', port))
+                return port
+            except OSError:
+                continue
     
-    print("🌐 Server ready for connections")
-
-@app.on_event("shutdown") 
-async def shutdown_event():
-    """Shutdown event handler"""
-    print("🛑 DataFlyWheel MCP Server shutting down...")
-    
-    # Clear weather cache
-    try:
-        from mcpserver import weather_cache
-        cache_size = len(weather_cache)
-        weather_cache.clear()
-        print(f"🧹 Cleared weather cache ({cache_size} entries)")
-    except:
-        pass
-    
-    print("✅ Server shutdown complete")
+    raise RuntimeError(f"No available ports found in range {start_port}-{start_port + max_attempts}")
 
 if __name__ == "__main__":
     print("Starting DataFlyWheel MCP Server...")
@@ -262,10 +283,46 @@ if __name__ == "__main__":
     print("- All prompts now properly invoke tools")
     print("- Tool call debugging and fallback support")
     
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=8081,
-        log_level="info",
-        access_log=True
-    )
+    # Try to find an available port
+    try:
+        port = find_available_port(8081)
+        if port != 8081:
+            print(f"⚠️ Port 8081 is busy, using port {port} instead")
+        else:
+            print(f"✅ Using default port {port}")
+    except RuntimeError as e:
+        print(f"❌ {e}")
+        print("Please manually specify a different port or stop the process using port 8081")
+        exit(1)
+    
+    print(f"🚀 Server will start at: http://0.0.0.0:{port}")
+    print(f"📡 SSE endpoint: http://0.0.0.0:{port}/sse")
+    print(f"🔧 API endpoints: http://0.0.0.0:{port}/api/v1/")
+    print(f"❤️ Health check: http://0.0.0.0:{port}/health")
+    
+    # Check if something is already running on the port
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        result = sock.connect_ex(('localhost', port))
+        if result == 0:
+            print(f"⚠️ Warning: Something is already running on port {port}")
+            print("🔄 Attempting to start anyway...")
+    
+    try:
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=port,
+            log_level="info",
+            access_log=True
+        )
+    except Exception as e:
+        print(f"❌ Failed to start server: {e}")
+        
+        if "address already in use" in str(e).lower():
+            print(f"💡 Port {port} is in use. Try:")
+            print(f"   1. Kill the process: sudo lsof -ti:{port} | xargs sudo kill -9")
+            print(f"   2. Or use a different port: python3 app.py --port 8082")
+            print(f"   3. Or check what's running: sudo netstat -tulpn | grep {port}")
+        
+        exit(1)
