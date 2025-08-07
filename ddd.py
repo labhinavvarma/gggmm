@@ -26,7 +26,7 @@ from fastapi import (
     status,
 )
 from mcp.server.fastmcp.prompts.base import Message
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.fastmcp.prompts import Prompt
 import mcp.types as types
 from functools import partial
