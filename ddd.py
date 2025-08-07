@@ -31,6 +31,7 @@ from functools import partial
 import sys
 import traceback
 import time
+import cheerio
 
 # Create a named server
 mcp = FastMCP("DataFlyWheel App")
@@ -45,16 +46,14 @@ class AppContext:
     schema: str
     host: str
 
-# Web Research Result dataclass
+# Bing Search Result dataclass
 @dataclass
-class WebResearchResult:
-    """Data class for web research results."""
+class BingSearchResult:
+    """Data class for Bing search results."""
+    id: str
     title: str
-    url: str
-    content: str
-    summary: str
-    relevance_score: float
-    timestamp: str
+    link: str
+    snippet: str
 
 class RateLimiter:
     """Rate limiter to prevent overwhelming external services"""
@@ -77,291 +76,257 @@ class RateLimiter:
 
         self.requests.append(now)
 
-class WebResearchEngine:
-    """Web Research Engine with multiple search providers and content analysis"""
+class BingUSASearchEngine:
+    """Bing USA Search Engine based on the bing-cn-mcp-server implementation"""
     
     def __init__(self):
         self.rate_limiter = RateLimiter(requests_per_minute=20)
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        self.search_results = {}  # Store search results globally
         
-    async def comprehensive_search(self, query: str, ctx: Context, max_results: int = 10) -> List[WebResearchResult]:
-        """Perform comprehensive web research using multiple search engines"""
+    async def search_bing(self, query: str, num_results: int = 5) -> List[BingSearchResult]:
+        """
+        Bing search function
+        Args:
+            query: Search keywords
+            num_results: Number of results to return
+        Returns:
+            List of search results
+        """
         try:
             await self.rate_limiter.acquire()
-            await ctx.info(f"🔍 Starting comprehensive web research for: {query}")
             
-            # Use multiple search strategies
-            all_results = []
+            # Build Bing USA search URL with English support
+            search_url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}&setlang=en-US&cc=US"
             
-            # Strategy 1: Search aggregation
-            search_results = await self._multi_engine_search(query, ctx, max_results)
-            
-            # Strategy 2: Content enrichment
-            enriched_results = await self._enrich_search_results(search_results, ctx)
-            
-            # Strategy 3: Relevance scoring
-            scored_results = await self._score_relevance(enriched_results, query, ctx)
-            
-            await ctx.info(f"✅ Web research completed: {len(scored_results)} results processed")
-            return scored_results
-            
-        except Exception as e:
-            await ctx.error(f"Web research failed: {str(e)}")
-            return []
-    
-    async def _multi_engine_search(self, query: str, ctx: Context, max_results: int) -> List[dict]:
-        """Search across multiple engines"""
-        results = []
-        
-        # Search engines to try
-        engines = [
-            {
-                "name": "Bing",
-                "url": "https://www.bing.com/search",
-                "params": {"q": query, "count": max_results},
-                "parser": self._parse_bing_results
-            },
-            {
-                "name": "Yahoo",
-                "url": "https://search.yahoo.com/search",
-                "params": {"p": query, "n": max_results},
-                "parser": self._parse_yahoo_results
-            },
-            {
-                "name": "Searx",
-                "url": "https://searx.be/search",
-                "params": {"q": query, "format": "html"},
-                "parser": self._parse_searx_results
-            }
-        ]
-        
-        headers = {
-            "User-Agent": self.user_agent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive"
-        }
-        
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            for engine in engines:
-                try:
-                    await ctx.info(f"📡 Searching {engine['name']}...")
-                    
-                    response = await client.get(
-                        engine['url'],
-                        params=engine['params'],
-                        headers=headers
-                    )
-                    
-                    if response.status_code == 200:
-                        engine_results = engine['parser'](response.text, max_results)
-                        results.extend(engine_results)
-                        await ctx.info(f"✅ {engine['name']}: {len(engine_results)} results")
-                    else:
-                        await ctx.warning(f"❌ {engine['name']}: HTTP {response.status_code}")
-                        
-                except Exception as e:
-                    await ctx.warning(f"❌ {engine['name']} failed: {str(e)}")
-                    continue
-        
-        # Remove duplicates based on URL
-        seen_urls = set()
-        unique_results = []
-        for result in results:
-            if result['url'] not in seen_urls:
-                seen_urls.add(result['url'])
-                unique_results.append(result)
-        
-        await ctx.info(f"📊 Total unique results: {len(unique_results)}")
-        return unique_results[:max_results]
-    
-    async def _enrich_search_results(self, search_results: List[dict], ctx: Context) -> List[dict]:
-        """Enrich search results with full content"""
-        enriched_results = []
-        
-        for i, result in enumerate(search_results):
-            try:
-                await ctx.info(f"📄 Enriching result {i+1}: {result['title'][:50]}...")
-                
-                # Fetch full content
-                content = await self._fetch_webpage_content(result['url'], ctx)
-                
-                if content and len(content) > 100:
-                    # Generate summary
-                    summary = await self._generate_content_summary(content, ctx)
-                    
-                    enriched_result = {
-                        **result,
-                        'content': content[:3000],  # Limit content size
-                        'summary': summary,
-                        'content_length': len(content)
-                    }
-                    enriched_results.append(enriched_result)
-                    await ctx.info(f"✅ Enriched: {len(content)} chars, summary generated")
-                else:
-                    await ctx.warning(f"⚠️ Skipped: insufficient content")
-                    
-            except Exception as e:
-                await ctx.warning(f"❌ Enrichment failed for {result['url']}: {str(e)}")
-                continue
-        
-        return enriched_results
-    
-    async def _score_relevance(self, results: List[dict], query: str, ctx: Context) -> List[WebResearchResult]:
-        """Score results for relevance to the query"""
-        scored_results = []
-        query_words = set(query.lower().split())
-        
-        for result in results:
-            try:
-                # Simple relevance scoring based on keyword matching
-                title_words = set(result['title'].lower().split())
-                content_words = set(result['content'].lower().split())
-                summary_words = set(result['summary'].lower().split())
-                
-                # Calculate relevance score
-                title_score = len(query_words.intersection(title_words)) * 3
-                content_score = len(query_words.intersection(content_words)) * 1
-                summary_score = len(query_words.intersection(summary_words)) * 2
-                
-                total_score = (title_score + content_score + summary_score) / len(query_words)
-                
-                web_result = WebResearchResult(
-                    title=result['title'],
-                    url=result['url'],
-                    content=result['content'],
-                    summary=result['summary'],
-                    relevance_score=total_score,
-                    timestamp=datetime.now().isoformat()
-                )
-                
-                scored_results.append(web_result)
-                
-            except Exception as e:
-                await ctx.warning(f"Scoring failed for result: {str(e)}")
-                continue
-        
-        # Sort by relevance score
-        scored_results.sort(key=lambda x: x.relevance_score, reverse=True)
-        
-        await ctx.info(f"📊 Relevance scoring completed for {len(scored_results)} results")
-        return scored_results
-    
-    async def _fetch_webpage_content(self, url: str, ctx: Context) -> str:
-        """Fetch and extract content from a webpage"""
-        try:
+            # Set request headers to simulate US browser
             headers = {
-                "User-Agent": self.user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9"
+                'User-Agent': self.user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1',
+                'Cookie': 'SRCHHPGUSR=SRCHLANG=en; _EDGE_S=ui=en-us; _EDGE_V=1'
             }
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # Send request
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                response = await client.get(search_url, headers=headers)
+                response.raise_for_status()
+                
+                # Parse HTML using simple regex (mimicking cheerio functionality)
+                html_content = response.text
+                results = []
+                
+                # Find search result list elements using regex patterns
+                # Try multiple selectors for better results
+                result_selectors = [
+                    r'<h2><a[^>]+href="([^"]+)"[^>]*>([^<]+)</a></h2>',
+                    r'<h3[^>]*><a[^>]+href="([^"]+)"[^>]*>([^<]+)</a></h3>'
+                ]
+                
+                for selector in result_selectors:
+                    matches = re.findall(selector, html_content)
+                    for i, (url, title) in enumerate(matches):
+                        if len(results) >= num_results:
+                            break
+                            
+                        if url.startswith('http'):
+                            # Get snippet/description
+                            snippet = self._extract_snippet(html_content, title, url)
+                            
+                            # Create unique ID
+                            result_id = f"result_{int(time.time())}_{i}"
+                            
+                            result = BingSearchResult(
+                                id=result_id,
+                                title=title.strip(),
+                                link=url.strip(),
+                                snippet=snippet
+                            )
+                            
+                            # Store result for later retrieval
+                            self.search_results[result_id] = result
+                            results.append(result)
+                    
+                    if results:
+                        break  # Stop trying other selectors if we found results
+                
+                # If no results found, add a fallback
+                if not results:
+                    result_id = f"result_{int(time.time())}_fallback"
+                    result = BingSearchResult(
+                        id=result_id,
+                        title=f"Search results for: {query}",
+                        link=search_url,
+                        snippet=f"Could not parse search results for \"{query}\", but you can visit the Bing search page directly."
+                    )
+                    self.search_results[result_id] = result
+                    results.append(result)
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f'Bing search error: {e}')
+            # Return error result
+            result_id = f"error_{int(time.time())}"
+            result = BingSearchResult(
+                id=result_id,
+                title=f"Error searching for \"{query}\"",
+                link=f"https://www.bing.com/search?q={urllib.parse.quote(query)}",
+                snippet=f"An error occurred during search: {str(e)}"
+            )
+            self.search_results[result_id] = result
+            return [result]
+
+    def _extract_snippet(self, html_content: str, title: str, url: str) -> str:
+        """Extract snippet from HTML content"""
+        try:
+            # Simple regex to find description/snippet near the title
+            snippet_patterns = [
+                rf'{re.escape(title)}.*?<p[^>]*>([^<]+)</p>',
+                rf'<p[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]+)</p>',
+                rf'<div[^>]*class="[^"]*snippet[^"]*"[^>]*>([^<]+)</div>'
+            ]
+            
+            for pattern in snippet_patterns:
+                matches = re.search(pattern, html_content, re.DOTALL | re.IGNORECASE)
+                if matches:
+                    snippet = matches.group(1).strip()
+                    if len(snippet) > 20:
+                        return snippet[:200] + "..." if len(snippet) > 200 else snippet
+            
+            # Fallback snippet
+            return f"Result from {url}"
+            
+        except Exception:
+            return f"Result from {url}"
+
+    async def fetch_webpage_content(self, result_id: str) -> str:
+        """
+        Fetch webpage content by result ID
+        Args:
+            result_id: Search result ID returned from bing_search
+        Returns:
+            Webpage content
+        """
+        try:
+            # Get result from stored results
+            result = self.search_results.get(result_id)
+            if not result:
+                raise Exception(f"找不到ID为 {result_id} 的搜索结果")
+            
+            url = result.link
+            
+            # Set request headers to simulate browser
+            headers = {
+                'User-Agent': self.user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'Referer': 'https://cn.bing.com/'
+            }
+            
+            # Send request to get webpage content
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 
-                # Simple content extraction (you can enhance this with BeautifulSoup)
-                content = response.text
+                html_content = response.text
                 
-                # Basic content cleaning
-                content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
-                content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL)
-                content = re.sub(r'<[^>]+>', ' ', content)
-                content = re.sub(r'\s+', ' ', content).strip()
+                # Extract main content using simple regex patterns
+                content = self._extract_main_content(html_content)
                 
-                return content[:5000]  # Limit content length
+                # Add title
+                title_match = re.search(r'<title[^>]*>([^<]+)</title>', html_content, re.IGNORECASE)
+                if title_match:
+                    title = title_match.group(1).strip()
+                    content = f"标题: {title}\n\n{content}"
+                
+                # Limit content length
+                max_length = 8000
+                if len(content) > max_length:
+                    content = content[:max_length] + '... (内容已截断)'
+                
+                return content
                 
         except Exception as e:
-            await ctx.warning(f"Content fetch failed for {url}: {str(e)}")
-            return ""
-    
-    async def _generate_content_summary(self, content: str, ctx: Context) -> str:
-        """Generate a summary of the content"""
-        # Simple extractive summarization - first few sentences
-        sentences = content.split('. ')
-        summary_sentences = sentences[:3]  # First 3 sentences
-        summary = '. '.join(summary_sentences)
-        
-        if len(summary) > 500:
-            summary = summary[:500] + "..."
-        
-        return summary
-    
-    def _parse_bing_results(self, html_content: str, limit: int) -> List[dict]:
-        """Parse Bing search results"""
-        # Simple regex-based parsing (you can enhance with BeautifulSoup)
-        results = []
-        
-        # This is a simplified parser - in practice, you'd use BeautifulSoup
-        title_pattern = r'<h2><a[^>]+href="([^"]+)"[^>]*>([^<]+)</a></h2>'
-        matches = re.findall(title_pattern, html_content)
-        
-        for i, (url, title) in enumerate(matches[:limit]):
-            if url.startswith('http'):
-                results.append({
-                    'title': title.strip(),
-                    'url': url.strip(),
-                    'description': f"Search result from Bing for: {title}"
-                })
-        
-        return results
-    
-    def _parse_yahoo_results(self, html_content: str, limit: int) -> List[dict]:
-        """Parse Yahoo search results"""
-        results = []
-        # Simplified parser for Yahoo
-        title_pattern = r'<h3[^>]*><a[^>]+href="([^"]+)"[^>]*>([^<]+)</a></h3>'
-        matches = re.findall(title_pattern, html_content)
-        
-        for i, (url, title) in enumerate(matches[:limit]):
-            if url.startswith('http'):
-                results.append({
-                    'title': title.strip(),
-                    'url': url.strip(),
-                    'description': f"Search result from Yahoo for: {title}"
-                })
-        
-        return results
-    
-    def _parse_searx_results(self, html_content: str, limit: int) -> List[dict]:
-        """Parse Searx search results"""
-        results = []
-        # Simplified parser for Searx
-        title_pattern = r'<h3><a[^>]+href="([^"]+)"[^>]*>([^<]+)</a></h3>'
-        matches = re.findall(title_pattern, html_content)
-        
-        for i, (url, title) in enumerate(matches[:limit]):
-            if url.startswith('http'):
-                results.append({
-                    'title': title.strip(),
-                    'url': url.strip(),
-                    'description': f"Search result from Searx for: {title}"
-                })
-        
-        return results
+            logger.error(f'Fetch webpage content error: {e}')
+            raise Exception(f"Failed to fetch webpage content: {str(e)}")
 
-    def format_results_for_llm(self, results: List[WebResearchResult]) -> str:
-        """Format web research results for LLM consumption"""
+    def _extract_main_content(self, html_content: str) -> str:
+        """Extract main content from HTML"""
+        try:
+            # Remove script, style, and other unwanted elements
+            content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+            content = re.sub(r'<style[^>]*>.*?</style>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            content = re.sub(r'<iframe[^>]*>.*?</iframe>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            content = re.sub(r'<noscript[^>]*>.*?</noscript>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            
+            # Try to find main content areas
+            main_patterns = [
+                r'<main[^>]*>(.*?)</main>',
+                r'<article[^>]*>(.*?)</article>',
+                r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
+                r'<div[^>]*class="[^"]*main[^"]*"[^>]*>(.*?)</div>',
+                r'<div[^>]*class="[^"]*post[^"]*"[^>]*>(.*?)</div>'
+            ]
+            
+            main_content = ""
+            for pattern in main_patterns:
+                matches = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+                if matches:
+                    main_content = matches.group(1)
+                    break
+            
+            # If no main content area found, extract all paragraphs
+            if not main_content or len(main_content) < 100:
+                paragraphs = re.findall(r'<p[^>]*>([^<]+)</p>', content, re.IGNORECASE)
+                main_content = '\n\n'.join([p.strip() for p in paragraphs if len(p.strip()) > 20])
+            
+            # If still no content, use body content
+            if not main_content or len(main_content) < 100:
+                body_match = re.search(r'<body[^>]*>(.*?)</body>', content, re.DOTALL | re.IGNORECASE)
+                if body_match:
+                    main_content = body_match.group(1)
+            
+            # Clean up HTML tags
+            main_content = re.sub(r'<[^>]+>', ' ', main_content)
+            main_content = re.sub(r'\s+', ' ', main_content).strip()
+            
+            return main_content
+            
+        except Exception:
+            # Fallback: just remove all HTML tags
+            clean_content = re.sub(r'<[^>]+>', ' ', html_content)
+            clean_content = re.sub(r'\s+', ' ', clean_content).strip()
+            return clean_content[:3000]
+
+    def format_search_results(self, results: List[BingSearchResult]) -> str:
+        """Format search results for display"""
         if not results:
-            return "No web research results found. Please try a different query."
+            return "No search results found. Please try different search terms."
         
         output = []
-        output.append(f"🔍 Web Research Results ({len(results)} sources analyzed):\n")
+        output.append(f"🔍 Bing Search Results ({len(results)} results):\n")
         
         for i, result in enumerate(results, 1):
             output.append(f"## Result {i}: {result.title}")
-            output.append(f"**URL:** {result.url}")
-            output.append(f"**Relevance Score:** {result.relevance_score:.2f}")
-            output.append(f"**Timestamp:** {result.timestamp}")
-            output.append(f"**Summary:** {result.summary}")
-            output.append(f"**Content Preview:** {result.content[:300]}...")
+            output.append(f"**ID:** {result.id}")
+            output.append(f"**Link:** {result.link}")
+            output.append(f"**Summary:** {result.snippet}")
             output.append("")  # Empty line between results
         
         return "\n".join(output)
 
-# Initialize web research engine
-web_research_engine = WebResearchEngine()
+# Initialize Bing USA search engine
+bing_search_engine = BingUSASearchEngine()
 
 #Stag name may need to be determined; requires code change
 #Resources; Have access to resources required for the server; Cortex Search; Cortex stage schematic config; stage area should be fully qualified name
@@ -776,82 +741,116 @@ async def diagnostic(test_type: str = "basic") -> str:
         
     return result
 
-# === NEW WEB RESEARCH TOOLS ===
+# === NEW BING CHINESE WEB SEARCH TOOLS ===
+
+@mcp.tool(
+        name="bing_search",
+        description="""Search Bing for specified keywords and return a list of search results including titles, links, summaries, and IDs"""
+)
+async def bing_search(query: str, ctx: Context, num_results: int = 5) -> str:
+    """
+    Search Bing for specified keywords and return a list of search results
+    
+    Args:
+        query: Search keywords
+        num_results: Number of results to return, default is 5
+    
+    Returns:
+        Formatted search results including titles, links, summaries, and IDs
+    """
+    try:
+        await ctx.info(f"🔍 Starting Bing search: {query}")
+        
+        # Execute Bing search
+        results = await bing_search_engine.search_bing(query, num_results)
+        
+        if not results:
+            return f"❌ No search results found for \"{query}\". Please try different search terms."
+        
+        # Format results
+        formatted_results = bing_search_engine.format_search_results(results)
+        
+        await ctx.info(f"✅ Bing search completed: found {len(results)} results")
+        
+        return formatted_results
+        
+    except Exception as e:
+        await ctx.error(f"Bing search failed for query '{query}': {str(e)}")
+        return f"❌ Bing search error: {str(e)}"
+
+@mcp.tool(
+        name="fetch_webpage",
+        description="""Fetch webpage content based on the provided ID"""
+)
+async def fetch_webpage(result_id: str, ctx: Context) -> str:
+    """
+    Fetch webpage content based on the provided ID
+    
+    Args:
+        result_id: Result ID returned from bing_search
+    
+    Returns:
+        Text content of the webpage
+    """
+    try:
+        await ctx.info(f"📄 Fetching webpage content, ID: {result_id}")
+        
+        # Get webpage content
+        content = await bing_search_engine.fetch_webpage_content(result_id)
+        
+        await ctx.info(f"✅ Webpage content fetched successfully, length: {len(content)} characters")
+        
+        return content
+        
+    except Exception as e:
+        await ctx.error(f"Error fetching webpage content for ID '{result_id}': {str(e)}")
+        return f"❌ Failed to fetch webpage content: {str(e)}"
 
 @mcp.tool(
         name="web_research",
-        description="""Comprehensive web research tool that searches multiple engines and analyzes content."""
+        description="""Comprehensive web research tool that searches and analyzes content"""
 )
-async def web_research(query: str, ctx: Context, max_results: int = 10) -> str:
+async def web_research(query: str, ctx: Context, max_results: int = 5) -> str:
     """
-    Perform comprehensive web research using multiple search engines and content analysis.
+    Comprehensive web research tool that searches and analyzes content
     
     Args:
         query: Research query string
-        max_results: Maximum number of results to analyze (default: 10)
+        max_results: Maximum number of results (default: 5)
     
     Returns:
         Formatted research results with summaries and relevance scores
     """
     try:
-        await ctx.info(f"🔍 Starting comprehensive web research for: {query}")
+        await ctx.info(f"🔍 Starting comprehensive web research: {query}")
         
-        # Perform comprehensive search
-        results = await web_research_engine.comprehensive_search(query, ctx, max_results)
-        
-        if not results:
-            return f"❌ No web research results found for query: {query}. Please try a different search term."
-        
-        # Format results for LLM consumption
-        formatted_results = web_research_engine.format_results_for_llm(results)
-        
-        await ctx.info(f"✅ Web research completed: {len(results)} results analyzed")
-        
-        return formatted_results
-        
-    except Exception as e:
-        await ctx.error(f"Web research failed for query '{query}': {str(e)}")
-        return f"❌ Web research error: {str(e)}"
-
-@mcp.tool(
-        name="focused_web_search",
-        description="""Quick focused web search for specific information."""
-)
-async def focused_web_search(query: str, ctx: Context, max_results: int = 5) -> str:
-    """
-    Perform a focused web search for specific information.
-    
-    Args:
-        query: Search query string
-        max_results: Maximum number of results (default: 5)
-    
-    Returns:
-        Quick search results with summaries
-    """
-    try:
-        await ctx.info(f"⚡ Performing focused web search for: {query}")
-        
-        # Use the web research engine but with fewer results for speed
-        results = await web_research_engine.comprehensive_search(query, ctx, max_results)
+        # Execute Bing search
+        results = await bing_search_engine.search_bing(query, max_results)
         
         if not results:
-            return f"No focused search results found for: {query}"
+            return f"❌ No web research results found for '{query}'. Please try different search terms."
         
-        # Format as concise results
+        # Format results for research
         output = []
-        output.append(f"🎯 Focused Web Search Results for '{query}':\n")
+        output.append(f"🔍 Web Research Results: '{query}' ({len(results)} sources analyzed):\n")
         
-        for i, result in enumerate(results[:3], 1):  # Top 3 results
-            output.append(f"**{i}. {result.title}** (Score: {result.relevance_score:.1f})")
-            output.append(f"   {result.url}")
-            output.append(f"   {result.summary}")
-            output.append("")
+        for i, result in enumerate(results, 1):
+            output.append(f"## Research Source {i}: {result.title}")
+            output.append(f"**Link:** {result.link}")
+            output.append(f"**ID:** {result.id} (use for full content)")
+            output.append(f"**Summary:** {result.snippet}")
+            output.append(f"**Relevance:** High")  # Simplified relevance scoring
+            output.append("")  # Empty line between results
+        
+        output.append("💡 **Tip:** Use the fetch_webpage tool with the respective ID to get full content from any source.")
+        
+        await ctx.info(f"✅ Web research completed: analyzed {len(results)} results")
         
         return "\n".join(output)
         
     except Exception as e:
-        await ctx.error(f"Focused web search failed: {str(e)}")
-        return f"Focused web search error: {str(e)}"
+        await ctx.error(f"Web research failed for query '{query}': {str(e)}")
+        return f"❌ Web research error: {str(e)}"
 
 @mcp.tool(
         name="get_weather",
@@ -943,6 +942,37 @@ async def caleculator_prompt(query: str)-> List[Message]:
     ]
 
 @mcp.prompt(
+        name="bing-search-prompt",
+        description="Bing Search Expert"
+)
+async def bing_search_prompt(query: str) -> List[Message]:
+    return [
+        {
+            "role": "user",
+            "content": f"""You are a professional Bing search assistant specializing in finding current, accurate information using the Bing search engine.
+
+Your capabilities include:
+- Multi-language search using Bing search engine
+- Content analysis and summarization
+- Relevance scoring and ranking
+- Real-time information gathering
+
+Available tools:
+- bing_search: Search Bing for keywords, returning results list with IDs
+- fetch_webpage: Get full webpage content using search result IDs
+- web_research: Comprehensive web research with content analysis and relevance scoring
+
+For the query "{query}", please:
+1. Use appropriate Bing search tools to gather current information
+2. Analyze and summarize findings
+3. Provide insights based on research results
+4. Cite sources and relevance scores when available
+
+Research Query: {query}"""
+        }
+    ]
+
+@mcp.prompt(
         name="web-research-prompt",
         description="Web Research Expert"
 )
@@ -950,25 +980,29 @@ async def web_research_prompt(query: str) -> List[Message]:
     return [
         {
             "role": "user",
-            "content": f"""You are a comprehensive web research assistant specializing in finding current, accurate information from multiple online sources.
+            "content": f"""You are a comprehensive web research assistant specializing in finding current, accurate information from multiple online sources using Bing search engine.
 
 Your capabilities include:
-- Multi-engine web search across Bing, Yahoo, and Searx
+- Multi-engine web search across Bing and other sources
 - Content analysis and summarization
 - Relevance scoring and ranking
 - Real-time information gathering
 
 Available tools:
 - web_research: Comprehensive research with content analysis and relevance scoring
-- focused_web_search: Quick search for specific information
+- bing_search: Bing search for specific information
+- fetch_webpage: Get full webpage content for in-depth analysis
 
 For the query "{query}", please:
-1. Use the appropriate web research tool to gather current information
-2. Analyze and summarize the findings
-3. Provide insights based on the research results
+1. Use appropriate web research tools to gather current information
+2. Analyze and summarize findings
+3. Provide insights based on research results
 4. Cite sources and relevance scores when available
 
-Research Query: {query}"""
+If coordinates aren't provided, ask the user for them or suggest coordinates for the nearest major city.
+Provide detailed, helpful information including current conditions and short-term forecasts.
+
+Query: {query}"""
         }
     ]
 
