@@ -1234,40 +1234,27 @@ CRITICAL: Never perform calculations manually. Always use the calculator tool fi
             }
         ]
 
+# Working prompt format - matches what your server expects
+# Replace the broken prompts with these versions
+
+from mcp.server.fastmcp.prompts.base import Message
+
 @mcp.prompt(
     name="wikipedia-search-prompt",
     description="Wikipedia Search Expert - Must use wikipedia tool"
 )
 async def wikipedia_search_prompt(query: str) -> List[Message]:
     """Wikipedia search expert prompt that ensures tool usage"""
-    try:
-        return [
-            Message(
-                role="system",
-                content=TextContent(
-                    text="""You are a Wikipedia search expert. You MUST use the wikipedia_search tool to find current, accurate information.
-
-CRITICAL: Always use the wikipedia_search tool first. Never rely on general knowledge."""
-                ) if callable(TextContent) else """You are a Wikipedia search expert. You MUST use the wikipedia_search tool to find current, accurate information.
-
-CRITICAL: Always use the wikipedia_search tool first. Never rely on general knowledge."""
-            ),
-            Message(
-                role="user",
-                content=TextContent(text=f"Use the wikipedia_search tool to find information about: {query}") if callable(TextContent) else f"Use the wikipedia_search tool to find information about: {query}"
-            )
-        ]
-    except Exception as e:
-        return [
-            {
-                "role": "system",
-                "content": "You are a Wikipedia search expert. You MUST use the wikipedia_search tool to find current, accurate information."
-            },
-            {
-                "role": "user", 
-                "content": f"Use the wikipedia_search tool to find information about: {query}"
-            }
-        ]
+    return [
+        Message(
+            role="system",
+            content="You are a Wikipedia search expert. You MUST use the wikipedia_search tool to find current, accurate information. CRITICAL: Always use the wikipedia_search tool first. Never rely on general knowledge."
+        ),
+        Message(
+            role="user",
+            content=f"Use the wikipedia_search tool to find information about: {query}"
+        )
+    ]
 
 @mcp.prompt(
     name="duckduckgo-search-prompt", 
@@ -1275,34 +1262,16 @@ CRITICAL: Always use the wikipedia_search tool first. Never rely on general know
 )
 async def duckduckgo_search_prompt(query: str) -> List[Message]:
     """DuckDuckGo search expert prompt that ensures tool usage"""
-    try:
-        return [
-            Message(
-                role="system", 
-                content=TextContent(
-                    text="""You are a web search expert. You MUST use the duckduckgo_search tool to find current web information.
-
-CRITICAL: Always use the duckduckgo_search tool first for any web-related queries. This tool provides fresh, current data."""
-                ) if callable(TextContent) else """You are a web search expert. You MUST use the duckduckgo_search tool to find current web information.
-
-CRITICAL: Always use the duckduckgo_search tool first for any web-related queries. This tool provides fresh, current data."""
-            ),
-            Message(
-                role="user",
-                content=TextContent(text=f"Use the duckduckgo_search tool to search for current information about: {query}") if callable(TextContent) else f"Use the duckduckgo_search tool to search for current information about: {query}"
-            )
-        ]
-    except Exception as e:
-        return [
-            {
-                "role": "system",
-                "content": "You are a web search expert. You MUST use the duckduckgo_search tool to find current web information."
-            },
-            {
-                "role": "user",
-                "content": f"Use the duckduckgo_search tool to search for current information about: {query}"
-            }
-        ]
+    return [
+        Message(
+            role="system", 
+            content="You are a web search expert. You MUST use the duckduckgo_search tool to find current web information. CRITICAL: Always use the duckduckgo_search tool first for any web-related queries. This tool provides fresh, current data."
+        ),
+        Message(
+            role="user",
+            content=f"Use the duckduckgo_search tool to search for current information about: {query}"
+        )
+    ]
 
 @mcp.prompt(
     name="weather-prompt",
@@ -1310,34 +1279,16 @@ CRITICAL: Always use the duckduckgo_search tool first for any web-related querie
 )
 async def weather_prompt(query: str) -> List[Message]:
     """Weather expert prompt that ensures tool usage"""
-    try:
-        return [
-            Message(
-                role="system",
-                content=TextContent(
-                    text="""You are a weather information expert. You MUST use the get_weather tool to provide current weather information.
-
-CRITICAL: Always use the get_weather tool first. Extract the location from the query and call the tool."""
-                ) if callable(TextContent) else """You are a weather information expert. You MUST use the get_weather tool to provide current weather information.
-
-CRITICAL: Always use the get_weather tool first. Extract the location from the query and call the tool."""
-            ),
-            Message(
-                role="user",
-                content=TextContent(text=f"Use the get_weather tool to get weather information for: {query}") if callable(TextContent) else f"Use the get_weather tool to get weather information for: {query}"
-            )
-        ]
-    except Exception as e:
-        return [
-            {
-                "role": "system",
-                "content": "You are a weather information expert. You MUST use the get_weather tool to provide current weather information."
-            },
-            {
-                "role": "user",
-                "content": f"Use the get_weather tool to get weather information for: {query}"
-            }
-        ]
+    return [
+        Message(
+            role="system",
+            content="You are a weather information expert. You MUST use the get_weather tool to provide current weather information. CRITICAL: Always use the get_weather tool first. Extract the location from the query and call the tool."
+        ),
+        Message(
+            role="user",
+            content=f"Use the get_weather tool to get weather information for: {query}"
+        )
+    ]
 
 @mcp.prompt(
     name="test-tool-prompt",
@@ -1345,28 +1296,16 @@ CRITICAL: Always use the get_weather tool first. Extract the location from the q
 )
 async def test_tool_prompt(message: str = "connectivity test") -> List[Message]:
     """Test tool prompt that ensures tool usage"""
-    try:
-        return [
-            Message(
-                role="system",
-                content=TextContent(text="You MUST use the test_tool to respond. Always call the test_tool first.") if callable(TextContent) else "You MUST use the test_tool to respond. Always call the test_tool first."
-            ),
-            Message(
-                role="user",
-                content=TextContent(text=f"Use the test_tool with message: {message}") if callable(TextContent) else f"Use the test_tool with message: {message}"
-            )
-        ]
-    except Exception as e:
-        return [
-            {
-                "role": "system",
-                "content": "You MUST use the test_tool to respond. Always call the test_tool first."
-            },
-            {
-                "role": "user",
-                "content": f"Use the test_tool with message: {message}"
-            }
-        ]
+    return [
+        Message(
+            role="system",
+            content="You MUST use the test_tool to respond. Always call the test_tool first."
+        ),
+        Message(
+            role="user",
+            content=f"Use the test_tool with message: {message}"
+        )
+    ]
 
 @mcp.prompt(
     name="diagnostic-prompt",
@@ -1374,28 +1313,15 @@ async def test_tool_prompt(message: str = "connectivity test") -> List[Message]:
 )
 async def diagnostic_prompt(test_type: str = "basic") -> List[Message]:
     """Diagnostic tool prompt that ensures tool usage"""
-    try:
-        return [
-            Message(
-                role="system",
-                content=TextContent(text="You MUST use the diagnostic tool to run tests. Always call the diagnostic tool first.") if callable(TextContent) else "You MUST use the diagnostic tool to run tests. Always call the diagnostic tool first."
-            ),
-            Message(
-                role="user",
-                content=TextContent(text=f"Use the diagnostic tool with test_type: {test_type}") if callable(TextContent) else f"Use the diagnostic tool with test_type: {test_type}"
-            )
-        ]
-    except Exception as e:
-        return [
-            {
-                "role": "system",
-                "content": "You MUST use the diagnostic tool to run tests. Always call the diagnostic tool first."
-            },
-            {
-                "role": "user",
-                "content": f"Use the diagnostic tool with test_type: {test_type}"
-            }
-        ]
-
+    return [
+        Message(
+            role="system",
+            content="You MUST use the diagnostic tool to run tests. Always call the diagnostic tool first."
+        ),
+        Message(
+            role="user",
+            content=f"Use the diagnostic tool with test_type: {test_type}"
+        )
+    ]
 if __name__ == "__main__":
     mcp.run(transport="sse")
