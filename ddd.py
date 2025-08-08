@@ -41,6 +41,100 @@ def test_server_connectivity(server_url):
     except:
         return False, {"error": "Connection failed"}
 
+def try_direct_tool_call(query_text, prompt_type, server_url, message_placeholder):
+    """Try direct HTTP tool calls as fallback when MCP client fails."""
+    try:
+        base_url = server_url.replace('/sse', '')
+        
+        # Determine which tool to use based on prompt type and query
+        tool_name = None
+        arguments = {}
+        
+        query_lower = query_text.lower()
+        
+        if prompt_type == "Brave Web Search":
+            tool_name = "brave_web_search"
+            arguments = {"query": query_text, "count": 10}
+        elif prompt_type == "Local Search":
+            tool_name = "brave_local_search"
+            arguments = {"query": query_text, "count": 5}
+        elif prompt_type == "Weather":
+            tool_name = "get_weather"
+            arguments = {"place": query_text.replace("weather", "").replace("in", "").strip()}
+        elif prompt_type == "Calculator":
+            tool_name = "calculator"
+            # Extract math expression
+            import re
+            math_pattern = r'[0-9+\-*/().\s]+'
+            match = re.search(math_pattern, query_text)
+            if match:
+                arguments = {"expression": match.group().strip()}
+            else:
+                arguments = {"expression": query_text}
+        elif prompt_type == "HEDIS Expert":
+            if "search" in query_lower:
+                tool_name = "DFWSearch"
+                arguments = {"query": query_text}
+            else:
+                tool_name = "DFWAnalyst"
+                arguments = {"prompt": query_text}
+        else:
+            # Auto-detect for General AI
+            if any(keyword in query_lower for keyword in ["search", "latest", "news", "find", "recent", "current"]):
+                if not any(local_keyword in query_lower for local_keyword in ["restaurant", "near", "gas station", "hotel", "pizza", "coffee"]):
+                    tool_name = "brave_web_search"
+                    arguments = {"query": query_text, "count": 10}
+                else:
+                    tool_name = "brave_local_search"
+                    arguments = {"query": query_text, "count": 5}
+            elif any(keyword in query_lower for keyword in ["weather", "temperature", "forecast"]):
+                tool_name = "get_weather"
+                arguments = {"place": query_text.replace("weather", "").replace("in", "").strip()}
+            elif any(keyword in query_lower for keyword in ["calculate", "compute", "+", "-", "*", "/"]):
+                tool_name = "calculator"
+                arguments = {"expression": query_text}
+        
+        if not tool_name:
+            return None
+            
+        message_placeholder.text(f"🔧 Calling {tool_name} directly...")
+        
+        # Try multiple endpoints
+        endpoints_to_try = [
+            f"{base_url}/tool_call",
+            f"{base_url}/api/v1/tool_call",
+            f"{base_url}/api/tool_call"
+        ]
+        
+        payload = {
+            "tool_name": tool_name,
+            "arguments": arguments
+        }
+        
+        for endpoint in endpoints_to_try:
+            try:
+                response = requests.post(
+                    endpoint,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("success"):
+                        return f"🔧 **{tool_name}** (Direct Call):\n\n{result.get('result', 'No result')}"
+                    else:
+                        return f"❌ Tool Error: {result.get('error', 'Unknown error')}"
+                        
+            except Exception as e:
+                continue
+                
+        return f"❌ All direct tool call endpoints failed for {tool_name}"
+        
+    except Exception as e:
+        return f"❌ Direct tool call error: {str(e)}"
+
 # Configure API key in server with cleaner interface
 if brave_api_key and st.sidebar.button("🔑 Configure API Key"):
     with st.spinner("Configuring Brave API key..."):
@@ -406,7 +500,15 @@ else:
                     # Get tools and create agent
                     tools = await client.get_tools()
                     if not tools:
-                        raise Exception("No tools available")
+                        # If MCP client fails, try direct HTTP tool calls
+                        message_placeholder.text("🔄 Trying direct tool calls...")
+                        result = try_direct_tool_call(query_text, prompt_type, server_url, message_placeholder)
+                        if result:
+                            message_placeholder.markdown(result)
+                            st.session_state.messages.append({"role": "assistant", "content": result})
+                            return
+                        else:
+                            raise Exception("No tools available via MCP or direct calls")
                     
                     # Create agent with tools
                     agent = create_react_agent(model=model, tools=tools)
@@ -514,9 +616,22 @@ else:
                     st.session_state.messages.append({"role": "assistant", "content": result})
                     
                 except Exception as e:
-                    error_message = f"❌ Error: {str(e)}"
-                    message_placeholder.markdown(error_message)
-                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+                    # Try direct tool call as final fallback
+                    message_placeholder.text("🔄 Trying direct tool call fallback...")
+                    
+                    try:
+                        result = try_direct_tool_call(query_text, prompt_type, server_url, message_placeholder)
+                        if result:
+                            message_placeholder.markdown(result)
+                            st.session_state.messages.append({"role": "assistant", "content": result})
+                        else:
+                            error_message = f"❌ Error: {str(e)}\n\n💡 Try:\n- Check server connection\n- Verify Brave API key is configured\n- Try a different query type"
+                            message_placeholder.markdown(error_message)
+                            st.session_state.messages.append({"role": "assistant", "content": error_message})
+                    except Exception as fallback_error:
+                        error_message = f"❌ All methods failed:\n- Main error: {str(e)}\n- Fallback error: {str(fallback_error)}"
+                        message_placeholder.markdown(error_message)
+                        st.session_state.messages.append({"role": "assistant", "content": error_message})
 
         if query:
             asyncio.run(process_query(query))
