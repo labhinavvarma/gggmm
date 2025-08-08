@@ -32,6 +32,15 @@ brave_api_key = st.sidebar.text_input(
     help="Enter your Brave Search API key"
 )
 
+def test_server_connectivity(server_url):
+    """Simple server connectivity test."""
+    try:
+        base_url = server_url.replace('/sse', '')
+        response = requests.get(f"{base_url}/health", timeout=5)
+        return response.status_code == 200, {"status": "healthy" if response.status_code == 200 else "error"}
+    except:
+        return False, {"error": "Connection failed"}
+
 # Configure API key in server with cleaner interface
 if brave_api_key and st.sidebar.button("🔑 Configure API Key"):
     with st.spinner("Configuring Brave API key..."):
@@ -276,7 +285,18 @@ else:
             "What is 15% of 847?",
             "Calculate compound interest on $1000 at 5% for 3 years"
         ],
-        "HEDIS Expert": [],  # Will be loaded dynamically
+        "HEDIS Expert": [
+            "What are the codes in BCS Value Set?",
+            "Explain the BCS (Breast Cancer Screening) measure",
+            "What is the age criteria for CBP measure?",
+            "Describe the COA measure requirements",
+            "What LOB is COA measure scoped under?",
+            "List all value sets for diabetes measures",
+            "What are the exclusions for HbA1c testing?",
+            "Explain the numerator criteria for blood pressure control",
+            "What is the measurement period for HEDIS measures?",
+            "Define the eligible population for colorectal cancer screening"
+        ],
         "Weather": [
             "What's the current weather in New York?",
             "Get weather forecast for London, UK",
@@ -328,8 +348,27 @@ else:
                 display_text = example if len(example) <= 70 else example[:67] + "..."
                 if st.button(display_text, key=f"{prompt_type}_{i}_{hash(example)}", use_container_width=True):
                     st.session_state.query_input = example
+                    st.session_state.selected_mode = prompt_type
         else:
             st.info("Loading examples...")
+
+    # Show current mode
+    if debug_mode:
+        st.sidebar.info(f"🐛 Current Mode: {prompt_type}")
+        if "selected_mode" in st.session_state:
+            st.sidebar.info(f"🐛 Last Selected Mode: {st.session_state.selected_mode}")
+
+    # Control buttons
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🗑️ Clear Chat", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
     # Chat input handling
     if query := st.chat_input("Type your query here...") or "query_input" in st.session_state:
@@ -341,6 +380,10 @@ else:
             st.markdown(query)
 
         st.session_state.messages.append({"role": "user", "content": query})
+
+        if debug_mode:
+            st.info(f"🐛 Original query: {query}")
+            st.info(f"🐛 Current mode: {prompt_type}")
 
         async def process_query(query_text):
             with st.chat_message("assistant"):
@@ -362,14 +405,84 @@ else:
                     if not tools:
                         raise Exception("No tools available")
                     
+                    # Create agent with tools
                     agent = create_react_agent(model=model, tools=tools)
                     
-                    # Process the query
+                    # Determine what type of query this is and force tool usage
+                    query_lower = query_text.lower()
+                    
+                    # First check the selected expert mode
+                    if prompt_type == "Brave Web Search":
+                        message_placeholder.text("🔍 Using Brave Web Search...")
+                        query_text = f"Use the brave_web_search tool to search for: {query_text}"
+                    
+                    elif prompt_type == "Local Search":
+                        message_placeholder.text("📍 Using Brave Local Search...")
+                        query_text = f"Use the brave_local_search tool to find local businesses for: {query_text}"
+                    
+                    elif prompt_type == "Weather":
+                        message_placeholder.text("🌤️ Getting weather information...")
+                        query_text = f"Use the get_weather tool to get weather information for: {query_text}"
+                    
+                    elif prompt_type == "Calculator":
+                        message_placeholder.text("🧮 Calculating...")
+                        query_text = f"Use the calculator tool to calculate: {query_text}"
+                    
+                    elif prompt_type == "HEDIS Expert":
+                        message_placeholder.text("🏥 Searching HEDIS data...")
+                        if "search" in query_lower or "find" in query_lower or "list" in query_lower:
+                            query_text = f"Use the DFWSearch tool to search HEDIS documentation for: {query_text}"
+                        else:
+                            query_text = f"Use the DFWAnalyst tool to analyze HEDIS data for: {query_text}"
+                    
+                    # If General AI mode, still try to detect tool usage from keywords
+                    elif prompt_type == "General AI":
+                        if any(keyword in query_lower for keyword in ["search", "latest", "news", "find", "recent", "current", "what is", "tell me about"]):
+                            # This should use Brave Web Search
+                            if not any(local_keyword in query_lower for local_keyword in ["restaurant", "near", "gas station", "hotel", "pizza", "coffee"]):
+                                message_placeholder.text("🔍 Using Brave Web Search...")
+                                query_text = f"Use the brave_web_search tool to search for: {query_text}"
+                        
+                        elif any(keyword in query_lower for keyword in ["restaurant", "near", "gas station", "hotel", "pizza", "coffee", "local", "nearby"]):
+                            # This should use Brave Local Search
+                            message_placeholder.text("📍 Using Brave Local Search...")
+                            query_text = f"Use the brave_local_search tool to find: {query_text}"
+                        
+                        elif any(keyword in query_lower for keyword in ["weather", "temperature", "forecast", "conditions"]):
+                            # This should use Weather tool
+                            message_placeholder.text("🌤️ Getting weather information...")
+                            query_text = f"Use the get_weather tool for: {query_text}"
+                        
+                        elif any(keyword in query_lower for keyword in ["calculate", "compute", "math", "+", "-", "*", "/", "="]):
+                            # This should use Calculator
+                            message_placeholder.text("🧮 Calculating...")
+                            query_text = f"Use the calculator tool to calculate: {query_text}"
+                        
+                        elif any(keyword in query_lower for keyword in ["hedis", "bcs", "cbp", "measure", "value set", "codes"]):
+                            # This should use HEDIS tools
+                            message_placeholder.text("🏥 Searching HEDIS data...")
+                            if "search" in query_lower or "find" in query_lower:
+                                query_text = f"Use the DFWSearch tool to search: {query_text}"
+                            else:
+                                query_text = f"Use the DFWAnalyst tool to analyze: {query_text}"
+                    
+                    # Process the modified query
                     messages = [{"role": "user", "content": query_text}]
+                    
+                    if debug_mode:
+                        st.info(f"🐛 Debug - Modified query: {query_text}")
+                        st.info(f"🐛 Debug - Selected mode: {prompt_type}")
+                    
+                    message_placeholder.text("🤖 Processing with AI agent...")
                     response = await asyncio.wait_for(
                         agent.ainvoke({"messages": messages}), 
                         timeout=60.0
                     )
+                    
+                    if debug_mode:
+                        st.info(f"🐛 Debug - Raw response type: {type(response)}")
+                        with st.expander("🐛 Debug - Raw Response"):
+                            st.json(str(response)[:1000] + "..." if len(str(response)) > 1000 else str(response))
                     
                     # Extract result
                     result = None
