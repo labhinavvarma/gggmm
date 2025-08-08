@@ -312,15 +312,15 @@ if show_server_info:
                 if tool_info.get('description'):
                     st.caption(f"    {tool_info['description']}")
 
-    # Display Prompts with enhanced formatting - Updated with Brave Search
+    # Display Prompts with enhanced formatting - Updated with Brave Search only
     with st.sidebar.expander("🧐 Available Prompts", expanded=False):
-        # Updated prompt display names to match server
+        # Updated prompt display names to match server - removed DuckDuckGo
         prompt_display_names = {
             "hedis-prompt": "🏥 HEDIS Expert",
             "calculator-prompt": "🧮 Calculator Expert",
             "weather-prompt": "🌤️ Weather Expert", 
-            "brave-web-search-prompt": "🔍 Web Search Expert",  # Updated
-            "brave-local-search-prompt": "📍 Local Search Expert",  # Updated
+            "brave-web-search-prompt": "🔍 Brave Web Search Expert",  # Updated
+            "brave-local-search-prompt": "📍 Brave Local Search Expert",  # Updated
             "test-tool-prompt": "🔧 Test Tool",
             "diagnostic-prompt": "🔧 Diagnostic Tool"
         }
@@ -770,11 +770,12 @@ else:
 - Web Search: brave_web_search tool
 - Local Search: brave_local_search tool
 
-🚀 **Enhanced Features:**
+                🚀 **Enhanced Features:**
 - ✅ Fresh data retrieval with cache-busting
 - ✅ Weather caching system active
-- ✅ Brave Search with current data
+- ✅ Brave Search integration only
 - ✅ HEDIS analytics tools ready
+- ✅ No tracking, unbiased results
 
 🌐 **Connection Quality:** Excellent"""
 
@@ -881,7 +882,7 @@ else:
 
 # Enhanced footer with version and feature info - Updated
 st.markdown("---")
-st.markdown("### 🚀 Enhanced MCP Client v2.2 - Brave Search Integrated")
+st.markdown("### 🚀 Enhanced MCP Client v2.3 - Brave Search Only")
 
 col1, col2, col3 = st.columns(3)
 
@@ -892,15 +893,15 @@ with col1:
     st.caption("• System Diagnostics")
 
 with col2:
-    st.markdown("**🔍 Search & Data:**")
-    st.caption("• Brave Web Search")  # Updated
-    st.caption("• Brave Local Search")  # Updated
+    st.markdown("**🔍 Search Features:**")
+    st.caption("• Brave Web Search Only")  # Updated
+    st.caption("• Brave Local Search Only")  # Updated
     st.caption("• Cached Weather Service")
 
 with col3:
     st.markdown("**⚡ Enhanced:**")
-    st.caption("• Server-side Brave Integration")  # Updated
-    st.caption("• Client API Key Configuration")  # Updated
+    st.caption("• Pure Brave Search Integration")  # Updated
+    st.caption("• No Tracking or Data Collection")  # Updated
     st.caption("• Smart Cache Management")
 
 st.caption(f"📡 **Connection**: {server_url} | 🤖 **Mode**: {prompt_type} | 📊 **Status**: {status_indicator}")
