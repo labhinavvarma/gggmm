@@ -586,3 +586,42 @@ async def caleculator_prompt(query: str)-> List[Message]:
             "content": f"""You are expert in performing arthametic operations.You are provided with the tool calculator to verify the results.You will respond with the results after verifying with the tool result. {query} """
         }
     ]
+
+@mcp.prompt(
+    name="weather-prompt",
+    description="Weather Expert"
+)
+async def weather_prompt(query: str)-> List[Message]:
+    """Weather expert who intakes the place as input and returns the present weather"""
+    return [
+        {
+            "role": "user",
+            "content": f"You are a weather expert. You have been provided with `get_weather` tool to get up to date weather information for: {query}. Always use the tool first."
+        }
+    ]
+
+@mcp.prompt(
+        name="serpapi-prompt",
+        description="Web Search Expert"
+)
+async def serpapi_prompt(query: str)-> List[Message]:
+    """Web search expert who performs internet searches using SerpApi"""
+    return [
+        {
+            "role": "user",
+            "content": f"""You are a web search expert. You have been provided with the `SerpApiSearch` tool to perform current internet searches. 
+            
+            When using the SerpApiSearch tool, you will need to provide:
+            - query: The search terms
+            - api_key: The SerpApi API key (will be provided by the client)
+            - location: (optional) for location-specific results
+            - num_results: (optional) number of results to return (default 5)
+            
+            Always use the SerpApiSearch tool to get current information for: {query}. 
+            
+            Provide comprehensive and up-to-date search results."""
+        }
+    ]
+ 
+if __name__ == "__main__":
+    mcp.run(transport="sse")
