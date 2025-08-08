@@ -298,11 +298,62 @@ class ChatSnowflakeCortex(BaseChatModel):
 
             print("🔄 Executing Snowflake Cortex query...")
 
-            # Execute SQL
-            self.session.sql(f"USE WAREHOUSE {self.session.get_current_warehouse()};").collect()
-            l_rows = self.session.sql(sql_stmt).collect()
+            try:
+                # Execute SQL with proper error handling
+                self.session.sql(f"USE WAREHOUSE {self.session.get_current_warehouse()};").collect()
+                
+                print(f"🔍 Executing SQL query...")
+                l_rows = self.session.sql(sql_stmt).collect()
+                
+                print("✅ Snowflake query executed successfully")
 
-            print("✅ Snowflake query executed successfully")
+            except Exception as sql_error:
+                print(f"❌ SQL execution failed: {sql_error}")
+                
+                # Try alternative SQL format with different escaping
+                print("🔄 Trying alternative SQL format...")
+                
+                try:
+                    # Alternative: Use TO_JSON and PARSE_JSON with different escaping
+                    message_json_alt = json.dumps(message_dicts).replace("'", "''")
+                    options_json_alt = json.dumps(options).replace("'", "''")
+                    
+                    alt_sql_stmt = f"""
+                        select snowflake.cortex.{self.cortex_function}(
+                            '{self.model}',
+                            parse_json('{message_json_alt}'),
+                            parse_json('{options_json_alt}')
+                        ) as llm_stream_response;
+                    """
+                    
+                    l_rows = self.session.sql(alt_sql_stmt).collect()
+                    print("✅ Alternative SQL format worked")
+                    
+                except Exception as alt_error:
+                    print(f"❌ Alternative SQL also failed: {alt_error}")
+                    
+                    # Final fallback: Minimal query to test basic connectivity
+                    try:
+                        minimal_messages = [{"role": "user", "content": "Hello"}]
+                        minimal_options = {"temperature": 0.7}
+                        
+                        minimal_msg_json = json.dumps(minimal_messages).replace("'", "''")
+                        minimal_opt_json = json.dumps(minimal_options).replace("'", "''")
+                        
+                        minimal_sql = f"""
+                            select snowflake.cortex.{self.cortex_function}(
+                                '{self.model}',
+                                parse_json('{minimal_msg_json}'),
+                                parse_json('{minimal_opt_json}')
+                            ) as llm_stream_response;
+                        """
+                        
+                        l_rows = self.session.sql(minimal_sql).collect()
+                        print("✅ Minimal query worked - issue was with message complexity")
+                        
+                    except Exception as minimal_error:
+                        print(f"❌ Even minimal query failed: {minimal_error}")
+                        raise sql_error  # Raise the original error
 
             # Parse response
             response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
