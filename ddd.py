@@ -373,7 +373,7 @@ else:
     # Enhanced prompt type selection with updated options - Updated with Brave Search
     prompt_type = st.sidebar.radio(
         "🎯 Select Expert Mode", 
-        ["Calculator", "HEDIS Expert", "Weather", "Web Search", "Local Search", "General AI"],  # Updated
+        ["Calculator", "HEDIS Expert", "Weather", "Brave Web Search", "Local Search", "General AI"],  # Updated
         help="Choose the type of expert assistance you need"
     )
     
@@ -382,8 +382,8 @@ else:
         "Calculator": "calculator-prompt",
         "HEDIS Expert": "hedis-prompt",
         "Weather": "weather-prompt",
-        "Web Search": "brave-web-search-prompt",  # Updated
-        "Local Search": "brave-local-search-prompt",  # Updated
+        "Brave Web Search": "brave-web-search-prompt",  # New dedicated Brave Web Search
+        "Local Search": "brave-local-search-prompt",
         "General AI": None
     }
 
@@ -404,19 +404,25 @@ else:
             "What's the weather like in Sydney, Australia?",
             "Get current conditions for Paris, France"
         ],
-        "Web Search": [  # Updated with Brave Search examples
+        "Brave Web Search": [  # New dedicated Brave Web Search examples
             "latest AI developments 2025",
             "current renewable energy trends", 
             "recent space exploration missions",
             "today's technology news",
-            "breaking news artificial intelligence"
+            "breaking news artificial intelligence",
+            "newest electric vehicle models",
+            "latest cryptocurrency updates",
+            "recent climate change research"
         ],
-        "Local Search": [  # New Local Search examples
+        "Local Search": [  # Local Search examples
             "pizza restaurants near Central Park",
             "coffee shops in Manhattan",
             "gas stations in San Francisco",
             "Italian restaurants downtown",
-            "best sushi near Times Square"
+            "best sushi near Times Square",
+            "pharmacies open late",
+            "hotels near airport",
+            "auto repair shops nearby"
         ],
         "General AI": [
             "Explain quantum computing in simple terms",
@@ -492,7 +498,7 @@ else:
             • "Tokyo weather forecast"
             """)
     
-    elif prompt_type == "Web Search":  # Updated
+    elif prompt_type == "Brave Web Search":  # New dedicated section
         with st.sidebar.expander("🔍 Brave Web Search Tips", expanded=False):
             st.info("""
             **Brave Web Search:**
@@ -501,15 +507,18 @@ else:
             • Independent search engine
             • Latest news and developments
             • Real-time information
+            • Global web content coverage
             
             **Best for:**
             • Breaking news and current events
             • Latest research and findings
             • Recent technological developments
             • Current trends and analysis
+            • Product reviews and comparisons
+            • Academic and scientific content
             """)
     
-    elif prompt_type == "Local Search":  # New
+    elif prompt_type == "Local Search":  # Updated
         with st.sidebar.expander("📍 Brave Local Search Tips", expanded=False):
             st.info("""
             **Brave Local Search:**
@@ -518,12 +527,15 @@ else:
             • Ratings and reviews
             • Contact details and hours
             • Address and location data
+            • Maps integration support
             
             **Best for:**
             • Restaurants and dining
             • Services and shopping
             • Entertainment venues
             • Local business directories
+            • Emergency services
+            • Healthcare facilities
             """)
 
     # Chat input handling with enhanced processing
@@ -694,7 +706,7 @@ else:
                         error_message += "- Verify the MCP server is running\n"
                         error_message += "- Check if the URL is correct\n"
                         error_message += "- Ensure no firewall is blocking the connection\n"
-                    elif not brave_api_key and prompt_type in ["Web Search", "Local Search"]:
+                    elif not brave_api_key and prompt_type in ["Brave Web Search", "Local Search"]:  # Updated
                         error_message += "**🔧 Brave Search Issues:**\n"
                         error_message += "- Configure Brave API key in the sidebar\n"
                         error_message += "- Click 'Configure API Key' to send it to server\n"
@@ -855,8 +867,8 @@ else:
         quick_queries = {
             "🧮": "Calculate 25 * 4 + 10",
             "🌤️": "Weather in New York", 
-            "🔍": "Latest AI news 2025",  # Updated for Brave Search
-            "📍": "Pizza near Times Square",  # New for Local Search
+            "🔍": "Latest AI news 2025",  # Brave Web Search
+            "📍": "Pizza near Times Square",  # Local Search
             "🏥": "What is BCS measure?"
         }
         
@@ -951,7 +963,7 @@ if st.sidebar.checkbox("🐛 Debug Mode", value=False):
     st.sidebar.markdown("### 🔍 Prompt Mapping")
     for mode, prompt_name in prompt_map.items():
         status_emoji = "✅" if prompt_name else "❌"
-        if mode in ["Web Search", "Local Search"]:
+        if mode in ["Brave Web Search", "Local Search"]:  # Updated
             status_emoji += " 🔍"  # Indicate Brave Search
         st.sidebar.write(f"{status_emoji} {mode}: `{prompt_name}`")
     
