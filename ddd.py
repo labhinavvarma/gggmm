@@ -1,717 +1,309 @@
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-import httpx
-from dataclasses import dataclass
-from urllib.parse import urlparse
-from pathlib import Path
+import streamlit as st
+import asyncio
+#import nest_asyncio
 import json
-import snowflake.connector
-import requests
-import os
-from loguru import logger
-import logging
-from snowflake.connector import SnowflakeConnection
-from ReduceReuseRecycleGENAI.snowflake import snowflake_conn
-from snowflake.connector.errors import DatabaseError
-from snowflake.core import Root
-from typing import Optional, List, Dict, Any
-from fastapi import (
- HTTPException,
- status,
-)
+import yaml
+import pkg_resources
+import asyncio
  
-from mcp.server.fastmcp.prompts.base import Message
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.fastmcp.prompts import Prompt
-import mcp.types as types
-from functools import partial
+from mcp.client.sse import sse_client
+from mcp import ClientSession
+ 
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from dependencies import SnowFlakeConnector
+from llmobjectwrapper import ChatSnowflakeCortex
+from snowflake.snowpark import Session
+from mcp.client.sse import sse_client
+from mcp import ClientSession
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
-# SerpApi imports - with complete fallback
-try:
-    from serpapi import GoogleSearch
-    SERPAPI_AVAILABLE = True
-except ImportError:
-    try:
-        import serpapi
-        GoogleSearch = serpapi.GoogleSearch
-        SERPAPI_AVAILABLE = True
-    except (ImportError, AttributeError):
+# Hardcoded SerpApi Key
+SERPAPI_API_KEY = "28009a3e8f74ab4680e232c4ed5ae4f0e5d1bf849d052100ce3f7f74be9d4e54"
+ 
+# Page config
+st.set_page_config(page_title="MCP DEMO")
+st.title("MCP DEMO")
+
+# Display SerpApi status in sidebar
+if SERPAPI_API_KEY:
+    st.sidebar.success("🔍 SerpApi Loaded Successfully")
+    st.sidebar.caption(f"Key: {SERPAPI_API_KEY[:8]}...{SERPAPI_API_KEY[-4:]}")
+else:
+    st.sidebar.error("❌ SerpApi Key Not Found")
+ 
+#nest_asyncio.apply()
+ 
+server_url = st.sidebar.text_input("MCP Server URL", "http://10.126.192.183:8001/sse")
+show_server_info = st.sidebar.checkbox("🛡 Show MCP Server Info", value=False)
+ 
+# === MOCK LLM ===
+def mock_llm_response(prompt_text: str) -> str:
+    return f"🤖 Mock LLM Response to: '{prompt_text}'"
+ 
+# === Server Info ===
+# --- Show Server Information ---
+if show_server_info:
+    async def fetch_mcp_info():
+        result = {"resources": [], "tools": [], "prompts": [], "yaml": [], "search": []}
         try:
-            from serpapi.google_search import GoogleSearch
-            SERPAPI_AVAILABLE = True
-        except ImportError:
-            # Complete fallback - create dummy class
-            class GoogleSearch:
-                def __init__(self, params):
-                    pass
-                def get_dict(self):
-                    return {"error": "SerpApi not available"}
-            
-            SERPAPI_AVAILABLE = False
-            logger.warning("SerpApi library not found. Install with: pip install google-search-results")
+            async with sse_client(url=server_url) as sse_connection:
+                async with ClientSession(*sse_connection) as session:
+                    await session.initialize()
  
+                    # --- Resources ---
+                    resources = await session.list_resources()
+                    if hasattr(resources, 'resources'):
+                        for r in resources.resources:
+                            result["resources"].append({"name": r.name})
+                   
+                    # --- Tools (filtered) ---
+                    tools = await session.list_tools()
+                    hidden_tools = {"add-frequent-questions", "add-prompts", "suggested_top_prompts"}
+                    if hasattr(tools, 'tools'):
+                        for t in tools.tools:
+                            if t.name not in hidden_tools:
+                                result["tools"].append({
+                                    "name": t.name,
+                                     
+                                })
  
-# Create a named server
-mcp = FastMCP("DataFlyWheel App")
+                    # --- Prompts ---
+                    prompts = await session.list_prompts()
+                    if hasattr(prompts, 'prompts'):
+                        for p in prompts.prompts:
+                            args = []
+                            if hasattr(p, 'arguments'):
+                                for arg in p.arguments:
+                                    args.append(f"{arg.name} ({'Required' if arg.required else 'Optional'}): {arg.description}")
+                            result["prompts"].append({
+                                "name": p.name,
+                                "description": getattr(p, 'description', ''),
+                                "args": args
+                            })
  
-@dataclass
-class AppContext:
-    conn : SnowflakeConnection
-    db: str
-    schema: str
-    host: str
+                    # --- YAML Resources ---
+                    try:
+                        yaml_content = await session.read_resource("schematiclayer://cortex_analyst/schematic_models/hedis_stage_full/list")
+                        if hasattr(yaml_content, 'contents'):
+                            for item in yaml_content.contents:
+                                if hasattr(item, 'text'):
+                                    parsed = yaml.safe_load(item.text)
+                                    result["yaml"].append(yaml.dump(parsed, sort_keys=False))
+                    except Exception as e:
+                        result["yaml"].append(f"YAML error: {e}")
  
+                    # --- Search Objects ---
+                    try:
+                        content = await session.read_resource("search://cortex_search/search_obj/list")
+                        if hasattr(content, 'contents'):
+                            for item in content.contents:
+                                if hasattr(item, 'text'):
+                                    objs = json.loads(item.text)
+                                    result["search"].extend(objs)
+                    except Exception as e:
+                        result["search"].append(f"Search error: {e}")
  
+        except Exception as e:
+            st.sidebar.error(f"❌ MCP Connection Error: {e}")
+        return result
  
+    mcp_data = asyncio.run(fetch_mcp_info())
  
+   
+    #--------------resource----------------------------
+     # Display Resources
+    with st.sidebar.expander("📦 Resources", expanded=False):
+         for r in mcp_data["resources"]:
  
+          # Match based on pattern inside the name
  
-#Stag name may need to be determined; requires code change
-#Resources; Have access to resources required for the server; Cortex Search; Cortex stage schematic config; stage area should be fully qualified name
-@mcp.resource(uri="schematiclayer://cortex_analyst/schematic_models/{stagename}/list",name="hedis_schematic_models",description="Hedis Schematic models")
-async def get_schematic_model(stagename: str):
-    """Cortex analyst scematic layer model, model is in yaml format"""
-    #ctx = mcp.get_context()
+              if "cortex_search/search_obj/list" in r["name"]:
  
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
+                   display_name = "Cortex Search"
+ 
+              else:
+ 
+                display_name = r["name"]
+ 
+              st.markdown(f"**{display_name}**")
+         # --- YAML Section ---
+    with st.sidebar.expander("Schematic Layer", expanded=False):
+        for y in mcp_data["yaml"]:
+            st.code(y, language="yaml")
+ 
+    # --- Tools Section (Filtered) ---
+    with st.sidebar.expander("🛠 Tools", expanded=False):
+        for t in mcp_data["tools"]:
+            st.markdown(f"**{t['name']}**")
+ 
+ # Display Prompts
+     # Display Prompts
+    with st.sidebar.expander("🧐 Prompts", expanded=False):
+       for p in mcp_data["prompts"]:
+        st.markdown(f"**{p['name']}**")
+else:
+    # Re-enable Snowflake and LLM chatbot features
+    @st.cache_resource
+    def get_snowflake_connection():
+        return SnowFlakeConnector.get_conn('aedl', '')
+ 
+    @st.cache_resource
+    def get_model():
+        sf_conn = get_snowflake_connection()
+        return ChatSnowflakeCortex(
+            model="claude-4-sonnet",
+            cortex_function="complete",
+            session=Session.builder.configs({"connection": sf_conn}).getOrCreate()
         )
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    cursor = conn.cursor()
-    snfw_model_list = cursor.execute("LIST @{db}.{schema}.{stagename}".format(db=db, schema=schema, stagename=stagename))
- 
-    return [stg_nm[0].split("/")[-1] for stg_nm in snfw_model_list if stg_nm[0].endswith('yaml')]
-
-@mcp.resource("search://cortex_search/search_obj/list")
-async def get_search_service():
-    """Cortex search service"""
- 
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    cursor = conn.cursor()
-    snfw_search_objs = cursor.execute("SHOW CORTEX SEARCH SERVICES IN SCHEMA {db}.{schema}".format(db=db, schema=schema))
-    result = [search_obj[1] for search_obj in snfw_search_objs.fetchall()]
- 
-    return result
- 
-@mcp.resource("genaiplatform://{aplctn_cd}/frequent_questions/{user_context}")
-async def frequent_questions(aplctn_cd: str, user_context: str) -> List[str]:
-    resource_name = aplctn_cd + "_freq_questions.json"
-    freq_questions = json.load(open(resource_name))
-    aplcn_question = freq_questions.get(aplctn_cd)
-    return [rec["prompt"] for rec in aplcn_question if rec["user_context"] == user_context]
- 
-@mcp.resource("genaiplatform://{aplctn_cd}/prompts/{prompt_name}")
-async def prompt_templates(aplctn_cd: str, prompt_name: str) -> List[str]:
-    resource_name = aplctn_cd + "_prompts.json"
-    prompt_data = json.load(open(resource_name))
-    aplcn_prompts = prompt_data.get(aplctn_cd)
-    return [rec["content"] for rec in aplcn_prompts if rec["prompt_name"] == prompt_name]
- 
-@mcp.tool(
-        name="add-frequent-questions"
-       ,description="""
-        Tool to add frequent questions to MCP server
- 
-        Example inputs:
-        {
-           "uri"
-        }
- 
-        Args:
-               uri (str):  text to be passed
-               questions (list):
-               [
-                 {
-                   "user_context" (str): "User context for the prompt"
-                   "prompt" (str): "prompt"
- 
-                 }
-               ]
-        """
-)
-async def add_frequent_questions(ctx: Context,uri: str,questions: list) -> list:
-    #Parse and extract aplctn_cd and user_context (urllib)
-    url_path = urlparse(uri)
-    aplctn_cd = url_path.netloc
-    user_context = Path(url_path.path).name
-    file_data = {}
-    file_name = aplctn_cd + "_freq_questions.json"
-    if Path(file_name).exists():
-        file_data  = json.load(open(file_name,'r'))
-        file_data[aplctn_cd].extend(questions)
-    else:
-        file_data[aplctn_cd] =  questions
- 
-    index_dict = {
-        user_context: set()
-    }
-    result = []
-    #Remove duplicates
-    for elm in file_data[aplctn_cd]:
-        if elm["user_context"] == user_context and elm['prompt'] not in index_dict[user_context]:
-            result.append(elm)
-            index_dict[user_context].add(elm['prompt'])
- 
-    file_data[aplctn_cd] = result
- 
-    file = open(file_name,'w')
-    file.write(json.dumps(file_data))
- 
-    return file_data[aplctn_cd]
- 
-@mcp.tool(
-        name="add-prompts"
-       ,description="""
-        Tool to add prompts to MCP server
- 
-        Example inputs:
-        {
-           ""
-        }
- 
-        Args:
-               uri (str):  text to be passed
-               prompts (dict):
-                 {
-                   "prompt_name" (str): "Unique name assigned to prompt for a application"
-                   "description" (str): "Prompt description"
-                   "content" (str): "Prompt content"
- 
-                 }
-        """
-)
-async def add_prompts(ctx: Context,uri: str,prompt: dict) -> dict:
- 
-    #Parse and extract aplctn_cd and user_context (urllib)
-    url_path = urlparse(uri)
-    aplctn_cd = url_path.netloc
-    prompt_name = Path(url_path.path).name
-    #Before adding the prompt to file add to the server
-    ##Add prompts to server
- 
-    def func1(query: str ):
-        return [
-            {
-                "role": "user",
-                "content": prompt["content"] + f"\n  {query}"
-            }
-        ]
-    ctx.fastmcp.add_prompt(
-        Prompt.from_function(
-            func1,name = prompt["prompt_name"],description=prompt["description"])
-    )
- 
-    file_data = {}
-    file_name = aplctn_cd + "_prompts.json"
-    if Path(file_name).exists():
-        file = open(file_name,'r')
-        file_data  = json.load(file)
-        file_data[aplctn_cd].append(prompt)
-    else:
- 
-        file_data[aplctn_cd] =  [prompt]
- 
-    file = open(file_name,'w')
-    file.write(json.dumps(file_data))
- 
-    return prompt
- 
- 
- 
-#Tools; corex Analyst; Cortex Search; Cortex Complete
- 
-@mcp.tool(
-        name="DFWAnalyst"
-       ,description="""
-        Coneverts text to valid SQL which can be executed on HEDIS value sets and code sets.
- 
-        Example inputs:
-           What are the codes in <some value> Value Set?
- 
-        Returns valid sql to retive data from underlying value sets and code sets.
- 
-        Args:
-               prompt (str):  text to be passed
- 
-        """
-)
-async def dfw_text2sql(prompt:str,ctx: Context) -> dict:
-    """Tool to convert natural language text to snowflake sql for hedis system, text should be passed as 'prompt' input perameter"""
- 
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
- 
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    host = HOST
-    stage_name = "hedis_stage_full"
-    file_name = "hedis_semantic_model_complete.yaml"
-    request_body = {
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        "semantic_model_file": f"@{db}.{schema}.{stage_name}/{file_name}",
-    }
- 
-    token = conn.rest.token
-    resp = requests.post(
-        url=f"https://{host}/api/v2/cortex/analyst/message",
-        json=request_body,
-        headers={
-            "Authorization": f'Snowflake Token="{token}"',
-            "Content-Type": "application/json",
-        },
-    )
-    return resp.json()
-
-#Need to change the type of serch, implimented in the below code; Revisit
-@mcp.tool(
-        name="DFWSearch"
-       ,description= """
-        Searches HEDIS measure specification documents.
- 
-        Example inputs:
-        What is the age criteria for  BCS Measure ?
-        What is EED Measure in HEDIS?
-        Describe COA Measure?
-        What LOB is COA measure scoped under?
- 
-        Returns information utilizing HEDIS measure speficification documents.
- 
-        Args:
-              query (str): text to be passed
-       """
-)
-async def dfw_search(ctx: Context,query: str):
-    """Tool to provide search againest HEDIS business documents for the year 2024, search string should be provided as 'query' perameter"""
- 
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-           logger,
-           aplctn_cd="aedl",
-           env="preprod",
-           region_name="us-east-1",
-           warehouse_size_suffix="",
-           prefix=""
-        )
- 
-    #conn = ctx.request_context.lifespan_context.conn
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    search_service = 'CS_HEDIS_FULL_2024'
-    columns = ['chunk']
-    limit = 2
- 
-    root = Root(conn)
-    search_service = root.databases[db].schemas[schema].cortex_search_services[search_service]
-    response = search_service.search(
-        query=query,
-        columns=columns,
-        limit=limit
-    )
-    return response.to_json()
-
-@mcp.tool(
-        name="SerpApiSearch"
-       ,description="""
-        Performs web searches using SerpApi and returns raw search results for LLM interpretation.
-        
-        Uses the SerpApi /search endpoint to fetch current Google search results.
-        Automatically applies appropriate filters for current information when needed.
- 
-        Example inputs:
-        "who is the current US president"
-        "latest AI news" 
-        "weather in New York"
-        "recent healthcare developments"
- 
-        Returns raw search results that the LLM can interpret and answer from.
-        Use debug_raw=true to see the complete JSON response from SerpApi.
- 
-        Args:
-               query (str): Search query text
-               api_key (str): SerpApi API key
-               location (str): Optional location for localized results (e.g., "Austin, TX")
-               num_results (int): Number of results to return (default: 5, max: 10)
-               debug_raw (bool): If true, returns complete raw JSON response from SerpApi (default: false)
-        """
-)
-async def serpapi_search(query: str, api_key: str, location: str = "", num_results: int = 5, debug_raw: bool = False) -> str:
-    """Tool to perform web searches using SerpApi, returns raw search results for LLM interpretation"""
     
-    if not SERPAPI_AVAILABLE:
-        return "Error: SerpApi library is not installed. Please install with: pip install google-search-results"
+    # Updated prompt types to include Web Search
+    prompt_type = st.sidebar.radio("Select Prompt Type", ["Calculator", "HEDIS Expert", "Weather", "Web Search", "No Context"])
     
-    if not api_key or not api_key.strip():
-        return "Error: SerpApi API key is required. Please provide a valid SERPAPI_API_KEY."
-    
-    # Limit number of results
-    num_results = min(max(num_results, 1), 10)
-    
-    # Base parameters for SerpApi /search endpoint
-    params = {
-        "api_key": api_key.strip(),
-        "engine": "google",
-        "q": query,
-        "num": num_results,
-        "no_cache": "true",  # Force fresh results
-        "gl": "us",          # Search from US
-        "hl": "en",          # English language
-    }
-    
-    # Add location if provided
-    if location.strip():
-        params["location"] = location.strip()
-    
-    # Auto-detect if query needs recent information and apply filters
-    current_keywords = ["current", "latest", "recent", "today", "2025", "now", "who is", "what is"]
-    news_keywords = ["news", "breaking", "election", "president", "government", "politics"]
-    
-    needs_recent = any(keyword in query.lower() for keyword in current_keywords)
-    needs_news = any(keyword in query.lower() for keyword in news_keywords)
-    
-    if needs_recent:
-        params["tbs"] = "qdr:m"  # Recent results (last month)
-    
-    if needs_news:
-        params["tbm"] = "nws"  # News search
-    
-    try:
-        # Call SerpApi /search endpoint
-        search = GoogleSearch(params)
-        results = search.get_dict()
-        
-        # If debug_raw is True, return the complete raw JSON response
+    # Show additional info for Web Search
+    if prompt_type == "Web Search":
+        st.sidebar.info("🌐 Web Search uses SerpApi for real-time results")
+        st.sidebar.caption("💡 Tip: For current events, include '2025', 'current', 'latest', or 'recent' in your query for best results")
+        debug_raw = st.sidebar.checkbox("🔧 Show Raw SerpApi JSON (Debug)", value=False)
         if debug_raw:
-            import json
-            return f"RAW SERPAPI RESPONSE:\n\n{json.dumps(results, indent=2, ensure_ascii=False)}"
-        
-        # Determine which results to use
-        if "news_results" in results and results["news_results"]:
-            search_results = results["news_results"]
-            source_type = "news"
-        elif "organic_results" in results and results["organic_results"]:
-            search_results = results["organic_results"] 
-            source_type = "web"
-        else:
-            # If no standard results, show what keys are available
-            available_keys = list(results.keys())
-            return f"No standard search results found.\n\nAvailable data keys in response: {available_keys}\n\nUse debug_raw=true to see full response."
-        
-        # Format raw results for LLM interpretation
-        formatted_output = f"Search Results ({source_type}):\n\n"
-        
-        for i, result in enumerate(search_results[:num_results], 1):
-            title = result.get("title", "No title")
-            snippet = result.get("snippet", "No description available")
-            link = result.get("link", "No link")
-            
-            # Include date if available (common in news results)
-            date = result.get("date", "")
-            date_str = f" | Date: {date}" if date else ""
-            
-            # Include position if available
-            position = result.get("position", "")
-            pos_str = f" | Position: {position}" if position else ""
-            
-            formatted_output += f"{i}. {title}{date_str}{pos_str}\n"
-            formatted_output += f"   {snippet}\n"
-            formatted_output += f"   Source: {link}\n\n"
-        
-        # Add search metadata
-        search_info = ""
-        if params.get("tbm") == "nws":
-            search_info += "Note: Used Google News search for current information.\n"
-        if params.get("tbs"):
-            search_info += "Note: Filtered for recent results.\n"
-        
-        # Add information about the raw response structure
-        total_results = results.get("search_information", {}).get("total_results", "Unknown")
-        search_info += f"Total results available: {total_results}\n"
-        search_info += f"Available data sections: {list(results.keys())}\n"
-        search_info += "Use debug_raw=true parameter to see complete raw JSON response.\n"
-            
-        return formatted_output + search_info
-        
-    except Exception as e:
-        logger.error(f"SerpApi search error: {str(e)}")
-        if "429" in str(e):
-            return "Error: Rate limit exceeded. Please try again later."
-        elif "401" in str(e):
-            return "Error: Invalid API key."
-        else:
-            return f"Search error: {str(e)}"
- 
-@mcp.tool(
-        name="calculator",
-        description="""
-        Evaluates a basic arithmetic expression.
-        Supports: +, -, *, /, parentheses, decimals.
- 
-        Example inputs:
-        3+4/5
-        3.0/6*8
- 
-        Returns decimal result
- 
-        Args:
-             expression (str): Arthamatic expression input
- 
-        """
-)
-def calculate(expression: str) -> str:
-    """
-    Evaluates a basic arithmetic expression.
-    Supports: +, -, *, /, parentheses, decimals.
-    """
-    print(f" calculate() called with expression: {expression}", flush=True)
-    try:
-        allowed_chars = "0123456789+-*/(). "
-        if any(char not in allowed_chars for char in expression):
-            return " Invalid characters in expression."
- 
-        result = eval(expression)
-        return f" Result: {result}"
-    except Exception as e:
-        print(" Error in calculate:", str(e), flush=True)
-        return f" Error: {str(e)}"
- 
-#This may required to be integrated in main agent
-@mcp.tool(
-        name="suggested_top_prompts",
-        description="""
-        Suggests requested number of prompts with given context.
- 
-        Example Input:
-        {
-          top_n_suggestions: 3,
-          context: "Initialization" | "The age criteria for the BCS (Breast Cancer Screening) measure is 50-74 years of age."
-          aplctn_cd: "hedis"
-        }
- 
-        Returns List of string values.
- 
-        Args:
-            top_n_suggestions (int): how many suggestions to be generated.
-            context (str): context that need to be used for the promt suggestions.
-            aplctn_cd (str): application code.
-        """
-)
-async def question_suggestions(ctx: Context,aplctn_cd: str, app_lvl_prefix: str, session_id: str, top_n: int = 3,context: str="Initialization",llm_flg: bool = False):
-    """Tool to suggest aditional prompts with in the provided context, context should be passed as 'context' input perameter"""
- 
-    if  not llm_flg:
-        return ctx.read_resource(f"genaiplatform://{aplctn_cd}/frequent_questions/{context}")
- 
-    try:
-        sf_conn = SnowFlakeConnector.get_conn(
-            aplctn_cd,
-            app_lvl_prefix,
-            session_id,
-        )
-    except DatabaseError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User not authorized to resources"
-        )
-    clnt = httpx.AsyncClient(verify=False)
- 
-    request_body = {
-        "model": "llama3.1-70b-elevance",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"""
-                You are an expert in suggesting hypothetical questions.
-                Suggest a list of {top_n} hypothetical questions that the below context could be used to answer:
- 
-                {context}
-                Return List with hypothetical questions
-                """
-            }
-        ]
+            st.sidebar.warning("⚠️ Debug mode will show complete raw JSON response from SerpApi")
+    else:
+        debug_raw = False
+    
+    # Updated prompt map to include serpapi-prompt
+    prompt_map = {
+        "Calculator": "caleculator-promt",
+        "HEDIS Expert": "hedis-prompt",
+        "Weather": "weather-prompt",
+        "Web Search": "serpapi-prompt",
+        "No Context": None
     }
  
-    headers = {
-        "Authorization": f'Snowflake Token="{sf_conn.rest.token}"',
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "method":"cortex",
+    # Updated examples to include Web Search examples
+    examples = {
+        "Calculator": ["Caleculate the expression (4+5)/2.0", "Caleculate the math function sqrt(16) + 7", "Caleculate the expression 3^4 - 12"],
+        "HEDIS Expert": [],
+        "Weather": [
+            "What is the present weather in Richmond?",
+            "What's the weather forecast for Atlanta?",
+            "Is it raining in New York City today?"
+        ],
+        "Web Search": [
+            "latest technology news",
+            "recent AI developments", 
+            "current healthcare trends",
+            "breaking news today",
+            "who is the current US president",
+            "latest business updates"
+        ],
+        "No Context": ["Who won the world cup in 2022?", "Summarize climate change impact on oceans"]
     }
  
-    url = "https://jib90126.us-east-1.privatelink.snowflakecomputing.com/api/v2/cortex/inference:complete"
+    if prompt_type == "HEDIS Expert":
+        try:
+            async def fetch_hedis_examples():
+                async with sse_client(url=server_url) as sse_connection:
+                    async with ClientSession(*sse_connection) as session:
+                        await session.initialize()
+                        content = await session.read_resource("genaiplatform://hedis/frequent_questions/Initialization")
+                        if hasattr(content, "contents"):
+                            for item in content.contents:
+                                if hasattr(item, "text"):
+                                    examples["HEDIS Expert"].extend(json.loads(item.text))
+   
+            #examples["HEDIS Expert"] = asyncio.run(fetch_hedis_examples())
+            asyncio.run(fetch_hedis_examples())
+        except Exception as e:
+            examples["HEDIS Expert"] = [f"⚠️ Failed to load examples: {e}"]
  
-    response_text = []
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
  
-    async with clnt.stream('POST', url, headers=headers, json=request_body) as response:
-        if response.is_client_error:
-            error_message = await response.aread()
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_message.decode("utf-8")
-            )
-        if response.is_server_error:
-            error_message = await response.aread()
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_message.decode("utf-8")
-            )
-        # Stream the response content
-        async for result_chunk in response.aiter_bytes():
-            for elem in result_chunk.split(b'\n\n'):
-                if b'content' in elem:  # Check for data presence
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
  
-                    chunk_dict = json.loads(elem.replace(b'data: ', b''))
-                    print(chunk_dict)
-                    full_response = chunk_dict['choices'][0]['delta']['text']
-                    full_response = full_response
-                    response_text.append(full_response)
+    with st.sidebar.expander("Example Queries", expanded=True):
+        for example in examples[prompt_type]:
+            if st.button(example, key=example):
+                st.session_state.query_input = example
  
-    return json.loads(response_text)
+    if query := st.chat_input("Type your query here...") or  "query_input" in st.session_state:
  
-@mcp.tool()
-async def get_weather(place: str) -> str:
-    """
-    Get weather forecast for a place (e.g., 'New York') without needing an API key.
-    """
-    print(f" get_weather() called for location: {place}", flush=True)
- 
-    try:
-        # Step 1: Get coordinates using Nominatim (no key needed)
-        nominatim_url = f"https://nominatim.openstreetmap.org/search?q={place}&format=json&limit=1&countrycodes=us"
-        response = requests.get(nominatim_url, headers={"User-Agent": "MCP Weather Tool"})
-        response.raise_for_status()
-        data = response.json()
- 
-        if not data:
-            return f" Could not find location: {place}. Please try a more specific city name."
- 
-        latitude = data[0]["lat"]
-        longitude = data[0]["lon"]
-        display_name = data[0].get("display_name", place)
-        print(f" Found coordinates: {latitude}, {longitude} for {display_name}", flush=True)
- 
-        # Step 2: Use NWS API to get forecast
-        nws_url = f"https://api.weather.gov/points/{latitude},{longitude}"
-        headers = {"User-Agent": "MCP Weather Tool"}
-        points_resp = requests.get(nws_url, headers=headers)
+        if "query_input" in st.session_state:
+            query = st.session_state.query_input
+            del st.session_state.query_input
        
-        if points_resp.status_code == 404:
-            return f" Weather service not available for {place}. The National Weather Service only covers US locations."
+        with st.chat_message("user"):
+            st.markdown(query,unsafe_allow_html=True)
        
-        points_resp.raise_for_status()
-        points_data = points_resp.json()
- 
-        forecast_url = points_data["properties"]["forecast"]
-        city = points_data["properties"]["relativeLocation"]["properties"]["city"]
-        state = points_data["properties"]["relativeLocation"]["properties"]["state"]
- 
-        forecast_resp = requests.get(forecast_url, headers=headers)
-        forecast_resp.raise_for_status()
-        forecast_data = forecast_resp.json()
- 
-        period = forecast_data["properties"]["periods"][0]
-        return (
-            f" Weather for {city}, {state}:\n"
-            f" - {period['name']}\n"
-            f" - Temp: {period['temperature']}°{period['temperatureUnit']}\n"
-            f" - Conditions: {period['shortForecast']}\n"
-            f" - Wind: {period['windSpeed']} {period['windDirection']}\n"
-            f" - Forecast: {period['detailedForecast']}"
-        )
- 
-    except Exception as e:
-        print(" Error:", str(e), flush=True)
-        return f" Error fetching weather: {str(e)}"
- 
-@mcp.prompt(
-        name="hedis-prompt",
-        description="HEDIS Expert"
-)
-async def hedis_prompt(query: str)-> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are expert in HEDIS system, HEDIS is a set of standardized measures that aim to improve healthcare quality by promoting accountability and transparency.You are provided with below tools: 1) DFWAnalyst - Generates SQL to retrive information for hedis codes and value sets. 2) DFWSearch -  Provides search capability againest HEDIS measures for measurement year.You will respond with the results returned from right tool. {query}"""
-        }
-    ]
- 
-@mcp.prompt(
-        name="caleculator-promt",
-        description="Calculator"
-)
-async def caleculator_prompt(query: str)-> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are expert in performing arthametic operations.You are provided with the tool calculator to verify the results.You will respond with the results after verifying with the tool result. {query} """
-        }
-    ]
+        st.session_state.messages.append({"role": "user", "content": query})
+   
+        async def process_query(query_text):
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                message_placeholder.text("Processing...")
+                try:
+                    client = MultiServerMCPClient(
+                        {"DataFlyWheelServer": {"url": server_url, "transport": "sse"}}
+                    )
+                       
+                    model = get_model()
+                    agent = create_react_agent(model=model, tools=await client.get_tools())
+                    prompt_name = prompt_map[prompt_type]
+                    
+                    # If using Web Search, modify the prompt to include debug info if enabled
+                    if prompt_type == "Web Search":
+                        debug_instruction = ""
+                        if debug_raw:
+                            debug_instruction = "\n\nIMPORTANT: Use debug_raw=true parameter to see the raw SerpApi JSON response for debugging."
+                        
+                        prompt_from_server = [
+                            {
+                                "role": "user",
+                                "content": f"""You are a web search expert. Use the SerpApiSearch tool to find current information and then provide a clear answer based on what you find in the search results.
 
-@mcp.prompt(
-    name="weather-prompt",
-    description="Weather Expert"
-)
-async def weather_prompt(query: str)-> List[Message]:
-    """Weather expert who intakes the place as input and returns the present weather"""
-    return [
-        {
-            "role": "user",
-            "content": f"You are a weather expert. You have been provided with `get_weather` tool to get up to date weather information for: {query}. Always use the tool first."
-        }
-    ]
+                                Steps:
+                                1. Use SerpApiSearch to search for: {query_text}
+                                2. Read through the search results carefully  
+                                3. Provide a clear, accurate answer based on what the search results show
+                                4. Cite the sources when providing information
 
-@mcp.prompt(
-        name="serpapi-prompt",
-        description="Web Search Expert"
-)
-async def serpapi_prompt(query: str)-> List[Message]:
-    """Web search expert who uses SerpApi to get current information and interprets the results"""
-    return [
-        {
-            "role": "user", 
-            "content": f"""You are a web search expert. Use the SerpApiSearch tool to find current information and then provide a clear answer based on what you find in the search results.
+                                The SerpApiSearch tool will:
+                                - Return raw search results from Google
+                                - Automatically apply recent filters for current events
+                                - Use news search when appropriate
+                                - Provide fresh, non-cached results
+                                
+                                Parameters to use:
+                                - query: "{query_text}"
+                                - api_key: "{SERPAPI_API_KEY}"
+                                - debug_raw: {"true" if debug_raw else "false"}
 
-            Steps:
-            1. Use SerpApiSearch to search for: {query}
-            2. Read through the search results carefully
-            3. Provide a clear, accurate answer based on what the search results show
-            4. Cite the sources when providing information
-
-            The SerpApiSearch tool will:
-            - Return raw search results from Google
-            - Automatically apply recent filters for current events
-            - Use news search when appropriate
-            - Provide fresh, non-cached results
-
-            Important: Base your answer ONLY on what the search results actually show. Do not make assumptions or add information not found in the search results."""
-        }
-    ]
- 
-if __name__ == "__main__":
-    mcp.run(transport="sse")
+                                Important: Base your answer ONLY on what the search results actually show. Do not make assumptions or add information not found in the search results.{debug_instruction}"""
+                            }
+                        ]
+                    elif prompt_name == None:
+                       prompt_from_server = [{"role": "user", "content": query_text}]
+                    else:  
+                        prompt_from_server = await client.get_prompt(
+                            server_name="DataFlyWheelServer",
+                            prompt_name=prompt_name,
+                            arguments={"query": query_text}
+                        )
+                        
+                    response = await agent.ainvoke({"messages": prompt_from_server})
+                    result = list(response.values())[0][1].content
+                    message_placeholder.text(result)
+                    st.session_state.messages.append({"role": "assistant", "content": result})
+                except Exception as e:
+                    error_message = f"Error: {str(e)}"
+                    message_placeholder.text(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+   
+        if query:
+            asyncio.run(process_query(query))
+   
+        if st.sidebar.button("Clear Chat"):
+            st.session_state.messages = []
+            st.experimental_rerun()
