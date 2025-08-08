@@ -99,11 +99,10 @@ def try_direct_tool_call(query_text, prompt_type, server_url, message_placeholde
             
         message_placeholder.text(f"🔧 Calling {tool_name} directly...")
         
-        # Try multiple endpoints
+        # Try endpoints based on your router code
         endpoints_to_try = [
-            f"{base_url}/tool_call",
-            f"{base_url}/api/v1/tool_call",
-            f"{base_url}/api/tool_call"
+            f"{base_url}/tool_call",  # Direct from your router
+            f"{base_url}/api/v1/tool_call"  # If mounted with prefix
         ]
         
         payload = {
@@ -126,11 +125,15 @@ def try_direct_tool_call(query_text, prompt_type, server_url, message_placeholde
                         return f"🔧 **{tool_name}** (Direct Call):\n\n{result.get('result', 'No result')}"
                     else:
                         return f"❌ Tool Error: {result.get('error', 'Unknown error')}"
+                elif response.status_code == 404:
+                    continue  # Try next endpoint
+                else:
+                    return f"❌ HTTP {response.status_code}: {response.text[:200]}"
                         
             except Exception as e:
                 continue
                 
-        return f"❌ All direct tool call endpoints failed for {tool_name}"
+        return f"❌ All direct tool call endpoints failed for {tool_name}. Tried: {endpoints_to_try}"
         
     except Exception as e:
         return f"❌ Direct tool call error: {str(e)}"
@@ -149,15 +152,16 @@ if brave_api_key and st.sidebar.button("🔑 Configure API Key"):
             st.error("❌ Cannot connect to server")
             st.stop()
         
-        # Try to configure API key
+        # Try to configure API key - based on your router code
         success = False
         endpoints_to_try = [
-            f"{base_url}/api/v1/configure_brave_key",
-            f"{base_url}/configure_brave_key"
+            f"{base_url}/configure_brave_key",  # Direct from router
+            f"{base_url}/api/v1/configure_brave_key"  # If mounted with prefix
         ]
         
         for endpoint in endpoints_to_try:
             try:
+                st.info(f"Trying: {endpoint}")
                 response = requests.post(
                     endpoint,
                     json={"api_key": brave_api_key},
@@ -165,11 +169,16 @@ if brave_api_key and st.sidebar.button("🔑 Configure API Key"):
                     timeout=10
                 )
                 
+                st.info(f"Status: {response.status_code}")
+                
                 if response.status_code == 200:
                     st.success("✅ Brave API key configured successfully!")
                     success = True
                     break
-            except:
+                else:
+                    st.warning(f"HTTP {response.status_code}: {response.text[:100]}")
+            except Exception as e:
+                st.error(f"Error with {endpoint}: {e}")
                 continue
         
         if not success:
@@ -217,6 +226,61 @@ st.sidebar.markdown(f"**Server Status:** {status_indicator}")
 st.sidebar.markdown(f"**Brave API Key:** {'✅ Configured' if brave_api_key else '❌ Not configured'}")
 
 # Define debug mode early
+# Quick endpoint discovery
+if st.sidebar.button("🔍 Find Endpoints"):
+    with st.spinner("Discovering available endpoints..."):
+        base_url = server_url.replace('/sse', '')
+        st.info(f"Checking server: {base_url}")
+        
+        # Check common FastAPI paths
+        paths_to_check = [
+            "/",
+            "/docs", 
+            "/openapi.json",
+            "/health",
+            "/tools", 
+            "/tool_call",
+            "/configure_brave_key",
+            "/system_info",
+            "/api/v1/tool_call",
+            "/api/v1/configure_brave_key",
+            "/api/tool_call",
+            "/api/configure_brave_key"
+        ]
+        
+        working_endpoints = []
+        
+        for path in paths_to_check:
+            try:
+                response = requests.get(f"{base_url}{path}", timeout=3)
+                if response.status_code == 200:
+                    working_endpoints.append(f"✅ GET {path}")
+                elif response.status_code == 405:  # Method not allowed - but endpoint exists
+                    working_endpoints.append(f"🔄 POST {path} (Method not allowed for GET)")
+                elif response.status_code == 422:  # Unprocessable entity - but endpoint exists
+                    working_endpoints.append(f"🔄 POST {path} (Needs POST data)")
+            except:
+                pass
+        
+        if working_endpoints:
+            st.success("Found working endpoints:")
+            for endpoint in working_endpoints:
+                st.text(endpoint)
+        else:
+            st.error("No endpoints found - check server URL and ensure server is running")
+            
+        # Try to get OpenAPI docs if available
+        try:
+            docs_response = requests.get(f"{base_url}/openapi.json", timeout=5)
+            if docs_response.status_code == 200:
+                docs_data = docs_response.json()
+                if "paths" in docs_data:
+                    st.info("Available API paths from OpenAPI:")
+                    for path in docs_data["paths"].keys():
+                        st.text(f"📋 {path}")
+        except:
+            pass
+
 debug_mode = st.sidebar.checkbox("🐛 Debug Mode", value=False)
 
 if server_status["connected"] and server_status.get("tools_available") != "unknown":
