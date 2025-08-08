@@ -27,7 +27,7 @@ import mcp.types as types
 from functools import partial
 
 # SerpApi imports
-from serpapi import SerpApiSearch
+from serpapi import GoogleSearch
  
  
 # Create a named server
@@ -356,7 +356,7 @@ async def serpapi_search(query: str, api_key: str, location: str = "", num_resul
         params["location"] = location.strip()
     
     try:
-        search = SerpApiSearch(params)
+        search = GoogleSearch(params)
         data = search.get_dict()
         
         # Process organic search results if available
