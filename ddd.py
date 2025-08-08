@@ -14,8 +14,6 @@ from typing import (
 import asyncio
 import httpx
 import re
-import threading
-import concurrent.futures
 
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
@@ -40,7 +38,7 @@ from pydantic import Field, SecretStr, model_validator
 
 SUPPORTED_ROLES: List[str] = [
     "system",
-    "user", 
+    "user",
     "assistant",
 ]
 
@@ -77,13 +75,23 @@ def _truncate_at_stop_tokens(text: str, stop: Optional[List[str]]) -> str:
             text = text[:stop_token_idx]
     return text
 
-def _escape_sql_string(text: str) -> str:
-    """Properly escape string for SQL"""
-    # Replace single quotes with double single quotes for SQL
-    return text.replace("'", "''")
+def _escape_for_sql(text: str) -> str:
+    """Properly escape text for SQL string literals."""
+    # Replace single quotes with double single quotes (SQL standard)
+    escaped = text.replace("'", "''")
+    # Replace backslashes
+    escaped = escaped.replace("\\", "\\\\")
+    return escaped
+
+def _safe_json_for_sql(data: Any) -> str:
+    """Create a JSON string that's safe for SQL embedding."""
+    json_str = json.dumps(data, ensure_ascii=True)
+    # Escape for SQL
+    escaped = _escape_for_sql(json_str)
+    return escaped
 
 class ChatSnowflakeCortex(BaseChatModel):
-    """Fixed Snowflake Cortex Chat model with proper async and SQL handling"""
+    """Enhanced Snowflake Cortex Chat model with MCP tool integration and Brave Search"""
     
     # MCP server configuration
     mcp_server_url: str = Field(default="http://localhost:8081/sse")
@@ -138,21 +146,15 @@ class ChatSnowflakeCortex(BaseChatModel):
         **kwargs: Any,
     ) -> "ChatSnowflakeCortex":
         """Bind tool-like objects to this chat model."""
-        try:
-            formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
-            formatted_tools_dict = {
-                tool["name"]: tool for tool in formatted_tools if "name" in tool
-            }
-            self.test_tools.update(formatted_tools_dict)
+        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+        formatted_tools_dict = {
+            tool["name"]: tool for tool in formatted_tools if "name" in tool
+        }
+        self.test_tools.update(formatted_tools_dict)
 
-            print("Tools bound to chat model:")
-            print(f"Number of tools: {len(formatted_tools_dict)}")
-            for tool_name in formatted_tools_dict.keys():
-                print(f"- {tool_name}")
-            print("########################################")
-        except Exception as e:
-            print(f"Error binding tools: {e}")
-        
+        print(f"🔧 Tools bound to chat model: {len(formatted_tools_dict)} tools")
+        for tool_name in formatted_tools_dict.keys():
+            print(f"- {tool_name}")
         return self
 
     @model_validator(mode="before")
@@ -172,226 +174,195 @@ class ChatSnowflakeCortex(BaseChatModel):
         """Get the type of language model used by this chat model."""
         return f"snowflake-cortex-{self.model}"
 
-    def _call_mcp_tool_sync(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Synchronous wrapper for MCP tool calls"""
+    async def _call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Call MCP tool via HTTP API - FIXED ENDPOINT"""
         try:
             print(f"🔧 Calling MCP tool: {tool_name} with args: {arguments}")
             
-            # Create the MCP tool call request
             tool_call_data = {
                 "tool_name": tool_name,
                 "arguments": arguments
             }
             
-            # Use requests instead of httpx for synchronous call
-            import requests
-            
-            base_url = self.mcp_server_url.rstrip('/sse')
-            
-            response = requests.post(
-                f"{base_url}/tool_call",
-                json=tool_call_data,
-                headers={"Content-Type": "application/json"},
-                timeout=60
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                tool_result = result.get('result', 'No result returned')
-                print(f"✅ Tool {tool_name} executed successfully")
-                return str(tool_result)
-            else:
-                error_msg = f"Tool call failed: HTTP {response.status_code} - {response.text}"
-                print(f"❌ {error_msg}")
-                return error_msg
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                try:
+                    # FIX 1: Use correct endpoint path /api/v1/tool_call
+                    response = await client.post(
+                        f"{self.mcp_server_url.rstrip('/sse')}/api/v1/tool_call",
+                        json=tool_call_data,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('success'):
+                            return str(result.get('result', 'No result returned'))
+                        else:
+                            return f"Tool error: {result.get('error', 'Unknown error')}"
+                    else:
+                        print(f"❌ MCP tool call failed with status {response.status_code}: {response.text}")
+                        return await self._fallback_tool_call(tool_name, arguments)
+                        
+                except Exception as http_error:
+                    print(f"❌ HTTP request to MCP server failed: {http_error}")
+                    return await self._fallback_tool_call(tool_name, arguments)
                     
         except Exception as e:
-            error_msg = f"Error calling tool {tool_name}: {str(e)}"
-            print(f"❌ {error_msg}")
-            return error_msg
+            print(f"❌ MCP tool call error: {e}")
+            return f"Error calling tool {tool_name}: {str(e)}"
 
-    def _simple_tool_detection(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
-        """Simplified tool detection with basic patterns"""
+    async def _fallback_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Fallback method to call tools directly"""
+        try:
+            print(f"🔄 Using fallback for tool: {tool_name}")
+            
+            if tool_name == "calculator":
+                expression = arguments.get("expression", "")
+                if expression:
+                    try:
+                        # Enhanced calculator for compound interest
+                        if "compound" in expression.lower() or "^" in expression:
+                            # Use eval for mathematical expressions including exponents
+                            allowed_chars = "0123456789+-*/().^ "
+                            if all(char in allowed_chars for char in expression.replace("^", "**")):
+                                # Replace ^ with ** for Python exponentiation
+                                python_expr = expression.replace("^", "**")
+                                result = eval(python_expr)
+                                return f"Result: {result}"
+                            else:
+                                return "Invalid characters in expression."
+                        else:
+                            # Simple calculator
+                            allowed_chars = "0123456789+-*/(). "
+                            if all(char in allowed_chars for char in expression):
+                                result = eval(expression)
+                                return f"Result: {result}"
+                            else:
+                                return "Invalid characters in expression."
+                    except Exception as e:
+                        return f"Error: {str(e)}"
+                        
+            elif tool_name == "test_tool":
+                message = arguments.get("message", "test")
+                from datetime import datetime
+                current_time = datetime.now().isoformat()
+                return f"✅ SUCCESS: Test tool called with message '{message}' at {current_time}"
+                
+            elif tool_name == "get_weather":
+                place = arguments.get("place", "")
+                return f"🌤️ Weather service unavailable in fallback mode. Please check MCP server for location: {place}"
+                
+            # Brave Search tools - inform user that MCP server is needed
+            elif tool_name in ["brave_web_search", "brave_local_search"]:
+                search_type = "web" if tool_name == "brave_web_search" else "local"
+                query = arguments.get("query", "")
+                return f"🔍 Brave {search_type} search for '{query}' requires MCP server connection. Please check server status and try again."
+                
+            else:
+                return f"Tool {tool_name} not available in fallback mode. Please check MCP server connection."
+                
+        except Exception as e:
+            return f"Fallback tool call failed: {str(e)}"
+
+    def _detect_tool_calls(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
+        """Enhanced tool call detection - Updated for Brave Search"""
         tool_calls = []
         
-        # Combine all message content
-        all_content = " ".join([str(msg.content).lower() for msg in messages])
-        
-        try:
-            # Calculator detection - Enhanced patterns
-            calc_patterns = [
-                r"calculate\s+(.+)",
-                r"calculator.*(?:expression|calculate)[:\s]+(.+)",
-                r"use.*calculator.*[:\s]+(.+)",
-                r"compute\s+(.+)",
-                r"what.*is\s+(.+\d+.*[\+\-\*/].*\d+.*)",  # Match mathematical expressions
-                r"compound.*interest.*\$?(\d+).*(\d+\.?\d*)%.*(\d+).*year"  # Compound interest pattern
-            ]
+        for message in messages:
+            content = str(message.content)
+            content_lower = content.lower()
             
-            for pattern in calc_patterns:
-                match = re.search(pattern, all_content, re.IGNORECASE)
-                if match:
-                    if "compound" in pattern and "interest" in pattern:
-                        # Special handling for compound interest
-                        if "compound interest" in all_content:
-                            # Extract principal, rate, time from the message
-                            principal_match = re.search(r'\$?(\d+)', all_content)
-                            rate_match = re.search(r'(\d+\.?\d*)%', all_content)
-                            time_match = re.search(r'(\d+)\s*year', all_content)
+            # Enhanced detection patterns for Brave Search
+            tool_patterns = {
+                "calculator": [
+                    r"use.*calculator.*(?:calculate|expression|compute).*?[:=]\s*([^\n]+)",
+                    r"calculate\s*[:=]?\s*([^\n]+)",
+                    r"calculator.*tool.*(?:with|expression).*?[:=]\s*([^\n]+)",
+                    # Direct calculation requests
+                    r"(?:what\s+is|calculate|compute)\s+([0-9+\-*/().\s^]+)(?:\?|$)",
+                    # Compound interest detection
+                    r"compound.*interest.*\$?(\d+).*(\d+\.?\d*)%.*(\d+).*year",
+                ],
+                "get_weather": [
+                    r"(?:weather|temperature|forecast|conditions?).*in\s+([^?\n.]+)",
+                    r"(?:what.*weather|current.*weather|weather.*like).*in\s+([^?\n.]+)",
+                    r"(?:get|show|find).*weather.*(?:for|in)\s+([^?\n.]+)",
+                    r"weather.*(?:for|in)\s+([^?\n.]+)",
+                    r"weather\s+([a-zA-Z\s,]+)",
+                    r"current.*weather.*([a-zA-Z\s,]+)"
+                ],
+                "brave_web_search": [  # Updated from duckduckgo_search
+                    r"(?:search|find|look.*up).*(?:web|internet|online|news).*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:latest|recent|current).*(?:news|information|updates?).*about\s+([^?\n.]+)",
+                    r"web.*search.*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:find|search).*(?:latest|current|recent).*([^?\n.]+)",
+                    r"latest\s+([^?\n.]+)",  # "latest AI developments"
+                    r"search.*for\s+([^?\n.]+)",
+                ],
+                "brave_local_search": [  # New local search patterns
+                    r"find.*(?:restaurant|coffee|hotel|gas station|shop|store).*(?:near|in)\s+([^?\n.]+)",
+                    r"(?:restaurant|coffee|hotel|shop).*near\s+([^?\n.]+)",
+                    r"local.*search.*(?:for|about)\s+([^?\n.]+)",
+                ]
+            }
+            
+            # Check each tool pattern
+            for tool_name, patterns in tool_patterns.items():
+                for pattern in patterns:
+                    match = re.search(pattern, content, re.IGNORECASE | re.MULTILINE)
+                    if match:
+                        if tool_name == "calculator" and "compound.*interest" in pattern:
+                            # Special handling for compound interest
+                            principal_match = re.search(r'\$?(\d+)', content)
+                            rate_match = re.search(r'(\d+\.?\d*)%', content)
+                            time_match = re.search(r'(\d+)\s*year', content)
                             
                             if principal_match and rate_match and time_match:
                                 principal = principal_match.group(1)
                                 rate = rate_match.group(1)
                                 time = time_match.group(1)
-                                
-                                # Compound interest formula: A = P(1 + r/100)^t
-                                expression = f"{principal} * (1 + {rate}/100)^{time}"
-                                tool_calls.append({
-                                    "tool_name": "calculator",
-                                    "arguments": {"expression": expression}
-                                })
-                                break
-                    else:
-                        expression = match.group(1).strip().strip('"\'')
-                        tool_calls.append({
-                            "tool_name": "calculator",
-                            "arguments": {"expression": expression}
-                        })
-                        break
-            
-            # Weather detection
-            weather_patterns = [
-                r"weather.*(?:in|for|at)\s+([a-zA-Z\s,]+)",
-                r"get.*weather.*[:\s]+([a-zA-Z\s,]+)",
-                r"(?:temperature|forecast|climate).*(?:in|for|at)\s+([a-zA-Z\s,]+)",
-                r"current.*weather.*in\s+([a-zA-Z\s,]+)"
-            ]
-            for pattern in weather_patterns:
-                match = re.search(pattern, all_content, re.IGNORECASE)
-                if match:
-                    place = match.group(1).strip().strip('"\'.,?!')
-                    if len(place) > 2:  # Minimum place name length
-                        tool_calls.append({
-                            "tool_name": "get_weather",
-                            "arguments": {"place": place}
-                        })
-                        break
-            
-            # Brave Web Search detection
-            web_search_patterns = [
-                r"search.*(?:for|about)\s+(.+)",
-                r"brave.*search.*[:\s]+(.+)",
-                r"find.*information.*about\s+(.+)",
-                r"look.*up\s+(.+)",
-                r"latest\s+(.+)",  # "latest AI developments"
-                r"(?:what|who|when|where|how).*is\s+(.+)",
-                r"tell.*me.*about\s+(.+)"
-            ]
-            for pattern in web_search_patterns:
-                match = re.search(pattern, all_content, re.IGNORECASE)
-                if match:
-                    query = match.group(1).strip().strip('"\'.,?!')
-                    # Check if it's not a location-based query
-                    location_keywords = ["near", "restaurant", "coffee", "hotel", "gas station", "shop"]
-                    if not any(keyword in query.lower() for keyword in location_keywords):
-                        if len(query) > 3:
+                                argument_value = f"{principal} * (1 + {rate}/100)^{time}"
+                            else:
+                                continue
+                        else:
+                            argument_value = match.group(1).strip().strip('"\'.,!?')
+                        
+                        # Skip if argument is too short or generic
+                        if len(argument_value) < 2:
+                            continue
+                            
+                        # Determine the argument name based on tool
+                        if tool_name == "calculator":
+                            arg_name = "expression"
+                        elif tool_name == "get_weather":
+                            arg_name = "place"
+                            # Clean up location names
+                            argument_value = re.sub(r'^(?:the\s+)?', '', argument_value, flags=re.IGNORECASE)
+                            argument_value = re.sub(r'\s*\?.*$', '', argument_value)
+                        elif tool_name in ["brave_web_search", "brave_local_search"]:
+                            arg_name = "query"
+                            # Add count parameter for Brave searches
                             tool_calls.append({
-                                "tool_name": "brave_web_search",
-                                "arguments": {"query": query, "count": 5}
+                                "tool_name": tool_name,
+                                "arguments": {arg_name: argument_value, "count": 5}
                             })
-                            break
-            
-            # Local Search detection  
-            local_search_keywords = ["near", "restaurant", "coffee", "hotel", "gas station", "shop", "store"]
-            if any(keyword in all_content for keyword in local_search_keywords):
-                # Try to extract local search query
-                local_patterns = [
-                    r"find.*(?:restaurant|coffee|hotel|gas station|shop|store).*(?:near|in)\s+(.+)",
-                    r"(?:restaurant|coffee|hotel|shop).*near\s+(.+)",
-                    r"search.*(?:restaurant|coffee|hotel).*[:\s]+(.+)"
-                ]
-                for pattern in local_patterns:
-                    match = re.search(pattern, all_content, re.IGNORECASE)
-                    if match:
-                        query = match.group(1).strip().strip('"\'.,?!')
-                        if len(query) > 3:
+                            print(f"🎯 Detected tool call: {tool_name}({arg_name}='{argument_value}', count=5)")
+                            break  # Found a match for this tool, move to next tool
+                        else:
+                            arg_name = "query"
+                        
+                        if tool_name not in ["brave_web_search", "brave_local_search"]:
                             tool_calls.append({
-                                "tool_name": "brave_local_search", 
-                                "arguments": {"query": query, "count": 5}
+                                "tool_name": tool_name,
+                                "arguments": {arg_name: argument_value}
                             })
-                            break
-            
-            # Test tool detection
-            if "test_tool" in all_content or "test tool" in all_content:
-                test_patterns = [
-                    r"test.*tool.*[:\s]+(.+)",
-                    r"use.*test.*tool.*message[:\s]+(.+)"
-                ]
-                message = "test"
-                for pattern in test_patterns:
-                    match = re.search(pattern, all_content, re.IGNORECASE)
-                    if match:
-                        message = match.group(1).strip().strip('"\'')
-                        break
+                            print(f"🎯 Detected tool call: {tool_name}({arg_name}='{argument_value}')")
+                        
+                        break  # Found a match for this tool, move to next tool
                 
-                tool_calls.append({
-                    "tool_name": "test_tool",
-                    "arguments": {"message": message}
-                })
-            
-            # Diagnostic tool detection
-            if "diagnostic" in all_content:
-                diag_patterns = [
-                    r"diagnostic.*[:\s]+(.+)",
-                    r"run.*diagnostic.*test[:\s]+(.+)"
-                ]
-                test_type = "basic"
-                for pattern in diag_patterns:
-                    match = re.search(pattern, all_content, re.IGNORECASE)
-                    if match:
-                        test_type = match.group(1).strip().strip('"\'')
-                        break
-                
-                tool_calls.append({
-                    "tool_name": "diagnostic",
-                    "arguments": {"test_type": test_type}
-                })
-            
-            # HEDIS tools detection
-            if "DFWAnalyst" in str(messages) or "hedis" in all_content:
-                for msg in messages:
-                    content = str(msg.content)
-                    if "DFWAnalyst" in content:
-                        # Extract prompt after DFWAnalyst
-                        parts = content.split("DFWAnalyst")
-                        if len(parts) > 1:
-                            prompt = parts[1].strip().strip('":').strip()
-                            if prompt:
-                                tool_calls.append({
-                                    "tool_name": "DFWAnalyst",
-                                    "arguments": {"prompt": prompt}
-                                })
-            
-            if "DFWSearch" in str(messages):
-                for msg in messages:
-                    content = str(msg.content)
-                    if "DFWSearch" in content:
-                        # Extract query after DFWSearch
-                        parts = content.split("DFWSearch")
-                        if len(parts) > 1:
-                            query = parts[1].strip().strip('":').strip()
-                            if query:
-                                tool_calls.append({
-                                    "tool_name": "DFWSearch",
-                                    "arguments": {"query": query}
-                                })
-            
-        except Exception as e:
-            print(f"Error in tool detection: {e}")
-            # Return empty list if detection fails
-            return []
+                if tool_calls:  # If we found a tool call, we can break early
+                    break
         
-        print(f"🔍 Detected {len(tool_calls)} tool calls: {[tc['tool_name'] for tc in tool_calls]}")
         return tool_calls
 
     def _generate(
@@ -404,135 +375,131 @@ class ChatSnowflakeCortex(BaseChatModel):
         print(f"🚀 Starting generation with {len(messages)} messages")
         
         # Detect tool calls in messages
-        tool_calls = self._simple_tool_detection(messages)
+        tool_calls = self._detect_tool_calls(messages)
         
         # Execute tool calls if detected
         tool_results = []
         if tool_calls:
-            print(f"🔧 Executing {len(tool_calls)} tool calls")
-            
+            print(f"🔧 Detected {len(tool_calls)} tool calls")
             for tool_call in tool_calls:
                 try:
-                    # Use synchronous call to avoid event loop issues
-                    result = self._call_mcp_tool_sync(tool_call["tool_name"], tool_call["arguments"])
+                    # Use asyncio to call async tool function
+                    loop = None
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        pass
+                    
+                    if loop is not None:
+                        # Create a new event loop in a thread if one is already running
+                        import concurrent.futures
+                        import threading
+                        
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(
+                                    self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
+                                )
+                            finally:
+                                new_loop.close()
+                        
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            result = future.result(timeout=60)
+                    else:
+                        # No running loop, we can use asyncio.run
+                        result = asyncio.run(
+                            self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
+                        )
                     
                     tool_results.append({
                         "tool_name": tool_call["tool_name"],
                         "result": result
                     })
+                    print(f"✅ Tool {tool_call['tool_name']} executed successfully")
                     
                 except Exception as e:
-                    error_msg = f"Tool execution failed: {str(e)}"
                     print(f"❌ Tool {tool_call['tool_name']} failed: {e}")
                     tool_results.append({
                         "tool_name": tool_call["tool_name"],
-                        "result": error_msg
+                        "result": f"Tool execution failed: {str(e)}"
                     })
 
-        # If we have tool results, format them nicely
+        # If we have tool results, return them directly without Snowflake
         if tool_results:
-            final_content = "Tool Execution Results:\n\n"
+            content = "🔧 **Tool Execution Results:**\n\n"
             for tool_result in tool_results:
-                final_content += f"🔧 **{tool_result['tool_name']}**:\n"
-                final_content += f"{tool_result['result']}\n\n"
+                content += f"**{tool_result['tool_name']}**:\n{tool_result['result']}\n\n"
             
-            # Try to get AI response from Snowflake if session is available
-            try:
-                if self.session:
-                    # Prepare messages for Snowflake with proper escaping
-                    message_dicts = [_convert_message_to_dict(m) for m in messages]
-                    
-                    # Create a simple query without tool results to avoid JSON complexity
-                    simple_message = f"Based on the tool execution results: {final_content}, provide a helpful summary or analysis."
-                    
-                    simple_messages = [{"role": "user", "content": simple_message}]
-                    
-                    # Properly escape and format for SQL
-                    message_json = json.dumps(simple_messages)
-                    
-                    options = {
-                        "temperature": self.temperature,
-                        "top_p": self.top_p if self.top_p is not None else 1.0,
-                        "max_tokens": self.max_tokens if self.max_tokens is not None else 2048,
-                    }
-                    options_json = json.dumps(options)
-
-                    # Use SQL parameters to avoid escaping issues
-                    sql_stmt = f"""
-                        select snowflake.cortex.{self.cortex_function}(
-                            '{self.model}',
-                            parse_json('{_escape_sql_string(message_json)}'),
-                            parse_json('{_escape_sql_string(options_json)}')
-                        ) as llm_stream_response;
-                    """
-
-                    self.session.sql(
-                        f"USE WAREHOUSE {self.session.get_current_warehouse()};"
-                    ).collect()
-                    l_rows = self.session.sql(sql_stmt).collect()
-                    
-                    response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
-                    ai_response = response["choices"][0]["messages"]
-                    
-                    # Combine tool results with AI response
-                    final_content += f"\n**AI Analysis:**\n{ai_response}"
-                    
-            except Exception as e:
-                print(f"⚠️ Snowflake Cortex error: {e}")
-                final_content += f"\n*Note: AI analysis unavailable - {str(e)}*"
-            
-            message = AIMessage(content=final_content)
+            message = AIMessage(content=content)
             generation = ChatGeneration(message=message)
             return ChatResult(generations=[generation])
-        
-        else:
-            # No tool calls detected, use regular Snowflake processing
-            try:
-                if not self.session:
-                    raise ChatSnowflakeCortexError("No Snowflake session available")
-                
-                # Prepare messages for Snowflake with proper escaping
-                message_dicts = [_convert_message_to_dict(m) for m in messages]
-                message_json = json.dumps(message_dicts)
 
-                options = {
-                    "temperature": self.temperature,
-                    "top_p": self.top_p if self.top_p is not None else 1.0,
-                    "max_tokens": self.max_tokens if self.max_tokens is not None else 2048,
-                }
-                options_json = json.dumps(options)
+        # If no tools were called, proceed with Snowflake Cortex
+        try:
+            if not self.session:
+                return ChatResult(generations=[ChatGeneration(
+                    message=AIMessage(content="❌ No Snowflake session available and no tools were called")
+                )])
 
-                sql_stmt = f"""
-                    select snowflake.cortex.{self.cortex_function}(
-                        '{self.model}',
-                        parse_json('{_escape_sql_string(message_json)}'),
-                        parse_json('{_escape_sql_string(options_json)}')
-                    ) as llm_stream_response;
-                """
+            # Prepare messages for Snowflake with better JSON handling
+            message_dicts = [_convert_message_to_dict(m) for m in messages]
+            
+            # FIX 2: Use safe JSON encoding for SQL with $$ delimiter
+            message_json = _safe_json_for_sql(message_dicts)
 
-                self.session.sql(
-                    f"USE WAREHOUSE {self.session.get_current_warehouse()};"
-                ).collect()
-                l_rows = self.session.sql(sql_stmt).collect()
+            options = {
+                "temperature": self.temperature,
+                "top_p": self.top_p if self.top_p is not None else 1.0,
+                "max_tokens": self.max_tokens if self.max_tokens is not None else 2048,
+            }
+            options_json = _safe_json_for_sql(options)
+
+            # FIX 3: Use $$ delimiter for complex JSON to avoid escaping issues
+            sql_stmt = f"""
+                select snowflake.cortex.{self.cortex_function}(
+                    '{self.model}',
+                    parse_json($${message_json}$$),
+                    parse_json($${options_json}$$)
+                ) as llm_stream_response;
+            """
+
+            print(f"🗃️ Executing SQL query...")
+            
+            # Use the Snowflake Cortex Complete function
+            self.session.sql(
+                f"USE WAREHOUSE {self.session.get_current_warehouse()};"
+            ).collect()
+            l_rows = self.session.sql(sql_stmt).collect()
+            
+            response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
+            ai_message_content = response["choices"][0]["messages"]
+            
+            content = _truncate_at_stop_tokens(ai_message_content, stop)
+            
+            message = AIMessage(
+                content=content,
+                response_metadata=response.get("usage", {}),
+            )
+            generation = ChatGeneration(message=message)
+            return ChatResult(generations=[generation])
                 
-                response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
-                ai_message_content = response["choices"][0]["messages"]
-                
-                content = _truncate_at_stop_tokens(ai_message_content, stop)
-                
-                message = AIMessage(
-                    content=content,
-                    response_metadata=response.get("usage", {}),
-                )
-                generation = ChatGeneration(message=message)
-                return ChatResult(generations=[generation])
-                
-            except Exception as e:
-                error_msg = f"Error processing request: {str(e)}"
-                print(f"❌ Generation error: {e}")
-                message = AIMessage(content=error_msg)
-                generation = ChatGeneration(message=message)
-                return ChatResult(generations=[generation])
+        except Exception as e:
+            print(f"❌ Snowflake Cortex error: {e}")
+            
+            # Provide helpful error message
+            error_content = f"❌ **Snowflake Cortex Error**: {str(e)}\n\n"
+            error_content += "💡 **Possible solutions**:\n"
+            error_content += "- Check your Snowflake connection and permissions\n"
+            error_content += "- Verify the model name is correct\n"
+            error_content += "- Try a simpler query\n"
+            error_content += "- Use tool-based queries (weather, search, calculator)\n"
+            
+            message = AIMessage(content=error_content)
+            generation = ChatGeneration(message=message)
+            return ChatResult(generations=[generation])
 
     def _stream_content(
         self, content: str, stop: Optional[List[str]]
@@ -552,16 +519,14 @@ class ChatSnowflakeCortex(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        """Stream the output of the model in chunks."""
+        """Stream the output of the model."""
         try:
             result = self._generate(messages, stop, run_manager, **kwargs)
             content = result.generations[0].message.content
             
-            # Stream the content
             for chunk in self._stream_content(content, stop):
                 yield chunk
                 
         except Exception as e:
-            # Yield error as chunk
             error_content = f"Streaming error: {str(e)}"
             yield ChatGenerationChunk(message=AIMessageChunk(content=error_content))
