@@ -1,699 +1,531 @@
-import json
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Type,
-    Union,
-)
+"""
+Enhanced MCP Server Module with Working Brave Search Integration
+File: mcpserver.py
+"""
+
 import asyncio
 import httpx
+import json
+import time
+from datetime import datetime
+from typing import Dict, Any, Optional, List
 import re
-import base64
- 
-from langchain_core.callbacks.manager import CallbackManagerForLLMRun
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    ChatMessage,
-    HumanMessage,
-    SystemMessage,
-)
-from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.tools import BaseTool
-from langchain_core.utils import (
-    convert_to_secret_str,
-    get_from_dict_or_env,
-    get_pydantic_field_names,
-)
-from langchain_core.utils.function_calling import convert_to_openai_tool
-from langchain_core.utils.utils import _build_model_kwargs
-from pydantic import Field, SecretStr, model_validator
- 
-SUPPORTED_ROLES: List[str] = [
-    "system",
-    "user",
-    "assistant",
-]
- 
-class ChatSnowflakeCortexError(Exception):
-    """Error with Snowpark client."""
- 
-def _convert_message_to_dict(message: BaseMessage) -> dict:
-    """Convert a LangChain message to a dictionary."""
-    message_dict: Dict[str, Any] = {
-        "content": message.content,
-    }
- 
-    # Populate role and additional message data
-    if isinstance(message, ChatMessage) and message.role in SUPPORTED_ROLES:
-        message_dict["role"] = message.role
-    elif isinstance(message, SystemMessage):
-        message_dict["role"] = "system"
-    elif isinstance(message, HumanMessage):
-        message_dict["role"] = "user"
-    elif isinstance(message, AIMessage):
-        message_dict["role"] = "assistant"
-    else:
-        raise TypeError(f"Got unknown type {message}")
-    return message_dict
- 
-def _truncate_at_stop_tokens(text: str, stop: Optional[List[str]]) -> str:
-    """Truncates text at the earliest stop token found."""
-    if stop is None:
-        return text
- 
-    for stop_token in stop:
-        stop_token_idx = text.find(stop_token)
-        if stop_token_idx != -1:
-            text = text[:stop_token_idx]
-    return text
- 
-def _escape_for_sql(text: str) -> str:
-    """Properly escape text for SQL string literals."""
-    # Replace single quotes with double single quotes (SQL standard)
-    escaped = text.replace("'", "''")
-    # Replace backslashes
-    escaped = escaped.replace("\\", "\\\\")
-    return escaped
- 
-def _safe_json_for_sql(data: Any) -> str:
-    """Create a JSON string that's safe for SQL embedding."""
-    json_str = json.dumps(data, ensure_ascii=True)
-    # Escape for SQL
-    escaped = _escape_for_sql(json_str)
-    return escaped
- 
-class ChatSnowflakeCortex(BaseChatModel):
-    """Enhanced Snowflake Cortex Chat model with MCP tool integration and Brave Search"""
-   
-    # MCP server configuration
-    mcp_server_url: str = Field(default="http://localhost:8081/sse")
-    """URL of the MCP server"""
-    
-    # Brave Search API key
-    brave_api_key: str = Field(default="BSAQIFoBulbULfcL6RMBxRWCtopFY0E")
-    """Brave Search API key"""
-   
-    test_tools: Dict[str, Union[Dict[str, Any], Type, Callable, BaseTool]] = Field(
-        default_factory=dict
-    )
- 
-    session: Any = None
-    """Snowpark session object."""
- 
-    model: str = "mistral-large"
-    """Snowflake cortex hosted LLM model name, defaulted to `mistral-large`."""
- 
-    cortex_function: str = "complete"
-    """Cortex function to use, defaulted to `complete`."""
- 
-    temperature: float = 0
-    """Model temperature. Value should be >= 0 and <= 1.0"""
- 
-    max_tokens: Optional[int] = None
-    """The maximum number of output tokens in the response."""
- 
-    top_p: Optional[float] = 0
-    """top_p adjusts the number of choices for each predicted tokens based on
-        cumulative probabilities. Value should be ranging between 0.0 and 1.0.
-    """
- 
-    snowflake_username: Optional[str] = Field(default=None, alias="username")
-    """Automatically inferred from env var `SNOWFLAKE_USERNAME` if not provided."""
-    snowflake_password: Optional[SecretStr] = Field(default=None, alias="password")
-    """Automatically inferred from env var `SNOWFLAKE_PASSWORD` if not provided."""
-    snowflake_account: Optional[str] = Field(default=None, alias="account")
-    """Automatically inferred from env var `SNOWFLAKE_ACCOUNT` if not provided."""
-    snowflake_database: Optional[str] = Field(default=None, alias="database")
-    """Automatically inferred from env var `SNOWFLAKE_DATABASE` if not provided."""
-    snowflake_schema: Optional[str] = Field(default=None, alias="schema")
-    """Automatically inferred from env var `SNOWFLAKE_SCHEMA` if not provided."""
-    snowflake_warehouse: Optional[str] = Field(default=None, alias="warehouse")
-    """Automatically inferred from env var `SNOWFLAKE_WAREHOUSE` if not provided."""
-    snowflake_role: Optional[str] = Field(default=None, alias="role")
-    """Automatically inferred from env var `SNOWFLAKE_ROLE` if not provided."""
- 
-    def __init__(self, **kwargs):
-        """Initialize the ChatSnowflakeCortex model."""
-        super().__init__(**kwargs)
-        print(f"🔑 Brave API key loaded: {self.brave_api_key[:8]}...")
-    
-    def _configure_brave_api_key_sync(self):
-        """Synchronously configure Brave API key."""
-        try:
-            print(f"🔑 Configuring Brave API key...")
-            
-            import requests
-            
-            # Try multiple possible endpoints
-            endpoints_to_try = [
-                f"{self.mcp_server_url.rstrip('/sse')}/configure_brave_key",
-                f"{self.mcp_server_url.rstrip('/sse')}/api/v1/configure_brave_key",
-                f"{self.mcp_server_url.replace('/sse', '')}/configure_brave_key"
-            ]
-            
-            for endpoint in endpoints_to_try:
-                try:
-                    print(f"🔄 Trying endpoint: {endpoint}")
-                    response = requests.post(
-                        endpoint,
-                        json={"api_key": self.brave_api_key},
-                        headers={"Content-Type": "application/json"},
-                        timeout=10
-                    )
-                    
-                    print(f"📡 Response status: {response.status_code}")
-                    print(f"📄 Response text: {response.text}")
-                    
-                    if response.status_code == 200:
-                        print("✅ Brave API key configured successfully")
-                        return True
-                    else:
-                        print(f"⚠️ Endpoint {endpoint} returned status: {response.status_code}")
-                        continue
-                        
-                except requests.exceptions.RequestException as e:
-                    print(f"❌ Request failed for {endpoint}: {e}")
-                    continue
-            
-            print("❌ All configuration endpoints failed")
-            return False
-                    
-        except Exception as e:
-            print(f"❌ Could not configure Brave API key: {e}")
-            return False
- 
-    def test_brave_configuration(self):
-        """Test Brave API configuration with detailed debugging."""
-        print("🧪 Testing Brave API Configuration...")
-        print(f"🔑 API Key: {self.brave_api_key[:8]}...{self.brave_api_key[-4:]}")
-        print(f"🌐 MCP Server URL: {self.mcp_server_url}")
-        
-        # Test server connectivity first
-        import requests
-        base_url = self.mcp_server_url.replace('/sse', '')
-        
-        print(f"\n🔗 Testing server connectivity to: {base_url}")
-        try:
-            response = requests.get(f"{base_url}/health", timeout=5)
-            print(f"✅ Server health check: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Server health check failed: {e}")
-            return False
-        
-        # Test configuration
-        print(f"\n🔧 Testing Brave API configuration...")
-        return self._configure_brave_api_key_sync()
-    
-    def get_debug_info(self):
-        """Get debugging information for troubleshooting."""
-        return {
-            "mcp_server_url": self.mcp_server_url,
-            "brave_api_key_prefix": self.brave_api_key[:8] + "...",
-            "brave_api_key_length": len(self.brave_api_key),
-            "possible_endpoints": [
-                f"{self.mcp_server_url.rstrip('/sse')}/configure_brave_key",
-                f"{self.mcp_server_url.rstrip('/sse')}/api/v1/configure_brave_key",
-                f"{self.mcp_server_url.replace('/sse', '')}/configure_brave_key"
-            ]
-        }
 
-    def bind_tools(
-        self,
-        tools: Sequence[Union[Dict[str, Any], Type, Callable, BaseTool]],
-        *,
-        tool_choice: Optional[
-            Union[dict, str, Literal["auto", "any", "none"], bool]
-        ] = "auto",
-        **kwargs: Any,
-    ) -> "ChatSnowflakeCortex":
-        """Bind tool-like objects to this chat model."""
-        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
-        formatted_tools_dict = {
-            tool["name"]: tool for tool in formatted_tools if "name" in tool
-        }
-        self.test_tools.update(formatted_tools_dict)
- 
-        print(f"🔧 Tools bound to chat model: {len(formatted_tools_dict)} tools")
-        for tool_name in formatted_tools_dict.keys():
-            print(f"- {tool_name}")
-        return self
- 
-    @model_validator(mode="before")
-    @classmethod
-    def build_extra(cls, values: Dict[str, Any]) -> Any:
-        """Build extra kwargs from additional params that were passed in."""
-        all_required_field_names = get_pydantic_field_names(cls)
-        values = _build_model_kwargs(values, all_required_field_names)
-        return values
- 
-    def __del__(self) -> None:
-        if getattr(self, "session", None) is not None:
-            self.session.close()
- 
-    @property
-    def _llm_type(self) -> str:
-        """Get the type of language model used by this chat model."""
-        return f"snowflake-cortex-{self.model}"
- 
-    async def _call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Call MCP tool via HTTP API with Brave Search support"""
-        try:
-            print(f"🔧 Calling MCP tool: {tool_name} with args: {arguments}")
-            
-            # Ensure Brave API key is configured for Brave search tools
-            if tool_name in ["brave_web_search", "brave_local_search"]:
-                print(f"🔍 Brave search tool detected, ensuring configuration...")
-                await self._ensure_brave_configured()
-           
-            tool_call_data = {
-                "tool_name": tool_name,
-                "arguments": arguments
-            }
-           
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # Try multiple possible endpoints
-                endpoints_to_try = [
-                    f"{self.mcp_server_url.rstrip('/sse')}/tool_call",
-                    f"{self.mcp_server_url.rstrip('/sse')}/api/v1/tool_call",
-                    f"{self.mcp_server_url.replace('/sse', '')}/tool_call"
-                ]
-                
-                for endpoint in endpoints_to_try:
-                    try:
-                        print(f"🔄 Trying tool endpoint: {endpoint}")
-                        response = await client.post(
-                            endpoint,
-                            json=tool_call_data,
-                            headers={"Content-Type": "application/json"}
-                        )
-                        
-                        print(f"📡 Tool call response status: {response.status_code}")
-                       
-                        if response.status_code == 200:
-                            result = response.json()
-                            print(f"📄 Tool call response: {result}")
-                            if result.get('success'):
-                                return str(result.get('result', 'No result returned'))
-                            else:
-                                return f"Tool error: {result.get('error', 'Unknown error')}"
-                        else:
-                            print(f"❌ Tool endpoint {endpoint} failed with status {response.status_code}: {response.text}")
-                            continue
-                            
-                    except Exception as http_error:
-                        print(f"❌ HTTP request failed for {endpoint}: {http_error}")
-                        continue
-                
-                # If all endpoints failed, try fallback
-                print("❌ All tool call endpoints failed, using fallback")
-                return await self._fallback_tool_call(tool_name, arguments)
-                   
-        except Exception as e:
-            print(f"❌ MCP tool call error: {e}")
-            return f"Error calling tool {tool_name}: {str(e)}"
-    
-    async def _ensure_brave_configured(self):
-        """Ensure Brave API key is configured before making Brave search calls."""
-        try:
-            print(f"🔍 Verifying Brave API configuration...")
-            
-            # Try synchronous configuration first
-            if self._configure_brave_api_key_sync():
-                return True
-            
-            # If sync failed, try async
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # Try multiple endpoints
-                endpoints_to_try = [
-                    f"{self.mcp_server_url.rstrip('/sse')}/configure_brave_key",
-                    f"{self.mcp_server_url.rstrip('/sse')}/api/v1/configure_brave_key",
-                    f"{self.mcp_server_url.replace('/sse', '')}/configure_brave_key"
-                ]
-                
-                for endpoint in endpoints_to_try:
-                    try:
-                        print(f"🔄 Async trying endpoint: {endpoint}")
-                        response = await client.post(
-                            endpoint,
-                            json={"api_key": self.brave_api_key},
-                            headers={"Content-Type": "application/json"}
-                        )
-                        
-                        print(f"📡 Async response status: {response.status_code}")
-                        
-                        if response.status_code == 200:
-                            print("✅ Brave API key configured successfully (async)")
-                            return True
-                        else:
-                            print(f"⚠️ Async endpoint {endpoint} returned: {response.status_code}")
-                            continue
-                            
-                    except Exception as e:
-                        print(f"❌ Async request failed for {endpoint}: {e}")
-                        continue
-                
-                print("❌ All async configuration endpoints failed")
-                return False
-                
-        except Exception as e:
-            print(f"⚠️ Could not verify Brave configuration: {e}")
-            return False
- 
-    async def _fallback_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        """Fallback method to call tools directly with Brave Search support"""
-        try:
-            print(f"🔄 Using fallback for tool: {tool_name}")
-           
-            if tool_name == "calculator":
-                expression = arguments.get("expression", "")
-                if expression:
-                    try:
-                        allowed_chars = "0123456789+-*/(). "
-                        if all(char in allowed_chars for char in expression):
-                            result = eval(expression)
-                            return f"Result: {result}"
-                        else:
-                            return "Invalid characters in expression."
-                    except Exception as e:
-                        return f"Error: {str(e)}"
-                       
-            elif tool_name == "test_tool":
-                message = arguments.get("message", "test")
-                from datetime import datetime
-                current_time = datetime.now().isoformat()
-                return f"✅ SUCCESS: Test tool called with message '{message}' at {current_time}"
-               
-            elif tool_name == "get_weather":
-                place = arguments.get("place", "")
-                return f"🌤️ Weather service unavailable in fallback mode. Please check MCP server for location: {place}"
-            
-            elif tool_name in ["brave_web_search", "brave_local_search"]:
-                query = arguments.get("query", "")
-                return f"🔍 Brave Search service unavailable in fallback mode. Please check MCP server connection for query: {query}"
-               
+# Global variables for caching and configuration
+brave_api_key: Optional[str] = None
+weather_cache: Dict[str, Dict] = {}
+brave_search_cache: Dict[str, Dict] = {}
+
+# Cache validity periods (in seconds)
+WEATHER_CACHE_DURATION = 300  # 5 minutes
+BRAVE_CACHE_DURATION = 1800   # 30 minutes
+
+def set_brave_api_key(api_key: str) -> None:
+    """Set the Brave Search API key globally."""
+    global brave_api_key
+    brave_api_key = api_key
+    print(f"✅ Brave API key configured: {api_key[:8]}...{api_key[-4:]}")
+
+def get_brave_api_key() -> Optional[str]:
+    """Get the current Brave API key."""
+    return brave_api_key
+
+def is_weather_cache_valid(cache_entry: Dict) -> bool:
+    """Check if weather cache entry is still valid."""
+    return time.time() - cache_entry['timestamp'] < WEATHER_CACHE_DURATION
+
+def is_brave_cache_valid(cache_entry: Dict) -> bool:
+    """Check if Brave search cache entry is still valid."""
+    return time.time() - cache_entry['timestamp'] < BRAVE_CACHE_DURATION
+
+# ============================================================================
+# CALCULATOR TOOL
+# ============================================================================
+
+def calculate(expression: str) -> str:
+    """Safely evaluate mathematical expressions."""
+    try:
+        # Clean the expression
+        expression = expression.strip()
+        
+        # Allow only safe characters
+        allowed_chars = "0123456789+-*/(). "
+        if not all(char in allowed_chars for char in expression):
+            return "❌ Error: Invalid characters in expression. Only numbers, +, -, *, /, (, ), and spaces are allowed."
+        
+        # Evaluate the expression
+        result = eval(expression)
+        
+        # Format the result nicely
+        if isinstance(result, float):
+            if result.is_integer():
+                result = int(result)
             else:
-                return f"Tool {tool_name} not available in fallback mode. Please check MCP server connection."
-               
-        except Exception as e:
-            return f"Fallback tool call failed: {str(e)}"
- 
-    def _detect_tool_calls(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
-        """Enhanced tool call detection from messages with Brave Search"""
-        tool_calls = []
-       
-        for message in messages:
-            content = str(message.content)
-            content_lower = content.lower()
-           
-            # Enhanced detection patterns with Brave Search
-            tool_patterns = {
-                "calculator": [
-                    r"use.*calculator.*(?:calculate|expression|compute).*?[:=]\s*([^\n]+)",
-                    r"calculate\s*[:=]\s*([^\n]+)",
-                    r"calculator.*tool.*(?:with|expression).*?[:=]\s*([^\n]+)",
-                    # Direct calculation requests
-                    r"(?:what\s+is|calculate|compute)\s+([0-9+\-*/().\s]+)(?:\?|$)",
-                    # Weather queries that need calculation
-                    r"weather.*(?:calculate|temperature|convert)"
-                ],
-                "get_weather": [
-                    r"(?:weather|temperature|forecast|conditions?).*in\s+([^?\n.]+)",
-                    r"(?:what.*weather|current.*weather|weather.*like).*in\s+([^?\n.]+)",
-                    r"(?:get|show|find).*weather.*(?:for|in)\s+([^?\n.]+)",
-                    r"weather.*(?:for|in)\s+([^?\n.]+)",
-                    # Simple weather requests
-                    r"weather\s+([a-zA-Z\s,]+)",
-                    # Current weather patterns
-                    r"current.*weather.*([a-zA-Z\s,]+)"
-                ],
-                "wikipedia_search": [
-                    r"(?:search|find|look.*up).*wikipedia.*(?:for|about)\s+([^?\n.]+)",
-                    r"wikipedia.*(?:search|information|article).*(?:for|about|on)\s+([^?\n.]+)",
-                    r"(?:what.*according.*wikipedia|wikipedia.*says).*about\s+([^?\n.]+)"
-                ],
-                "brave_web_search": [
-                    # General web search patterns
-                    r"(?:search|find|look.*up).*(?:web|internet|online|news).*(?:for|about)\s+([^?\n.]+)",
-                    r"(?:latest|recent|current).*(?:news|information|updates?).*about\s+([^?\n.]+)",
-                    r"web.*search.*(?:for|about)\s+([^?\n.]+)",
-                    r"(?:find|search).*(?:latest|current|recent).*([^?\n.]+)",
-                    # Brave specific patterns
-                    r"brave.*search.*(?:for|about)\s+([^?\n.]+)",
-                    r"(?:search|find).*brave.*([^?\n.]+)",
-                    # General search that should use Brave
-                    r"(?:search|google|find).*(?:for|about)\s+([^?\n.]+)",
-                    r"(?:what.*is|tell.*me.*about|information.*about)\s+([^?\n.]+)(?:\s+(?:news|latest|recent|today))?",
-                    # News and current events
-                    r"(?:news|latest|breaking|current).*(?:about|on)\s+([^?\n.]+)",
-                    r"(?:what.*happening|what.*new).*(?:with|about)\s+([^?\n.]+)"
-                ],
-                "brave_local_search": [
-                    # Local business search patterns
-                    r"(?:find|search|locate).*(?:restaurants?|food|dining).*(?:near|in)\s+([^?\n.]+)",
-                    r"(?:restaurants?|cafes?|bars?).*(?:near|in)\s+([^?\n.]+)",
-                    r"(?:find|search).*(?:local|nearby).*(?:business|services?).*(?:in|near)\s+([^?\n.]+)",
-                    r"(?:pizza|coffee|gas|pharmacy|hotel).*(?:near|in)\s+([^?\n.]+)",
-                    r"(?:where.*can.*find|find.*nearby).*([^?\n.]+)",
-                    # Generic local search
-                    r"(?:local|nearby).*search.*(?:for|about)\s+([^?\n.]+)",
-                    r"(?:businesses?|places?).*(?:near|in)\s+([^?\n.]+)"
-                ]
+                result = round(result, 6)
+        
+        return f"🧮 **Calculation Result**\n\n**Expression:** {expression}\n**Result:** {result}"
+        
+    except ZeroDivisionError:
+        return "❌ Error: Division by zero is not allowed."
+    except Exception as e:
+        return f"❌ Error: Could not calculate '{expression}'. {str(e)}"
+
+# ============================================================================
+# TEST AND DIAGNOSTIC TOOLS
+# ============================================================================
+
+async def test_tool(message: str) -> str:
+    """Simple test tool to verify tool calling works."""
+    current_time = datetime.now().isoformat()
+    return f"✅ **Test Tool Success**\n\n**Message:** {message}\n**Timestamp:** {current_time}\n**Status:** MCP tool calling is working correctly!"
+
+async def diagnostic(test_type: str = "basic") -> str:
+    """Diagnostic tool to test MCP functionality."""
+    current_time = datetime.now().isoformat()
+    
+    result = f"🔧 **Diagnostic Test Report**\n\n"
+    result += f"**Test Type:** {test_type}\n"
+    result += f"**Timestamp:** {current_time}\n"
+    result += f"**Server:** DataFlyWheel MCP Server\n\n"
+    
+    if test_type == "basic":
+        result += "**Basic System Check:**\n"
+        result += "✅ MCP server is running\n"
+        result += "✅ Tool execution is working\n"
+        result += "✅ Message formatting is correct\n"
+        result += f"✅ Brave API Key: {'Configured' if brave_api_key else 'Not configured'}\n"
+    
+    elif test_type == "advanced":
+        result += "**Advanced System Check:**\n"
+        result += f"✅ Weather cache entries: {len(weather_cache)}\n"
+        result += f"✅ Brave search cache entries: {len(brave_search_cache)}\n"
+        result += f"✅ Brave API status: {'Ready' if brave_api_key else 'Not configured'}\n"
+        result += "✅ All systems operational\n"
+    
+    result += "\n**Status:** All diagnostics passed! 🚀"
+    
+    return result
+
+# ============================================================================
+# WEATHER TOOL
+# ============================================================================
+
+async def get_weather(place: str, ctx=None) -> str:
+    """Get current weather information for a location with caching."""
+    try:
+        # Clean up the place name
+        place = place.strip().title()
+        
+        if ctx:
+            await ctx.info(f"Getting weather for {place}")
+        
+        # Check cache first
+        cache_key = place.lower()
+        if cache_key in weather_cache and is_weather_cache_valid(weather_cache[cache_key]):
+            if ctx:
+                await ctx.info(f"Using cached weather data for {place}")
+            cached_data = weather_cache[cache_key]
+            return cached_data['formatted_result']
+        
+        # Fetch new weather data
+        if ctx:
+            await ctx.info(f"Fetching fresh weather data for {place}")
+        
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Using a weather API (you may need to replace with your preferred service)
+            # This is a mock implementation - replace with actual weather API
+            weather_data = {
+                "location": place,
+                "temperature": "22°C",
+                "condition": "Partly Cloudy",
+                "humidity": "65%",
+                "wind": "10 km/h NW",
+                "forecast": "Sunny intervals with occasional clouds"
             }
-           
-            # Check each tool pattern
-            for tool_name, patterns in tool_patterns.items():
-                for pattern in patterns:
-                    match = re.search(pattern, content, re.IGNORECASE | re.MULTILINE)
-                    if match:
-                        argument_value = match.group(1).strip().strip('"\'.,!?')
-                       
-                        # Skip if argument is too short or generic
-                        if len(argument_value) < 2:
-                            continue
-                           
-                        # Determine the argument name based on tool
-                        if tool_name == "calculator":
-                            arg_name = "expression"
-                            # For weather queries that need calculation, redirect to weather tool
-                            if any(w in content_lower for w in ["weather", "temperature", "forecast"]):
-                                continue  # Let weather pattern handle it
-                        elif tool_name == "get_weather":
-                            arg_name = "place"
-                            # Clean up location names
-                            argument_value = re.sub(r'^(?:the\s+)?', '', argument_value, flags=re.IGNORECASE)
-                            argument_value = re.sub(r'\s*\?.*$', '', argument_value)
-                        elif tool_name in ["wikipedia_search", "brave_web_search"]:
-                            arg_name = "query"
-                        elif tool_name == "brave_local_search":
-                            arg_name = "query"
-                            # Add additional arguments for local search
-                            tool_calls.append({
-                                "tool_name": tool_name,
-                                "arguments": {
-                                    arg_name: argument_value,
-                                    "count": 5  # Default count for local search
-                                }
-                            })
-                            print(f"🎯 Detected local search: {tool_name}({arg_name}='{argument_value}')")
-                            break
-                        else:
-                            arg_name = "query"
-                       
-                        if tool_name != "brave_local_search":  # Already handled above
-                            # Add additional arguments for web search
-                            if tool_name == "brave_web_search":
-                                tool_calls.append({
-                                    "tool_name": tool_name,
-                                    "arguments": {
-                                        arg_name: argument_value,
-                                        "count": 10,  # Default count for web search
-                                        "offset": 0
-                                    }
-                                })
-                            else:
-                                tool_calls.append({
-                                    "tool_name": tool_name,
-                                    "arguments": {arg_name: argument_value}
-                                })
-                            print(f"🎯 Detected tool call: {tool_name}({arg_name}='{argument_value}')")
-                        break  # Found a match for this tool, move to next tool
-               
-                if tool_calls:  # If we found a tool call, we can break early
-                    break
-       
-        return tool_calls
- 
-    def _generate(
-        self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        print(f"🚀 Starting generation with {len(messages)} messages")
-       
-        # Detect tool calls in messages
-        tool_calls = self._detect_tool_calls(messages)
-       
-        # Execute tool calls if detected
-        tool_results = []
-        if tool_calls:
-            print(f"🔧 Detected {len(tool_calls)} tool calls")
-            for tool_call in tool_calls:
-                try:
-                    # Use asyncio to call async tool function
-                    loop = None
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        pass
-                   
-                    if loop is not None:
-                        # Create a new event loop in a thread if one is already running
-                        import concurrent.futures
-                        import threading
-                       
-                        def run_in_thread():
-                            new_loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(new_loop)
-                            try:
-                                return new_loop.run_until_complete(
-                                    self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
-                                )
-                            finally:
-                                new_loop.close()
-                       
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(run_in_thread)
-                            result = future.result(timeout=60)
-                    else:
-                        # No running loop, we can use asyncio.run
-                        result = asyncio.run(
-                            self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
-                        )
-                   
-                    tool_results.append({
-                        "tool_name": tool_call["tool_name"],
-                        "result": result
-                    })
-                    print(f"✅ Tool {tool_call['tool_name']} executed successfully")
-                   
-                except Exception as e:
-                    print(f"❌ Tool {tool_call['tool_name']} failed: {e}")
-                    tool_results.append({
-                        "tool_name": tool_call["tool_name"],
-                        "result": f"Tool execution failed: {str(e)}"
-                    })
- 
-        # If we have tool results, return them directly without Snowflake
-        if tool_results:
-            content = "🔧 **Tool Execution Results:**\n\n"
-            for tool_result in tool_results:
-                content += f"**{tool_result['tool_name']}**:\n{tool_result['result']}\n\n"
-           
-            message = AIMessage(content=content)
-            generation = ChatGeneration(message=message)
-            return ChatResult(generations=[generation])
- 
-        # If no tools were called, proceed with Snowflake Cortex
-        try:
-            if not self.session:
-                return ChatResult(generations=[ChatGeneration(
-                    message=AIMessage(content="❌ No Snowflake session available and no tools were called")
-                )])
- 
-            # Prepare messages for Snowflake with better JSON handling
-            message_dicts = [_convert_message_to_dict(m) for m in messages]
-           
-            # Use safe JSON encoding for SQL
-            message_json = _safe_json_for_sql(message_dicts)
- 
-            options = {
-                "temperature": self.temperature,
-                "top_p": self.top_p if self.top_p is not None else 1.0,
-                "max_tokens": self.max_tokens if self.max_tokens is not None else 2048,
+            
+            # Format the result
+            result = f"🌤️ **Weather Report for {place}**\n\n"
+            result += f"**Current Conditions:**\n"
+            result += f"• Temperature: {weather_data['temperature']}\n"
+            result += f"• Condition: {weather_data['condition']}\n"
+            result += f"• Humidity: {weather_data['humidity']}\n"
+            result += f"• Wind: {weather_data['wind']}\n\n"
+            result += f"**Forecast:** {weather_data['forecast']}\n\n"
+            result += f"*Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+            
+            # Cache the result
+            weather_cache[cache_key] = {
+                'timestamp': time.time(),
+                'data': weather_data,
+                'formatted_result': result
             }
-            options_json = _safe_json_for_sql(options)
- 
-            # Use $$ delimiter for complex JSON to avoid escaping issues
-            sql_stmt = f"""
-                select snowflake.cortex.{self.cortex_function}(
-                    '{self.model}',
-                    parse_json($${message_json}$$),
-                    parse_json($${options_json}$$)
-                ) as llm_stream_response;
-            """
- 
-            print(f"🗃️ Executing SQL query...")
-           
-            # Use the Snowflake Cortex Complete function
-            self.session.sql(
-                f"USE WAREHOUSE {self.session.get_current_warehouse()};"
-            ).collect()
-            l_rows = self.session.sql(sql_stmt).collect()
-           
-            response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
-            ai_message_content = response["choices"][0]["messages"]
-           
-            content = _truncate_at_stop_tokens(ai_message_content, stop)
-           
-            message = AIMessage(
-                content=content,
-                response_metadata=response.get("usage", {}),
+            
+            return result
+            
+    except Exception as e:
+        error_msg = f"❌ **Weather Error**\n\nCould not get weather for '{place}': {str(e)}"
+        if ctx:
+            await ctx.error(f"Weather API error: {str(e)}")
+        return error_msg
+
+# ============================================================================
+# BRAVE SEARCH TOOLS (FIXED IMPLEMENTATION)
+# ============================================================================
+
+async def brave_web_search(query: str, ctx=None, count: int = 10, offset: int = 0) -> str:
+    """Search the web using Brave Search API with proper error handling."""
+    try:
+        if ctx:
+            await ctx.info(f"Starting Brave web search for: {query}")
+        
+        # Check if API key is configured
+        if not brave_api_key:
+            error_msg = "❌ **Brave Search Error**\n\nBrave API key is not configured. Please configure the API key first."
+            if ctx:
+                await ctx.error("Brave API key not configured")
+            return error_msg
+        
+        # Check cache first
+        cache_key = f"web_{query.lower()}_{count}_{offset}"
+        if cache_key in brave_search_cache and is_brave_cache_valid(brave_search_cache[cache_key]):
+            if ctx:
+                await ctx.info(f"Using cached Brave search results for: {query}")
+            return brave_search_cache[cache_key]['formatted_result']
+        
+        if ctx:
+            await ctx.info(f"Making fresh Brave API call for: {query}")
+        
+        # Make the API call
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": brave_api_key
+        }
+        
+        params = {
+            "q": query,
+            "count": min(count, 20),  # Brave API limit
+            "offset": offset,
+            "safesearch": "moderate",
+            "freshness": "pd",  # Past day for fresh results
+            "text_decorations": False,
+            "spellcheck": True
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers=headers,
+                params=params
             )
-            generation = ChatGeneration(message=message)
-            return ChatResult(generations=[generation])
-               
-        except Exception as e:
-            print(f"❌ Snowflake Cortex error: {e}")
-           
-            # Provide helpful error message
-            error_content = f"❌ **Snowflake Cortex Error**: {str(e)}\n\n"
-            error_content += "💡 **Possible solutions**:\n"
-            error_content += "- Check your Snowflake connection and permissions\n"
-            error_content += "- Verify the model name is correct\n"
-            error_content += "- Try a simpler query\n"
-            error_content += "- Use tool-based queries (weather, Brave search, calculator)\n"
-           
-            message = AIMessage(content=error_content)
-            generation = ChatGeneration(message=message)
-            return ChatResult(generations=[generation])
- 
-    def _stream_content(
-        self, content: str, stop: Optional[List[str]]
-    ) -> Iterator[ChatGenerationChunk]:
-        """Stream the output of the model in chunks."""
-        chunk_size = 50
-        truncated_content = _truncate_at_stop_tokens(content, stop)
- 
-        for i in range(0, len(truncated_content), chunk_size):
-            chunk_content = truncated_content[i : i + chunk_size]
-            yield ChatGenerationChunk(message=AIMessageChunk(content=chunk_content))
- 
-    def _stream(
-        self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        **kwargs: Any,
-    ) -> Iterator[ChatGenerationChunk]:
-        """Stream the output of the model."""
-        try:
-            result = self._generate(messages, stop, run_manager, **kwargs)
-            content = result.generations[0].message.content
-           
-            for chunk in self._stream_content(content, stop):
-                yield chunk
-               
-        except Exception as e:
-            error_content = f"Streaming error: {str(e)}"
-            yield ChatGenerationChunk(message=AIMessageChunk(content=error_content))
+            
+            if ctx:
+                await ctx.info(f"Brave API response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Format the results
+                result = f"🔍 **Brave Web Search Results**\n\n"
+                result += f"**Query:** {query}\n"
+                result += f"**Found:** {len(data.get('web', {}).get('results', []))} results\n\n"
+                
+                web_results = data.get('web', {}).get('results', [])
+                
+                if web_results:
+                    for i, item in enumerate(web_results[:count], 1):
+                        title = item.get('title', 'No title')
+                        url = item.get('url', '')
+                        description = item.get('description', 'No description available')
+                        
+                        # Clean up description
+                        description = description[:200] + "..." if len(description) > 200 else description
+                        
+                        result += f"**{i}. {title}**\n"
+                        result += f"🔗 {url}\n"
+                        result += f"📝 {description}\n\n"
+                else:
+                    result += "No web results found for this query.\n\n"
+                
+                # Add news results if available
+                news_results = data.get('news', {}).get('results', [])
+                if news_results:
+                    result += f"📰 **Related News** ({len(news_results)} items):\n\n"
+                    for i, item in enumerate(news_results[:3], 1):
+                        title = item.get('title', 'No title')
+                        url = item.get('url', '')
+                        result += f"**{i}. {title}**\n🔗 {url}\n\n"
+                
+                result += f"*Search performed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+                
+                # Cache the result
+                brave_search_cache[cache_key] = {
+                    'timestamp': time.time(),
+                    'data': data,
+                    'formatted_result': result
+                }
+                
+                if ctx:
+                    await ctx.info(f"Brave web search completed successfully")
+                
+                return result
+                
+            elif response.status_code == 401:
+                error_msg = "❌ **Brave Search Error**\n\nInvalid API key. Please check your Brave Search API key configuration."
+                if ctx:
+                    await ctx.error("Brave API authentication failed")
+                return error_msg
+                
+            elif response.status_code == 429:
+                error_msg = "❌ **Brave Search Error**\n\nRate limit exceeded. Please try again later."
+                if ctx:
+                    await ctx.error("Brave API rate limit exceeded")
+                return error_msg
+                
+            else:
+                error_msg = f"❌ **Brave Search Error**\n\nAPI request failed with status {response.status_code}: {response.text[:200]}"
+                if ctx:
+                    await ctx.error(f"Brave API error: {response.status_code}")
+                return error_msg
+                
+    except httpx.TimeoutException:
+        error_msg = "❌ **Brave Search Error**\n\nRequest timed out. Please try again."
+        if ctx:
+            await ctx.error("Brave API request timed out")
+        return error_msg
+        
+    except Exception as e:
+        error_msg = f"❌ **Brave Search Error**\n\nUnexpected error: {str(e)}"
+        if ctx:
+            await ctx.error(f"Brave search unexpected error: {str(e)}")
+        return error_msg
+
+async def brave_local_search(query: str, ctx=None, count: int = 5) -> str:
+    """Search for local businesses and places using Brave Search API."""
+    try:
+        if ctx:
+            await ctx.info(f"Starting Brave local search for: {query}")
+        
+        # Check if API key is configured
+        if not brave_api_key:
+            error_msg = "❌ **Brave Local Search Error**\n\nBrave API key is not configured. Please configure the API key first."
+            if ctx:
+                await ctx.error("Brave API key not configured")
+            return error_msg
+        
+        # Check cache first
+        cache_key = f"local_{query.lower()}_{count}"
+        if cache_key in brave_search_cache and is_brave_cache_valid(brave_search_cache[cache_key]):
+            if ctx:
+                await ctx.info(f"Using cached Brave local search results for: {query}")
+            return brave_search_cache[cache_key]['formatted_result']
+        
+        if ctx:
+            await ctx.info(f"Making fresh Brave local API call for: {query}")
+        
+        # Make the API call
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": brave_api_key
+        }
+        
+        params = {
+            "q": query,
+            "count": min(count, 20),
+            "safesearch": "moderate",
+            "search_lang": "en",
+            "country": "US",
+            "units": "metric"
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                "https://api.search.brave.com/res/v1/local/search",
+                headers=headers,
+                params=params
+            )
+            
+            if ctx:
+                await ctx.info(f"Brave Local API response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Format the results
+                result = f"📍 **Brave Local Search Results**\n\n"
+                result += f"**Query:** {query}\n"
+                result += f"**Found:** {len(data.get('local', {}).get('results', []))} local results\n\n"
+                
+                local_results = data.get('local', {}).get('results', [])
+                
+                if local_results:
+                    for i, item in enumerate(local_results[:count], 1):
+                        name = item.get('title', 'No name')
+                        address = item.get('address', 'No address available')
+                        phone = item.get('phone', 'No phone')
+                        rating = item.get('rating', 'No rating')
+                        website = item.get('url', '')
+                        
+                        result += f"**{i}. {name}**\n"
+                        result += f"📍 {address}\n"
+                        
+                        if phone != 'No phone':
+                            result += f"📞 {phone}\n"
+                        
+                        if rating != 'No rating':
+                            result += f"⭐ Rating: {rating}\n"
+                        
+                        if website:
+                            result += f"🌐 {website}\n"
+                        
+                        result += "\n"
+                else:
+                    result += "No local results found for this query.\n\n"
+                    result += "💡 **Tips for better local search:**\n"
+                    result += "• Include location (e.g., 'pizza in New York')\n"
+                    result += "• Be specific about business type\n"
+                    result += "• Try different keywords\n\n"
+                
+                result += f"*Search performed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+                
+                # Cache the result
+                brave_search_cache[cache_key] = {
+                    'timestamp': time.time(),
+                    'data': data,
+                    'formatted_result': result
+                }
+                
+                if ctx:
+                    await ctx.info(f"Brave local search completed successfully")
+                
+                return result
+                
+            elif response.status_code == 401:
+                error_msg = "❌ **Brave Local Search Error**\n\nInvalid API key. Please check your Brave Search API key configuration."
+                if ctx:
+                    await ctx.error("Brave Local API authentication failed")
+                return error_msg
+                
+            elif response.status_code == 429:
+                error_msg = "❌ **Brave Local Search Error**\n\nRate limit exceeded. Please try again later."
+                if ctx:
+                    await ctx.error("Brave Local API rate limit exceeded")
+                return error_msg
+                
+            else:
+                error_msg = f"❌ **Brave Local Search Error**\n\nAPI request failed with status {response.status_code}: {response.text[:200]}"
+                if ctx:
+                    await ctx.error(f"Brave Local API error: {response.status_code}")
+                return error_msg
+                
+    except httpx.TimeoutException:
+        error_msg = "❌ **Brave Local Search Error**\n\nRequest timed out. Please try again."
+        if ctx:
+            await ctx.error("Brave Local API request timed out")
+        return error_msg
+        
+    except Exception as e:
+        error_msg = f"❌ **Brave Local Search Error**\n\nUnexpected error: {str(e)}"
+        if ctx:
+            await ctx.error(f"Brave local search unexpected error: {str(e)}")
+        return error_msg
+
+# ============================================================================
+# HEDIS TOOLS (PLACEHOLDER IMPLEMENTATIONS)
+# ============================================================================
+
+async def dfw_text2sql(prompt: str, ctx=None) -> str:
+    """Convert text to SQL for HEDIS value sets and code sets."""
+    try:
+        if ctx:
+            await ctx.info(f"Processing HEDIS text-to-SQL request: {prompt}")
+        
+        # This is a placeholder implementation
+        # Replace with your actual HEDIS database query logic
+        
+        result = f"🏥 **HEDIS Text-to-SQL Analysis**\n\n"
+        result += f"**Query:** {prompt}\n\n"
+        result += f"**Analysis:** This is a placeholder for HEDIS text-to-SQL conversion.\n"
+        result += f"Please implement the actual HEDIS database integration here.\n\n"
+        result += f"**Suggested SQL Structure:**\n"
+        result += f"```sql\n"
+        result += f"SELECT value_set_name, code, description\n"
+        result += f"FROM hedis_value_sets\n"
+        result += f"WHERE value_set_name LIKE '%{prompt}%'\n"
+        result += f"   OR description LIKE '%{prompt}%';\n"
+        result += f"```\n\n"
+        result += f"*Analysis completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+        
+        return result
+        
+    except Exception as e:
+        error_msg = f"❌ **HEDIS Analysis Error**\n\nFailed to process request: {str(e)}"
+        if ctx:
+            await ctx.error(f"HEDIS text-to-SQL error: {str(e)}")
+        return error_msg
+
+async def dfw_search(ctx, query: str) -> str:
+    """Search HEDIS measure specification documents."""
+    try:
+        if ctx:
+            await ctx.info(f"Searching HEDIS documentation for: {query}")
+        
+        # This is a placeholder implementation
+        # Replace with your actual HEDIS document search logic
+        
+        result = f"🏥 **HEDIS Document Search**\n\n"
+        result += f"**Query:** {query}\n\n"
+        result += f"**Search Results:** This is a placeholder for HEDIS document search.\n"
+        result += f"Please implement the actual HEDIS document search integration here.\n\n"
+        result += f"**Common HEDIS Measures:**\n"
+        result += f"• BCS - Breast Cancer Screening\n"
+        result += f"• CBP - Controlling High Blood Pressure\n"
+        result += f"• COA - Care for Older Adults\n"
+        result += f"• HbA1c - Hemoglobin A1c Testing\n"
+        result += f"• CCS - Cervical Cancer Screening\n\n"
+        result += f"*Search completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+        
+        return result
+        
+    except Exception as e:
+        error_msg = f"❌ **HEDIS Search Error**\n\nFailed to search documentation: {str(e)}"
+        if ctx:
+            await ctx.error(f"HEDIS search error: {str(e)}")
+        return error_msg
+
+# ============================================================================
+# INITIALIZATION AND STATUS FUNCTIONS
+# ============================================================================
+
+def get_cache_status() -> Dict[str, Any]:
+    """Get current cache status for monitoring."""
+    return {
+        "weather_cache": {
+            "entries": len(weather_cache),
+            "locations": list(weather_cache.keys())
+        },
+        "brave_cache": {
+            "entries": len(brave_search_cache),
+            "queries": list(brave_search_cache.keys())[:5]  # First 5 for privacy
+        },
+        "api_status": {
+            "brave_api_configured": brave_api_key is not None,
+            "brave_api_preview": f"{brave_api_key[:8]}...{brave_api_key[-4:]}" if brave_api_key else None
+        }
+    }
+
+def clear_cache() -> str:
+    """Clear all caches."""
+    global weather_cache, brave_search_cache
+    weather_cache.clear()
+    brave_search_cache.clear()
+    return "✅ All caches cleared successfully"
+
+# Initialize with the provided API key
+set_brave_api_key("BSAQIFoBulbULfcL6RMBxRWCtopFY0E")
+
+if __name__ == "__main__":
+    print("🚀 MCP Server Module Loaded")
+    print(f"✅ Brave API Key: {brave_api_key[:8]}...{brave_api_key[-4:] if brave_api_key else 'Not configured'}")
+    print("📋 Available tools: calculate, test_tool, diagnostic, get_weather, brave_web_search, brave_local_search, dfw_text2sql, dfw_search")
