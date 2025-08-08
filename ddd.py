@@ -122,6 +122,9 @@ status_indicator = "🟢 Connected" if server_status["connected"] else "🔴 Dis
 st.sidebar.markdown(f"**Server Status:** {status_indicator}")
 st.sidebar.markdown(f"**Brave API Key:** {'✅ Configured' if brave_api_key else '❌ Not configured'}")
 
+# Define debug mode early
+debug_mode = st.sidebar.checkbox("🐛 Debug Mode", value=False)
+
 if server_status["connected"] and server_status.get("tools_available") != "unknown":
     st.sidebar.markdown(f"**Tools Available:** {server_status['tools_available']}")
 
