@@ -1,705 +1,699 @@
-import streamlit as st
-import asyncio
 import json
-import yaml
-import pkg_resources
-import requests
-from datetime import datetime
-
-from mcp.client.sse import sse_client
-from mcp import ClientSession
-
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from dependencies import SnowFlakeConnector
-from llmobjectwrapper import ChatSnowflakeCortex
-from snowflake.snowpark import Session
-
-# Page config
-st.set_page_config(page_title="Enhanced MCP Client with Brave Search", page_icon="🚀")
-st.title("🚀 Enhanced MCP Client - DataFlyWheel Edition with Brave Search")
-st.markdown("*Synced with Enhanced Server - Brave Search Integrated*")
-
-# Updated server URL to match your configuration
-server_url = st.sidebar.text_input("MCP Server URL", "http://10.126.192.183:8082/sse")
-
-# Brave API Key Configuration
-st.sidebar.markdown("### 🔍 Brave Search Configuration")
-brave_api_key = st.sidebar.text_input(
-    "Brave API Key", 
-    value="BSAQIFoBulbULfcL6RMBxRWCtopFY0E", 
-    type="password",
-    help="Enter your Brave Search API key"
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
 )
-
-def test_server_connectivity(server_url):
-    """Simple server connectivity test."""
-    try:
-        base_url = server_url.replace('/sse', '')
-        response = requests.get(f"{base_url}/health", timeout=5)
-        return response.status_code == 200, {"status": "healthy" if response.status_code == 200 else "error"}
-    except:
-        return False, {"error": "Connection failed"}
-
-def try_direct_tool_call(query_text, prompt_type, server_url, message_placeholder):
-    """Try direct HTTP tool calls as fallback when MCP client fails."""
-    try:
-        base_url = server_url.replace('/sse', '')
-        
-        # Determine which tool to use based on prompt type and query
-        tool_name = None
-        arguments = {}
-        
-        query_lower = query_text.lower()
-        
-        if prompt_type == "Brave Web Search":
-            tool_name = "brave_web_search"
-            arguments = {"query": query_text, "count": 10}
-        elif prompt_type == "Local Search":
-            tool_name = "brave_local_search"
-            arguments = {"query": query_text, "count": 5}
-        elif prompt_type == "Weather":
-            tool_name = "get_weather"
-            arguments = {"place": query_text.replace("weather", "").replace("in", "").strip()}
-        elif prompt_type == "Calculator":
-            tool_name = "calculator"
-            # Extract math expression
-            import re
-            math_pattern = r'[0-9+\-*/().\s]+'
-            match = re.search(math_pattern, query_text)
-            if match:
-                arguments = {"expression": match.group().strip()}
-            else:
-                arguments = {"expression": query_text}
-        elif prompt_type == "HEDIS Expert":
-            if "search" in query_lower:
-                tool_name = "DFWSearch"
-                arguments = {"query": query_text}
-            else:
-                tool_name = "DFWAnalyst"
-                arguments = {"prompt": query_text}
-        else:
-            # Auto-detect for General AI
-            if any(keyword in query_lower for keyword in ["search", "latest", "news", "find", "recent", "current"]):
-                if not any(local_keyword in query_lower for local_keyword in ["restaurant", "near", "gas station", "hotel", "pizza", "coffee"]):
-                    tool_name = "brave_web_search"
-                    arguments = {"query": query_text, "count": 10}
-                else:
-                    tool_name = "brave_local_search"
-                    arguments = {"query": query_text, "count": 5}
-            elif any(keyword in query_lower for keyword in ["weather", "temperature", "forecast"]):
-                tool_name = "get_weather"
-                arguments = {"place": query_text.replace("weather", "").replace("in", "").strip()}
-            elif any(keyword in query_lower for keyword in ["calculate", "compute", "+", "-", "*", "/"]):
-                tool_name = "calculator"
-                arguments = {"expression": query_text}
-        
-        if not tool_name:
-            return None
-            
-        message_placeholder.text(f"🔧 Calling {tool_name} directly...")
-        
-        # Try endpoints based on your router code
-        endpoints_to_try = [
-            f"{base_url}/tool_call",  # Direct from your router
-            f"{base_url}/api/v1/tool_call"  # If mounted with prefix
-        ]
-        
-        payload = {
-            "tool_name": tool_name,
-            "arguments": arguments
-        }
-        
-        for endpoint in endpoints_to_try:
-            try:
-                response = requests.post(
-                    endpoint,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=30
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    if result.get("success"):
-                        return f"🔧 **{tool_name}** (Direct Call):\n\n{result.get('result', 'No result')}"
-                    else:
-                        return f"❌ Tool Error: {result.get('error', 'Unknown error')}"
-                elif response.status_code == 404:
-                    continue  # Try next endpoint
-                else:
-                    return f"❌ HTTP {response.status_code}: {response.text[:200]}"
-                        
-            except Exception as e:
-                continue
-                
-        return f"❌ All direct tool call endpoints failed for {tool_name}. Tried: {endpoints_to_try}"
-        
-    except Exception as e:
-        return f"❌ Direct tool call error: {str(e)}"
-
-# Configure API key in server with cleaner interface
-if brave_api_key and st.sidebar.button("🔑 Configure API Key"):
-    with st.spinner("Configuring Brave API key..."):
-        # Test server connectivity first
-        base_url = server_url.replace('/sse', '')
-        try:
-            health_response = requests.get(f"{base_url}/health", timeout=5)
-            if health_response.status_code != 200:
-                st.error("❌ Server not reachable")
-                st.stop()
-        except:
-            st.error("❌ Cannot connect to server")
-            st.stop()
-        
-        # Try to configure API key - based on your router code
-        success = False
-        endpoints_to_try = [
-            f"{base_url}/configure_brave_key",  # Direct from router
-            f"{base_url}/api/v1/configure_brave_key"  # If mounted with prefix
-        ]
-        
-        for endpoint in endpoints_to_try:
-            try:
-                st.info(f"Trying: {endpoint}")
-                response = requests.post(
-                    endpoint,
-                    json={"api_key": brave_api_key},
-                    headers={"Content-Type": "application/json"},
-                    timeout=10
-                )
-                
-                st.info(f"Status: {response.status_code}")
-                
-                if response.status_code == 200:
-                    st.success("✅ Brave API key configured successfully!")
-                    success = True
-                    break
-                else:
-                    st.warning(f"HTTP {response.status_code}: {response.text[:100]}")
-            except Exception as e:
-                st.error(f"Error with {endpoint}: {e}")
-                continue
-        
-        if not success:
-            st.error("❌ Failed to configure API key")
-            with st.expander("Show troubleshooting info"):
-                st.write("Tried endpoints:", endpoints_to_try)
-                st.write("Check that your MCP server is running and accessible")
-
-# Enhanced connection status check
-@st.cache_data(ttl=15)
-def check_server_connection(url):
-    try:
-        base_url = url.replace('/sse', '')
-        
-        # Try health check endpoint first
-        health_response = requests.get(f"{base_url}/health", timeout=5)
-        if health_response.status_code == 200:
-            health_data = health_response.json()
-            return {
-                "connected": True,
-                "status": health_data.get("status", "unknown"),
-                "tools_available": len(health_data.get("tools", {})),
-                "details": health_data
-            }
-        else:
-            # Fallback to basic connectivity test
-            basic_response = requests.get(base_url, timeout=5)
-            return {
-                "connected": basic_response.status_code == 200,
-                "status": "basic_connection",
-                "tools_available": "unknown",
-                "details": {}
-            }
-    except Exception as e:
-        return {
-            "connected": False,
-            "status": f"error: {str(e)}",
-            "tools_available": 0,
-            "details": {}
-        }
-
-server_status = check_server_connection(server_url)
-status_indicator = "🟢 Connected" if server_status["connected"] else "🔴 Disconnected"
-st.sidebar.markdown(f"**Server Status:** {status_indicator}")
-st.sidebar.markdown(f"**Brave API Key:** {'✅ Configured' if brave_api_key else '❌ Not configured'}")
-
-# Define debug mode early
-# Quick endpoint discovery
-if st.sidebar.button("🔍 Find Endpoints"):
-    with st.spinner("Discovering available endpoints..."):
-        base_url = server_url.replace('/sse', '')
-        st.info(f"Checking server: {base_url}")
-        
-        # Check common FastAPI paths
-        paths_to_check = [
-            "/",
-            "/docs", 
-            "/openapi.json",
-            "/health",
-            "/tools", 
-            "/tool_call",
-            "/configure_brave_key",
-            "/system_info",
-            "/api/v1/tool_call",
-            "/api/v1/configure_brave_key",
-            "/api/tool_call",
-            "/api/configure_brave_key"
-        ]
-        
-        working_endpoints = []
-        
-        for path in paths_to_check:
-            try:
-                response = requests.get(f"{base_url}{path}", timeout=3)
-                if response.status_code == 200:
-                    working_endpoints.append(f"✅ GET {path}")
-                elif response.status_code == 405:  # Method not allowed - but endpoint exists
-                    working_endpoints.append(f"🔄 POST {path} (Method not allowed for GET)")
-                elif response.status_code == 422:  # Unprocessable entity - but endpoint exists
-                    working_endpoints.append(f"🔄 POST {path} (Needs POST data)")
-            except:
-                pass
-        
-        if working_endpoints:
-            st.success("Found working endpoints:")
-            for endpoint in working_endpoints:
-                st.text(endpoint)
-        else:
-            st.error("No endpoints found - check server URL and ensure server is running")
-            
-        # Try to get OpenAPI docs if available
-        try:
-            docs_response = requests.get(f"{base_url}/openapi.json", timeout=5)
-            if docs_response.status_code == 200:
-                docs_data = docs_response.json()
-                if "paths" in docs_data:
-                    st.info("Available API paths from OpenAPI:")
-                    for path in docs_data["paths"].keys():
-                        st.text(f"📋 {path}")
-        except:
-            pass
-
-debug_mode = st.sidebar.checkbox("🐛 Debug Mode", value=False)
-
-if server_status["connected"] and server_status.get("tools_available") != "unknown":
-    st.sidebar.markdown(f"**Tools Available:** {server_status['tools_available']}")
-
-# Test Brave Configuration Button
-if st.sidebar.button("🧪 Test Brave Config", help="Test if Brave API is properly configured"):
-    st.markdown("### 🧪 Testing Brave Configuration")
-    
-    # Test server connectivity
-    server_ok, server_info = test_server_connectivity(server_url)
-    
-    if server_ok:
-        # Test if Brave search tools are available
-        try:
-            base_url = server_url.replace('/sse', '')
-            tools_response = requests.get(f"{base_url}/tools", timeout=10)
-            
-            if tools_response.status_code == 200:
-                tools_data = tools_response.json()
-                available_tools = tools_data.get("tools", {})
-                
-                brave_tools = [tool for tool in available_tools.keys() if "brave" in tool.lower()]
-                
-                if brave_tools:
-                    st.success(f"✅ Brave tools found: {brave_tools}")
-                    
-                    # Test actual Brave search call
-                    test_payload = {
-                        "tool_name": "brave_web_search",
-                        "arguments": {"query": "test search", "count": 1}
-                    }
-                    
-                    test_response = requests.post(
-                        f"{base_url}/tool_call",
-                        json=test_payload,
-                        timeout=15
-                    )
-                    
-                    if test_response.status_code == 200:
-                        test_result = test_response.json()
-                        if test_result.get("success"):
-                            st.success("✅ Brave search test successful!")
-                            st.json(test_result)
-                        else:
-                            st.error(f"❌ Brave search test failed: {test_result.get('error')}")
-                    else:
-                        st.error(f"❌ Brave search test failed: HTTP {test_response.status_code}")
-                else:
-                    st.warning("⚠️ No Brave tools found in server tools list")
-                    st.json(available_tools)
-            else:
-                st.error(f"❌ Could not get tools list: HTTP {tools_response.status_code}")
-                
-        except Exception as e:
-            st.error(f"❌ Error testing Brave configuration: {e}")
-    else:
-        st.error("❌ Server not reachable - cannot test Brave configuration")
-
-show_server_info = st.sidebar.checkbox("🛡 Show MCP Server Info", value=False)
-
-# Enhanced server info display
-if show_server_info:
-    async def fetch_mcp_info():
-        result = {"tools": [], "server_health": {}}
-        
-        try:
-            # Get server health info
-            base_url = server_url.replace('/sse', '')
-            try:
-                health_response = requests.get(f"{base_url}/health", timeout=5)
-                if health_response.status_code == 200:
-                    result["server_health"] = health_response.json()
-            except:
-                pass
-                
-            # Get MCP server info
-            async with sse_client(url=server_url) as sse_connection:
-                async with ClientSession(*sse_connection) as session:
-                    await session.initialize()
-
-                    # --- Tools ---
-                    try:
-                        tools = await session.list_tools()
-                        if hasattr(tools, 'tools'):
-                            for t in tools.tools:
-                                tool_info = {
-                                    "name": t.name,
-                                    "description": getattr(t, 'description', ''),
-                                }
-                                result["tools"].append(tool_info)
-                    except Exception as e:
-                        result["tools"].append({"error": f"Failed to load tools: {e}"})
-
-        except Exception as e:
-            st.sidebar.error(f"❌ MCP Connection Error: {e}")
-            
-        return result
-
-    mcp_data = asyncio.run(fetch_mcp_info())
-
-    # Server health display
-    if mcp_data.get("server_health"):
-        with st.sidebar.expander("🏥 Server Health", expanded=False):
-            health = mcp_data["server_health"]
-            st.json(health)
-
-    # Tools display
-    with st.sidebar.expander("🛠 Available Tools", expanded=False):
-        available_tools = [t for t in mcp_data["tools"] if isinstance(t, dict) and "error" not in t]
-        
-        for tool in available_tools:
-            st.markdown(f"**{tool['name']}**")
-            if tool.get('description'):
-                st.caption(tool['description'])
-
-else:
-    # === MAIN APPLICATION MODE ===
-    @st.cache_resource
-    def get_snowflake_connection():
-        try:
-            return SnowFlakeConnector.get_conn('aedl', '')
-        except Exception as e:
-            st.error(f"❌ Failed to connect to Snowflake: {e}")
-            return None
-
-    @st.cache_resource
-    def get_model():
-        try:
-            sf_conn = get_snowflake_connection()
-            if sf_conn:
-                return ChatSnowflakeCortex(
-                    model="claude-4-sonnet", 
-                    cortex_function="complete",
-                    session=Session.builder.configs({"connection": sf_conn}).getOrCreate(),
-                    mcp_server_url=server_url,
-                    brave_api_key=brave_api_key
-                )
-            else:
-                return ChatSnowflakeCortex(
-                    model="claude-4-sonnet",
-                    cortex_function="complete",
-                    mcp_server_url=server_url,
-                    brave_api_key=brave_api_key
-                )
-        except Exception as e:
-            st.error(f"❌ Failed to initialize model: {e}")
-            return None
-    
-    # Enhanced prompt type selection with Brave Search
-    prompt_type = st.sidebar.radio(
-        "🎯 Select Expert Mode", 
-        ["Calculator", "HEDIS Expert", "Weather", "Brave Web Search", "Local Search", "General AI"],
-        help="Choose the type of expert assistance you need"
-    )
-    
-    # Enhanced examples with Brave Search
-    examples = {
-        "Calculator": [
-            "Calculate the expression (4+5)/2.0", 
-            "What is the square root of 144?", 
-            "Calculate 3 to the power of 4",
-            "What is 15% of 847?",
-            "Calculate compound interest on $1000 at 5% for 3 years"
-        ],
-        "HEDIS Expert": [
-            "What are the codes in BCS Value Set?",
-            "Explain the BCS (Breast Cancer Screening) measure",
-            "What is the age criteria for CBP measure?",
-            "Describe the COA measure requirements",
-            "What LOB is COA measure scoped under?",
-            "List all value sets for diabetes measures",
-            "What are the exclusions for HbA1c testing?",
-            "Explain the numerator criteria for blood pressure control",
-            "What is the measurement period for HEDIS measures?",
-            "Define the eligible population for colorectal cancer screening"
-        ],
-        "Weather": [
-            "What's the current weather in New York?",
-            "Get weather forecast for London, UK",
-            "Show me the weather for Tokyo, Japan",
-            "What's the weather like in Sydney, Australia?",
-            "Get current conditions for Paris, France"
-        ],
-        "Brave Web Search": [
-            "latest AI developments 2025",
-            "current renewable energy trends", 
-            "recent space exploration missions",
-            "today's technology news",
-            "breaking news artificial intelligence",
-            "newest electric vehicle models",
-            "latest cryptocurrency updates",
-            "recent climate change research"
-        ],
-        "Local Search": [
-            "pizza restaurants near Central Park",
-            "coffee shops in Manhattan",
-            "gas stations in San Francisco",
-            "Italian restaurants downtown",
-            "best sushi near Times Square",
-            "pharmacies open late",
-            "hotels near airport",
-            "auto repair shops nearby"
-        ],
-        "General AI": [
-            "Explain quantum computing in simple terms",
-            "What are the benefits of renewable energy?",
-            "How does machine learning work?",
-            "What's the difference between AI and ML?"
-        ]
+import asyncio
+import httpx
+import re
+import base64
+ 
+from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    ChatMessage,
+    HumanMessage,
+    SystemMessage,
+)
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.tools import BaseTool
+from langchain_core.utils import (
+    convert_to_secret_str,
+    get_from_dict_or_env,
+    get_pydantic_field_names,
+)
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.utils.utils import _build_model_kwargs
+from pydantic import Field, SecretStr, model_validator
+ 
+SUPPORTED_ROLES: List[str] = [
+    "system",
+    "user",
+    "assistant",
+]
+ 
+class ChatSnowflakeCortexError(Exception):
+    """Error with Snowpark client."""
+ 
+def _convert_message_to_dict(message: BaseMessage) -> dict:
+    """Convert a LangChain message to a dictionary."""
+    message_dict: Dict[str, Any] = {
+        "content": message.content,
     }
-
-    # Initialize session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    # Display chat history
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Enhanced example queries
-    with st.sidebar.expander(f"💡 Example Queries - {prompt_type}", expanded=True):
-        if examples[prompt_type]:
-            for i, example in enumerate(examples[prompt_type]):
-                display_text = example if len(example) <= 70 else example[:67] + "..."
-                if st.button(display_text, key=f"{prompt_type}_{i}_{hash(example)}", use_container_width=True):
-                    st.session_state.query_input = example
-                    st.session_state.selected_mode = prompt_type
-        else:
-            st.info("Loading examples...")
-
-    # Show current mode
-    if debug_mode:
-        st.sidebar.info(f"🐛 Current Mode: {prompt_type}")
-        if "selected_mode" in st.session_state:
-            st.sidebar.info(f"🐛 Last Selected Mode: {st.session_state.selected_mode}")
-
-    # Control buttons
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
+ 
+    # Populate role and additional message data
+    if isinstance(message, ChatMessage) and message.role in SUPPORTED_ROLES:
+        message_dict["role"] = message.role
+    elif isinstance(message, SystemMessage):
+        message_dict["role"] = "system"
+    elif isinstance(message, HumanMessage):
+        message_dict["role"] = "user"
+    elif isinstance(message, AIMessage):
+        message_dict["role"] = "assistant"
+    else:
+        raise TypeError(f"Got unknown type {message}")
+    return message_dict
+ 
+def _truncate_at_stop_tokens(text: str, stop: Optional[List[str]]) -> str:
+    """Truncates text at the earliest stop token found."""
+    if stop is None:
+        return text
+ 
+    for stop_token in stop:
+        stop_token_idx = text.find(stop_token)
+        if stop_token_idx != -1:
+            text = text[:stop_token_idx]
+    return text
+ 
+def _escape_for_sql(text: str) -> str:
+    """Properly escape text for SQL string literals."""
+    # Replace single quotes with double single quotes (SQL standard)
+    escaped = text.replace("'", "''")
+    # Replace backslashes
+    escaped = escaped.replace("\\", "\\\\")
+    return escaped
+ 
+def _safe_json_for_sql(data: Any) -> str:
+    """Create a JSON string that's safe for SQL embedding."""
+    json_str = json.dumps(data, ensure_ascii=True)
+    # Escape for SQL
+    escaped = _escape_for_sql(json_str)
+    return escaped
+ 
+class ChatSnowflakeCortex(BaseChatModel):
+    """Enhanced Snowflake Cortex Chat model with MCP tool integration and Brave Search"""
+   
+    # MCP server configuration
+    mcp_server_url: str = Field(default="http://localhost:8081/sse")
+    """URL of the MCP server"""
     
-    with col2:
-        if st.button("🔄 Refresh", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-    # Chat input handling
-    if query := st.chat_input("Type your query here...") or "query_input" in st.session_state:
-        if "query_input" in st.session_state:
-            query = st.session_state.query_input
-            del st.session_state.query_input
-
-        with st.chat_message("user"):
-            st.markdown(query)
-
-        st.session_state.messages.append({"role": "user", "content": query})
-
-        if debug_mode:
-            st.info(f"🐛 Original query: {query}")
-            st.info(f"🐛 Current mode: {prompt_type}")
-
-        async def process_query(query_text):
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                message_placeholder.text("Processing...")
-                
+    # Brave Search API key
+    brave_api_key: str = Field(default="BSAQIFoBulbULfcL6RMBxRWCtopFY0E")
+    """Brave Search API key"""
+   
+    test_tools: Dict[str, Union[Dict[str, Any], Type, Callable, BaseTool]] = Field(
+        default_factory=dict
+    )
+ 
+    session: Any = None
+    """Snowpark session object."""
+ 
+    model: str = "mistral-large"
+    """Snowflake cortex hosted LLM model name, defaulted to `mistral-large`."""
+ 
+    cortex_function: str = "complete"
+    """Cortex function to use, defaulted to `complete`."""
+ 
+    temperature: float = 0
+    """Model temperature. Value should be >= 0 and <= 1.0"""
+ 
+    max_tokens: Optional[int] = None
+    """The maximum number of output tokens in the response."""
+ 
+    top_p: Optional[float] = 0
+    """top_p adjusts the number of choices for each predicted tokens based on
+        cumulative probabilities. Value should be ranging between 0.0 and 1.0.
+    """
+ 
+    snowflake_username: Optional[str] = Field(default=None, alias="username")
+    """Automatically inferred from env var `SNOWFLAKE_USERNAME` if not provided."""
+    snowflake_password: Optional[SecretStr] = Field(default=None, alias="password")
+    """Automatically inferred from env var `SNOWFLAKE_PASSWORD` if not provided."""
+    snowflake_account: Optional[str] = Field(default=None, alias="account")
+    """Automatically inferred from env var `SNOWFLAKE_ACCOUNT` if not provided."""
+    snowflake_database: Optional[str] = Field(default=None, alias="database")
+    """Automatically inferred from env var `SNOWFLAKE_DATABASE` if not provided."""
+    snowflake_schema: Optional[str] = Field(default=None, alias="schema")
+    """Automatically inferred from env var `SNOWFLAKE_SCHEMA` if not provided."""
+    snowflake_warehouse: Optional[str] = Field(default=None, alias="warehouse")
+    """Automatically inferred from env var `SNOWFLAKE_WAREHOUSE` if not provided."""
+    snowflake_role: Optional[str] = Field(default=None, alias="role")
+    """Automatically inferred from env var `SNOWFLAKE_ROLE` if not provided."""
+ 
+    def __init__(self, **kwargs):
+        """Initialize the ChatSnowflakeCortex model."""
+        super().__init__(**kwargs)
+        print(f"🔑 Brave API key loaded: {self.brave_api_key[:8]}...")
+    
+    def _configure_brave_api_key_sync(self):
+        """Synchronously configure Brave API key."""
+        try:
+            print(f"🔑 Configuring Brave API key...")
+            
+            import requests
+            
+            # Try multiple possible endpoints
+            endpoints_to_try = [
+                f"{self.mcp_server_url.rstrip('/sse')}/configure_brave_key",
+                f"{self.mcp_server_url.rstrip('/sse')}/api/v1/configure_brave_key",
+                f"{self.mcp_server_url.replace('/sse', '')}/configure_brave_key"
+            ]
+            
+            for endpoint in endpoints_to_try:
                 try:
-                    # Initialize MCP client
-                    client = MultiServerMCPClient(
-                        {"DataFlyWheelServer": {"url": server_url, "transport": "sse"}}
+                    print(f"🔄 Trying endpoint: {endpoint}")
+                    response = requests.post(
+                        endpoint,
+                        json={"api_key": self.brave_api_key},
+                        headers={"Content-Type": "application/json"},
+                        timeout=10
                     )
+                    
+                    print(f"📡 Response status: {response.status_code}")
+                    print(f"📄 Response text: {response.text}")
+                    
+                    if response.status_code == 200:
+                        print("✅ Brave API key configured successfully")
+                        return True
+                    else:
+                        print(f"⚠️ Endpoint {endpoint} returned status: {response.status_code}")
+                        continue
+                        
+                except requests.exceptions.RequestException as e:
+                    print(f"❌ Request failed for {endpoint}: {e}")
+                    continue
+            
+            print("❌ All configuration endpoints failed")
+            return False
+                    
+        except Exception as e:
+            print(f"❌ Could not configure Brave API key: {e}")
+            return False
+ 
+    def test_brave_configuration(self):
+        """Test Brave API configuration with detailed debugging."""
+        print("🧪 Testing Brave API Configuration...")
+        print(f"🔑 API Key: {self.brave_api_key[:8]}...{self.brave_api_key[-4:]}")
+        print(f"🌐 MCP Server URL: {self.mcp_server_url}")
+        
+        # Test server connectivity first
+        import requests
+        base_url = self.mcp_server_url.replace('/sse', '')
+        
+        print(f"\n🔗 Testing server connectivity to: {base_url}")
+        try:
+            response = requests.get(f"{base_url}/health", timeout=5)
+            print(f"✅ Server health check: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Server health check failed: {e}")
+            return False
+        
+        # Test configuration
+        print(f"\n🔧 Testing Brave API configuration...")
+        return self._configure_brave_api_key_sync()
+    
+    def get_debug_info(self):
+        """Get debugging information for troubleshooting."""
+        return {
+            "mcp_server_url": self.mcp_server_url,
+            "brave_api_key_prefix": self.brave_api_key[:8] + "...",
+            "brave_api_key_length": len(self.brave_api_key),
+            "possible_endpoints": [
+                f"{self.mcp_server_url.rstrip('/sse')}/configure_brave_key",
+                f"{self.mcp_server_url.rstrip('/sse')}/api/v1/configure_brave_key",
+                f"{self.mcp_server_url.replace('/sse', '')}/configure_brave_key"
+            ]
+        }
 
-                    model = get_model()
-                    if not model:
-                        raise Exception("Failed to initialize AI model")
-                    
-                    # Get tools and create agent
-                    tools = await client.get_tools()
-                    if not tools:
-                        # If MCP client fails, try direct HTTP tool calls
-                        message_placeholder.text("🔄 Trying direct tool calls...")
-                        result = try_direct_tool_call(query_text, prompt_type, server_url, message_placeholder)
-                        if result:
-                            message_placeholder.markdown(result)
-                            st.session_state.messages.append({"role": "assistant", "content": result})
-                            return
-                        else:
-                            raise Exception("No tools available via MCP or direct calls")
-                    
-                    # Create agent with tools
-                    agent = create_react_agent(model=model, tools=tools)
-                    
-                    # Determine what type of query this is and force tool usage
-                    query_lower = query_text.lower()
-                    
-                    # First check the selected expert mode
-                    if prompt_type == "Brave Web Search":
-                        message_placeholder.text("🔍 Using Brave Web Search...")
-                        query_text = f"Use the brave_web_search tool to search for: {query_text}"
-                    
-                    elif prompt_type == "Local Search":
-                        message_placeholder.text("📍 Using Brave Local Search...")
-                        query_text = f"Use the brave_local_search tool to find local businesses for: {query_text}"
-                    
-                    elif prompt_type == "Weather":
-                        message_placeholder.text("🌤️ Getting weather information...")
-                        query_text = f"Use the get_weather tool to get weather information for: {query_text}"
-                    
-                    elif prompt_type == "Calculator":
-                        message_placeholder.text("🧮 Calculating...")
-                        query_text = f"Use the calculator tool to calculate: {query_text}"
-                    
-                    elif prompt_type == "HEDIS Expert":
-                        message_placeholder.text("🏥 Searching HEDIS data...")
-                        if "search" in query_lower or "find" in query_lower or "list" in query_lower:
-                            query_text = f"Use the DFWSearch tool to search HEDIS documentation for: {query_text}"
-                        else:
-                            query_text = f"Use the DFWAnalyst tool to analyze HEDIS data for: {query_text}"
-                    
-                    # If General AI mode, still try to detect tool usage from keywords
-                    elif prompt_type == "General AI":
-                        if any(keyword in query_lower for keyword in ["search", "latest", "news", "find", "recent", "current", "what is", "tell me about"]):
-                            # This should use Brave Web Search
-                            if not any(local_keyword in query_lower for local_keyword in ["restaurant", "near", "gas station", "hotel", "pizza", "coffee"]):
-                                message_placeholder.text("🔍 Using Brave Web Search...")
-                                query_text = f"Use the brave_web_search tool to search for: {query_text}"
-                        
-                        elif any(keyword in query_lower for keyword in ["restaurant", "near", "gas station", "hotel", "pizza", "coffee", "local", "nearby"]):
-                            # This should use Brave Local Search
-                            message_placeholder.text("📍 Using Brave Local Search...")
-                            query_text = f"Use the brave_local_search tool to find: {query_text}"
-                        
-                        elif any(keyword in query_lower for keyword in ["weather", "temperature", "forecast", "conditions"]):
-                            # This should use Weather tool
-                            message_placeholder.text("🌤️ Getting weather information...")
-                            query_text = f"Use the get_weather tool for: {query_text}"
-                        
-                        elif any(keyword in query_lower for keyword in ["calculate", "compute", "math", "+", "-", "*", "/", "="]):
-                            # This should use Calculator
-                            message_placeholder.text("🧮 Calculating...")
-                            query_text = f"Use the calculator tool to calculate: {query_text}"
-                        
-                        elif any(keyword in query_lower for keyword in ["hedis", "bcs", "cbp", "measure", "value set", "codes"]):
-                            # This should use HEDIS tools
-                            message_placeholder.text("🏥 Searching HEDIS data...")
-                            if "search" in query_lower or "find" in query_lower:
-                                query_text = f"Use the DFWSearch tool to search: {query_text}"
-                            else:
-                                query_text = f"Use the DFWAnalyst tool to analyze: {query_text}"
-                    
-                    # Process the modified query
-                    messages = [{"role": "user", "content": query_text}]
-                    
-                    if debug_mode:
-                        st.info(f"🐛 Debug - Modified query: {query_text}")
-                        st.info(f"🐛 Debug - Selected mode: {prompt_type}")
-                    
-                    message_placeholder.text("🤖 Processing with AI agent...")
-                    response = await asyncio.wait_for(
-                        agent.ainvoke({"messages": messages}), 
-                        timeout=60.0
-                    )
-                    
-                    if debug_mode:
-                        st.info(f"🐛 Debug - Raw response type: {type(response)}")
-                        with st.expander("🐛 Debug - Raw Response"):
-                            st.json(str(response)[:1000] + "..." if len(str(response)) > 1000 else str(response))
-                    
-                    # Extract result
-                    result = None
-                    if isinstance(response, dict):
-                        if 'messages' in response:
-                            messages_list = response['messages']
-                            if isinstance(messages_list, list):
-                                for msg in reversed(messages_list):
-                                    if hasattr(msg, 'content') and hasattr(msg, 'type'):
-                                        if getattr(msg, 'type', None) == 'ai':
-                                            result = msg.content
-                                            break
-                                    elif hasattr(msg, 'content'):
-                                        result = msg.content
-                    
-                    if not result:
-                        result = str(response)
-                    
-                    if isinstance(result, str):
-                        result = result.strip()
-                        if len(result) < 10:
-                            result = "Response was too short. Please try rephrasing your query."
-                    
-                    # Display result
-                    message_placeholder.markdown(result)
-                    st.session_state.messages.append({"role": "assistant", "content": result})
-                    
-                except Exception as e:
-                    # Try direct tool call as final fallback
-                    message_placeholder.text("🔄 Trying direct tool call fallback...")
-                    
+    def bind_tools(
+        self,
+        tools: Sequence[Union[Dict[str, Any], Type, Callable, BaseTool]],
+        *,
+        tool_choice: Optional[
+            Union[dict, str, Literal["auto", "any", "none"], bool]
+        ] = "auto",
+        **kwargs: Any,
+    ) -> "ChatSnowflakeCortex":
+        """Bind tool-like objects to this chat model."""
+        formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
+        formatted_tools_dict = {
+            tool["name"]: tool for tool in formatted_tools if "name" in tool
+        }
+        self.test_tools.update(formatted_tools_dict)
+ 
+        print(f"🔧 Tools bound to chat model: {len(formatted_tools_dict)} tools")
+        for tool_name in formatted_tools_dict.keys():
+            print(f"- {tool_name}")
+        return self
+ 
+    @model_validator(mode="before")
+    @classmethod
+    def build_extra(cls, values: Dict[str, Any]) -> Any:
+        """Build extra kwargs from additional params that were passed in."""
+        all_required_field_names = get_pydantic_field_names(cls)
+        values = _build_model_kwargs(values, all_required_field_names)
+        return values
+ 
+    def __del__(self) -> None:
+        if getattr(self, "session", None) is not None:
+            self.session.close()
+ 
+    @property
+    def _llm_type(self) -> str:
+        """Get the type of language model used by this chat model."""
+        return f"snowflake-cortex-{self.model}"
+ 
+    async def _call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Call MCP tool via HTTP API with Brave Search support"""
+        try:
+            print(f"🔧 Calling MCP tool: {tool_name} with args: {arguments}")
+            
+            # Ensure Brave API key is configured for Brave search tools
+            if tool_name in ["brave_web_search", "brave_local_search"]:
+                print(f"🔍 Brave search tool detected, ensuring configuration...")
+                await self._ensure_brave_configured()
+           
+            tool_call_data = {
+                "tool_name": tool_name,
+                "arguments": arguments
+            }
+           
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # Try multiple possible endpoints
+                endpoints_to_try = [
+                    f"{self.mcp_server_url.rstrip('/sse')}/tool_call",
+                    f"{self.mcp_server_url.rstrip('/sse')}/api/v1/tool_call",
+                    f"{self.mcp_server_url.replace('/sse', '')}/tool_call"
+                ]
+                
+                for endpoint in endpoints_to_try:
                     try:
-                        result = try_direct_tool_call(query_text, prompt_type, server_url, message_placeholder)
-                        if result:
-                            message_placeholder.markdown(result)
-                            st.session_state.messages.append({"role": "assistant", "content": result})
+                        print(f"🔄 Trying tool endpoint: {endpoint}")
+                        response = await client.post(
+                            endpoint,
+                            json=tool_call_data,
+                            headers={"Content-Type": "application/json"}
+                        )
+                        
+                        print(f"📡 Tool call response status: {response.status_code}")
+                       
+                        if response.status_code == 200:
+                            result = response.json()
+                            print(f"📄 Tool call response: {result}")
+                            if result.get('success'):
+                                return str(result.get('result', 'No result returned'))
+                            else:
+                                return f"Tool error: {result.get('error', 'Unknown error')}"
                         else:
-                            error_message = f"❌ Error: {str(e)}\n\n💡 Try:\n- Check server connection\n- Verify Brave API key is configured\n- Try a different query type"
-                            message_placeholder.markdown(error_message)
-                            st.session_state.messages.append({"role": "assistant", "content": error_message})
-                    except Exception as fallback_error:
-                        error_message = f"❌ All methods failed:\n- Main error: {str(e)}\n- Fallback error: {str(fallback_error)}"
-                        message_placeholder.markdown(error_message)
-                        st.session_state.messages.append({"role": "assistant", "content": error_message})
-
-        if query:
-            asyncio.run(process_query(query))
-
-# Footer
-st.markdown("---")
-st.caption(f"🚀 Enhanced MCP Client with Brave Search | 📡 {server_url} | 📊 {status_indicator}")
+                            print(f"❌ Tool endpoint {endpoint} failed with status {response.status_code}: {response.text}")
+                            continue
+                            
+                    except Exception as http_error:
+                        print(f"❌ HTTP request failed for {endpoint}: {http_error}")
+                        continue
+                
+                # If all endpoints failed, try fallback
+                print("❌ All tool call endpoints failed, using fallback")
+                return await self._fallback_tool_call(tool_name, arguments)
+                   
+        except Exception as e:
+            print(f"❌ MCP tool call error: {e}")
+            return f"Error calling tool {tool_name}: {str(e)}"
+    
+    async def _ensure_brave_configured(self):
+        """Ensure Brave API key is configured before making Brave search calls."""
+        try:
+            print(f"🔍 Verifying Brave API configuration...")
+            
+            # Try synchronous configuration first
+            if self._configure_brave_api_key_sync():
+                return True
+            
+            # If sync failed, try async
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Try multiple endpoints
+                endpoints_to_try = [
+                    f"{self.mcp_server_url.rstrip('/sse')}/configure_brave_key",
+                    f"{self.mcp_server_url.rstrip('/sse')}/api/v1/configure_brave_key",
+                    f"{self.mcp_server_url.replace('/sse', '')}/configure_brave_key"
+                ]
+                
+                for endpoint in endpoints_to_try:
+                    try:
+                        print(f"🔄 Async trying endpoint: {endpoint}")
+                        response = await client.post(
+                            endpoint,
+                            json={"api_key": self.brave_api_key},
+                            headers={"Content-Type": "application/json"}
+                        )
+                        
+                        print(f"📡 Async response status: {response.status_code}")
+                        
+                        if response.status_code == 200:
+                            print("✅ Brave API key configured successfully (async)")
+                            return True
+                        else:
+                            print(f"⚠️ Async endpoint {endpoint} returned: {response.status_code}")
+                            continue
+                            
+                    except Exception as e:
+                        print(f"❌ Async request failed for {endpoint}: {e}")
+                        continue
+                
+                print("❌ All async configuration endpoints failed")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ Could not verify Brave configuration: {e}")
+            return False
+ 
+    async def _fallback_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Fallback method to call tools directly with Brave Search support"""
+        try:
+            print(f"🔄 Using fallback for tool: {tool_name}")
+           
+            if tool_name == "calculator":
+                expression = arguments.get("expression", "")
+                if expression:
+                    try:
+                        allowed_chars = "0123456789+-*/(). "
+                        if all(char in allowed_chars for char in expression):
+                            result = eval(expression)
+                            return f"Result: {result}"
+                        else:
+                            return "Invalid characters in expression."
+                    except Exception as e:
+                        return f"Error: {str(e)}"
+                       
+            elif tool_name == "test_tool":
+                message = arguments.get("message", "test")
+                from datetime import datetime
+                current_time = datetime.now().isoformat()
+                return f"✅ SUCCESS: Test tool called with message '{message}' at {current_time}"
+               
+            elif tool_name == "get_weather":
+                place = arguments.get("place", "")
+                return f"🌤️ Weather service unavailable in fallback mode. Please check MCP server for location: {place}"
+            
+            elif tool_name in ["brave_web_search", "brave_local_search"]:
+                query = arguments.get("query", "")
+                return f"🔍 Brave Search service unavailable in fallback mode. Please check MCP server connection for query: {query}"
+               
+            else:
+                return f"Tool {tool_name} not available in fallback mode. Please check MCP server connection."
+               
+        except Exception as e:
+            return f"Fallback tool call failed: {str(e)}"
+ 
+    def _detect_tool_calls(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
+        """Enhanced tool call detection from messages with Brave Search"""
+        tool_calls = []
+       
+        for message in messages:
+            content = str(message.content)
+            content_lower = content.lower()
+           
+            # Enhanced detection patterns with Brave Search
+            tool_patterns = {
+                "calculator": [
+                    r"use.*calculator.*(?:calculate|expression|compute).*?[:=]\s*([^\n]+)",
+                    r"calculate\s*[:=]\s*([^\n]+)",
+                    r"calculator.*tool.*(?:with|expression).*?[:=]\s*([^\n]+)",
+                    # Direct calculation requests
+                    r"(?:what\s+is|calculate|compute)\s+([0-9+\-*/().\s]+)(?:\?|$)",
+                    # Weather queries that need calculation
+                    r"weather.*(?:calculate|temperature|convert)"
+                ],
+                "get_weather": [
+                    r"(?:weather|temperature|forecast|conditions?).*in\s+([^?\n.]+)",
+                    r"(?:what.*weather|current.*weather|weather.*like).*in\s+([^?\n.]+)",
+                    r"(?:get|show|find).*weather.*(?:for|in)\s+([^?\n.]+)",
+                    r"weather.*(?:for|in)\s+([^?\n.]+)",
+                    # Simple weather requests
+                    r"weather\s+([a-zA-Z\s,]+)",
+                    # Current weather patterns
+                    r"current.*weather.*([a-zA-Z\s,]+)"
+                ],
+                "wikipedia_search": [
+                    r"(?:search|find|look.*up).*wikipedia.*(?:for|about)\s+([^?\n.]+)",
+                    r"wikipedia.*(?:search|information|article).*(?:for|about|on)\s+([^?\n.]+)",
+                    r"(?:what.*according.*wikipedia|wikipedia.*says).*about\s+([^?\n.]+)"
+                ],
+                "brave_web_search": [
+                    # General web search patterns
+                    r"(?:search|find|look.*up).*(?:web|internet|online|news).*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:latest|recent|current).*(?:news|information|updates?).*about\s+([^?\n.]+)",
+                    r"web.*search.*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:find|search).*(?:latest|current|recent).*([^?\n.]+)",
+                    # Brave specific patterns
+                    r"brave.*search.*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:search|find).*brave.*([^?\n.]+)",
+                    # General search that should use Brave
+                    r"(?:search|google|find).*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:what.*is|tell.*me.*about|information.*about)\s+([^?\n.]+)(?:\s+(?:news|latest|recent|today))?",
+                    # News and current events
+                    r"(?:news|latest|breaking|current).*(?:about|on)\s+([^?\n.]+)",
+                    r"(?:what.*happening|what.*new).*(?:with|about)\s+([^?\n.]+)"
+                ],
+                "brave_local_search": [
+                    # Local business search patterns
+                    r"(?:find|search|locate).*(?:restaurants?|food|dining).*(?:near|in)\s+([^?\n.]+)",
+                    r"(?:restaurants?|cafes?|bars?).*(?:near|in)\s+([^?\n.]+)",
+                    r"(?:find|search).*(?:local|nearby).*(?:business|services?).*(?:in|near)\s+([^?\n.]+)",
+                    r"(?:pizza|coffee|gas|pharmacy|hotel).*(?:near|in)\s+([^?\n.]+)",
+                    r"(?:where.*can.*find|find.*nearby).*([^?\n.]+)",
+                    # Generic local search
+                    r"(?:local|nearby).*search.*(?:for|about)\s+([^?\n.]+)",
+                    r"(?:businesses?|places?).*(?:near|in)\s+([^?\n.]+)"
+                ]
+            }
+           
+            # Check each tool pattern
+            for tool_name, patterns in tool_patterns.items():
+                for pattern in patterns:
+                    match = re.search(pattern, content, re.IGNORECASE | re.MULTILINE)
+                    if match:
+                        argument_value = match.group(1).strip().strip('"\'.,!?')
+                       
+                        # Skip if argument is too short or generic
+                        if len(argument_value) < 2:
+                            continue
+                           
+                        # Determine the argument name based on tool
+                        if tool_name == "calculator":
+                            arg_name = "expression"
+                            # For weather queries that need calculation, redirect to weather tool
+                            if any(w in content_lower for w in ["weather", "temperature", "forecast"]):
+                                continue  # Let weather pattern handle it
+                        elif tool_name == "get_weather":
+                            arg_name = "place"
+                            # Clean up location names
+                            argument_value = re.sub(r'^(?:the\s+)?', '', argument_value, flags=re.IGNORECASE)
+                            argument_value = re.sub(r'\s*\?.*$', '', argument_value)
+                        elif tool_name in ["wikipedia_search", "brave_web_search"]:
+                            arg_name = "query"
+                        elif tool_name == "brave_local_search":
+                            arg_name = "query"
+                            # Add additional arguments for local search
+                            tool_calls.append({
+                                "tool_name": tool_name,
+                                "arguments": {
+                                    arg_name: argument_value,
+                                    "count": 5  # Default count for local search
+                                }
+                            })
+                            print(f"🎯 Detected local search: {tool_name}({arg_name}='{argument_value}')")
+                            break
+                        else:
+                            arg_name = "query"
+                       
+                        if tool_name != "brave_local_search":  # Already handled above
+                            # Add additional arguments for web search
+                            if tool_name == "brave_web_search":
+                                tool_calls.append({
+                                    "tool_name": tool_name,
+                                    "arguments": {
+                                        arg_name: argument_value,
+                                        "count": 10,  # Default count for web search
+                                        "offset": 0
+                                    }
+                                })
+                            else:
+                                tool_calls.append({
+                                    "tool_name": tool_name,
+                                    "arguments": {arg_name: argument_value}
+                                })
+                            print(f"🎯 Detected tool call: {tool_name}({arg_name}='{argument_value}')")
+                        break  # Found a match for this tool, move to next tool
+               
+                if tool_calls:  # If we found a tool call, we can break early
+                    break
+       
+        return tool_calls
+ 
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        print(f"🚀 Starting generation with {len(messages)} messages")
+       
+        # Detect tool calls in messages
+        tool_calls = self._detect_tool_calls(messages)
+       
+        # Execute tool calls if detected
+        tool_results = []
+        if tool_calls:
+            print(f"🔧 Detected {len(tool_calls)} tool calls")
+            for tool_call in tool_calls:
+                try:
+                    # Use asyncio to call async tool function
+                    loop = None
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        pass
+                   
+                    if loop is not None:
+                        # Create a new event loop in a thread if one is already running
+                        import concurrent.futures
+                        import threading
+                       
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(
+                                    self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
+                                )
+                            finally:
+                                new_loop.close()
+                       
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            result = future.result(timeout=60)
+                    else:
+                        # No running loop, we can use asyncio.run
+                        result = asyncio.run(
+                            self._call_mcp_tool(tool_call["tool_name"], tool_call["arguments"])
+                        )
+                   
+                    tool_results.append({
+                        "tool_name": tool_call["tool_name"],
+                        "result": result
+                    })
+                    print(f"✅ Tool {tool_call['tool_name']} executed successfully")
+                   
+                except Exception as e:
+                    print(f"❌ Tool {tool_call['tool_name']} failed: {e}")
+                    tool_results.append({
+                        "tool_name": tool_call["tool_name"],
+                        "result": f"Tool execution failed: {str(e)}"
+                    })
+ 
+        # If we have tool results, return them directly without Snowflake
+        if tool_results:
+            content = "🔧 **Tool Execution Results:**\n\n"
+            for tool_result in tool_results:
+                content += f"**{tool_result['tool_name']}**:\n{tool_result['result']}\n\n"
+           
+            message = AIMessage(content=content)
+            generation = ChatGeneration(message=message)
+            return ChatResult(generations=[generation])
+ 
+        # If no tools were called, proceed with Snowflake Cortex
+        try:
+            if not self.session:
+                return ChatResult(generations=[ChatGeneration(
+                    message=AIMessage(content="❌ No Snowflake session available and no tools were called")
+                )])
+ 
+            # Prepare messages for Snowflake with better JSON handling
+            message_dicts = [_convert_message_to_dict(m) for m in messages]
+           
+            # Use safe JSON encoding for SQL
+            message_json = _safe_json_for_sql(message_dicts)
+ 
+            options = {
+                "temperature": self.temperature,
+                "top_p": self.top_p if self.top_p is not None else 1.0,
+                "max_tokens": self.max_tokens if self.max_tokens is not None else 2048,
+            }
+            options_json = _safe_json_for_sql(options)
+ 
+            # Use $$ delimiter for complex JSON to avoid escaping issues
+            sql_stmt = f"""
+                select snowflake.cortex.{self.cortex_function}(
+                    '{self.model}',
+                    parse_json($${message_json}$$),
+                    parse_json($${options_json}$$)
+                ) as llm_stream_response;
+            """
+ 
+            print(f"🗃️ Executing SQL query...")
+           
+            # Use the Snowflake Cortex Complete function
+            self.session.sql(
+                f"USE WAREHOUSE {self.session.get_current_warehouse()};"
+            ).collect()
+            l_rows = self.session.sql(sql_stmt).collect()
+           
+            response = json.loads(l_rows[0]["LLM_STREAM_RESPONSE"])
+            ai_message_content = response["choices"][0]["messages"]
+           
+            content = _truncate_at_stop_tokens(ai_message_content, stop)
+           
+            message = AIMessage(
+                content=content,
+                response_metadata=response.get("usage", {}),
+            )
+            generation = ChatGeneration(message=message)
+            return ChatResult(generations=[generation])
+               
+        except Exception as e:
+            print(f"❌ Snowflake Cortex error: {e}")
+           
+            # Provide helpful error message
+            error_content = f"❌ **Snowflake Cortex Error**: {str(e)}\n\n"
+            error_content += "💡 **Possible solutions**:\n"
+            error_content += "- Check your Snowflake connection and permissions\n"
+            error_content += "- Verify the model name is correct\n"
+            error_content += "- Try a simpler query\n"
+            error_content += "- Use tool-based queries (weather, Brave search, calculator)\n"
+           
+            message = AIMessage(content=error_content)
+            generation = ChatGeneration(message=message)
+            return ChatResult(generations=[generation])
+ 
+    def _stream_content(
+        self, content: str, stop: Optional[List[str]]
+    ) -> Iterator[ChatGenerationChunk]:
+        """Stream the output of the model in chunks."""
+        chunk_size = 50
+        truncated_content = _truncate_at_stop_tokens(content, stop)
+ 
+        for i in range(0, len(truncated_content), chunk_size):
+            chunk_content = truncated_content[i : i + chunk_size]
+            yield ChatGenerationChunk(message=AIMessageChunk(content=chunk_content))
+ 
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        """Stream the output of the model."""
+        try:
+            result = self._generate(messages, stop, run_manager, **kwargs)
+            content = result.generations[0].message.content
+           
+            for chunk in self._stream_content(content, stop):
+                yield chunk
+               
+        except Exception as e:
+            error_content = f"Streaming error: {str(e)}"
+            yield ChatGenerationChunk(message=AIMessageChunk(content=error_content))
