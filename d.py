@@ -1,795 +1,404 @@
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-import httpx
-from dataclasses import dataclass
-from urllib.parse import urlparse
-from pathlib import Path
+import streamlit as st
+import asyncio
 import json
-import snowflake.connector
-import requests
-import os
-from loguru import logger
-import logging
-from snowflake.connector import SnowflakeConnection
-from ReduceReuseRecycleGENAI.snowflake import snowflake_conn
-from snowflake.connector.errors import DatabaseError
-from snowflake.core import Root
-from typing import Optional, List, Dict, Any
-from fastapi import (
-    HTTPException,
-    status,
-)
-
-from mcp.server.fastmcp.prompts.base import Message
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.fastmcp.prompts import Prompt
-import mcp.types as types
-from functools import partial
-
-# SerpApi utilities - no API key variables
-SERPAPI_AVAILABLE = True
-
-def format_query_for_serpapi(query: str) -> str:
-    """Format query for SerpApi by replacing spaces with + signs"""
-    return query.replace(" ", "+")
-
-def build_serpapi_url(query: str) -> str:
-    """Build SerpApi URL using the exact hardcoded format specified"""
-    formatted_query = format_query_for_serpapi(query)
-    
-    # Use exact hardcoded URL format with API key directly embedded
-    url = f"https://serpapi.com/search.json?engine=google&q={formatted_query}&google_domain=google.com&gl=us&hl=en&api_key=28009a3e8f74ab4680e232c4ed5ae4f0e5d1bf849d052100ce3f7f74be9d4e54"
-    
-    return url
-
-async def fetch_serpapi_json(query: str) -> dict:
-    """Fetch JSON response from SerpApi using exact hardcoded URL format"""
-    
-    print(f"\n🌐 BUILDING SERPAPI URL FOR: '{query}'")
-    
-    url = build_serpapi_url(query)
-    
-    print(f"📡 SERPAPI URL: {url}")
-    print(f"🔗 MAKING HTTP REQUEST TO SERPAPI...")
-    
-    try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        
-        results = response.json()
-        
-        print(f"✅ HTTP REQUEST SUCCESSFUL")
-        print(f"📊 RESPONSE STATUS: {response.status_code}")
-        print(f"📊 RESPONSE KEYS: {list(results.keys())}")
-        
-        return results
-        
-    except requests.exceptions.RequestException as e:
-        print(f"❌ HTTP REQUEST FAILED: {str(e)}")
-        raise Exception(f"SerpApi request failed: {str(e)}")
-    except Exception as e:
-        print(f"❌ SERPAPI ERROR: {str(e)}")
-        raise Exception(f"SerpApi error: {str(e)}")
-
-# Create a named server
-mcp = FastMCP("DataFlyWheel App")
-
-@dataclass
-class AppContext:
-    conn: SnowflakeConnection
-    db: str
-    schema: str
-    host: str
-
-# Resources
-@mcp.resource(uri="schematiclayer://cortex_analyst/schematic_models/{stagename}/list", name="hedis_schematic_models", description="Hedis Schematic models")
-async def get_schematic_model(stagename: str):
-    """Cortex analyst schematic layer model, model is in yaml format"""
-    
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-        logger,
-        aplctn_cd="aedl",
-        env="preprod",
-        region_name="us-east-1",
-        warehouse_size_suffix="",
-        prefix=""
-    )
-    
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    cursor = conn.cursor()
-    snfw_model_list = cursor.execute("LIST @{db}.{schema}.{stagename}".format(db=db, schema=schema, stagename=stagename))
-    
-    return [stg_nm[0].split("/")[-1] for stg_nm in snfw_model_list if stg_nm[0].endswith('yaml')]
-
-@mcp.resource("search://cortex_search/search_obj/list")
-async def get_search_service():
-    """Cortex search service"""
-    
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-        logger,
-        aplctn_cd="aedl",
-        env="preprod",
-        region_name="us-east-1",
-        warehouse_size_suffix="",
-        prefix=""
-    )
-    
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    cursor = conn.cursor()
-    snfw_search_objs = cursor.execute("SHOW CORTEX SEARCH SERVICES IN SCHEMA {db}.{schema}".format(db=db, schema=schema))
-    result = [search_obj[1] for search_obj in snfw_search_objs.fetchall()]
-    
-    return result
-
-@mcp.resource("genaiplatform://{aplctn_cd}/frequent_questions/{user_context}")
-async def frequent_questions(aplctn_cd: str, user_context: str) -> List[str]:
-    resource_name = aplctn_cd + "_freq_questions.json"
-    freq_questions = json.load(open(resource_name))
-    aplcn_question = freq_questions.get(aplctn_cd)
-    return [rec["prompt"] for rec in aplcn_question if rec["user_context"] == user_context]
-
-@mcp.resource("genaiplatform://{aplctn_cd}/prompts/{prompt_name}")
-async def prompt_templates(aplctn_cd: str, prompt_name: str) -> List[str]:
-    resource_name = aplctn_cd + "_prompts.json"
-    prompt_data = json.load(open(resource_name))
-    aplcn_prompts = prompt_data.get(aplctn_cd)
-    return [rec["content"] for rec in aplcn_prompts if rec["prompt_name"] == prompt_name]
-
-@mcp.tool(
-    name="add-frequent-questions",
-    description="""
-    Tool to add frequent questions to MCP server
-
-    Example inputs:
-    {
-       "uri"
-    }
-
-    Args:
-           uri (str):  text to be passed
-           questions (list):
-           [
-             {
-               "user_context" (str): "User context for the prompt"
-               "prompt" (str): "prompt"
-
-             }
-           ]
-    """
-)
-async def add_frequent_questions(ctx: Context, uri: str, questions: list) -> list:
-    # Parse and extract aplctn_cd and user_context (urllib)
-    url_path = urlparse(uri)
-    aplctn_cd = url_path.netloc
-    user_context = Path(url_path.path).name
-    file_data = {}
-    file_name = aplctn_cd + "_freq_questions.json"
-    if Path(file_name).exists():
-        file_data = json.load(open(file_name, 'r'))
-        file_data[aplctn_cd].extend(questions)
-    else:
-        file_data[aplctn_cd] = questions
-
-    index_dict = {
-        user_context: set()
-    }
-    result = []
-    # Remove duplicates
-    for elm in file_data[aplctn_cd]:
-        if elm["user_context"] == user_context and elm['prompt'] not in index_dict[user_context]:
-            result.append(elm)
-            index_dict[user_context].add(elm['prompt'])
-
-    file_data[aplctn_cd] = result
-
-    with open(file_name, 'w') as file:
-        file.write(json.dumps(file_data))
-
-    return file_data[aplctn_cd]
-
-@mcp.tool(
-    name="add-prompts",
-    description="""
-    Tool to add prompts to MCP server
-
-    Example inputs:
-    {
-       ""
-    }
-
-    Args:
-           uri (str):  text to be passed
-           prompts (dict):
-             {
-               "prompt_name" (str): "Unique name assigned to prompt for a application"
-               "description" (str): "Prompt description"
-               "content" (str): "Prompt content"
-
-             }
-    """
-)
-async def add_prompts(ctx: Context, uri: str, prompt: dict) -> dict:
-    # Parse and extract aplctn_cd and user_context (urllib)
-    url_path = urlparse(uri)
-    aplctn_cd = url_path.netloc
-    prompt_name = Path(url_path.path).name
-    
-    # Before adding the prompt to file add to the server
-    # Add prompts to server
-    def func1(query: str):
-        return [
-            {
-                "role": "user",
-                "content": prompt["content"] + f"\n  {query}"
-            }
-        ]
-    
-    ctx.fastmcp.add_prompt(
-        Prompt.from_function(
-            func1, name=prompt["prompt_name"], description=prompt["description"])
-    )
-
-    file_data = {}
-    file_name = aplctn_cd + "_prompts.json"
-    if Path(file_name).exists():
-        with open(file_name, 'r') as file:
-            file_data = json.load(file)
-        file_data[aplctn_cd].append(prompt)
-    else:
-        file_data[aplctn_cd] = [prompt]
-
-    with open(file_name, 'w') as file:
-        file.write(json.dumps(file_data))
-
-    return prompt
-
-# Tools: Cortex Analyst; Cortex Search; Cortex Complete
-
-@mcp.tool(
-    name="DFWAnalyst",
-    description="""
-    Converts text to valid SQL which can be executed on HEDIS value sets and code sets.
-
-    Example inputs:
-       What are the codes in <some value> Value Set?
-
-    Returns valid sql to retrieve data from underlying value sets and code sets.
-
-    Args:
-           prompt (str):  text to be passed
-
-    """
-)
-async def dfw_text2sql(prompt: str, ctx: Context) -> dict:
-    """Tool to convert natural language text to snowflake sql for hedis system, text should be passed as 'prompt' input parameter"""
-
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-        logger,
-        aplctn_cd="aedl",
-        env="preprod",
-        region_name="us-east-1",
-        warehouse_size_suffix="",
-        prefix=""
-    )
-
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    host = HOST
-    stage_name = "hedis_stage_full"
-    file_name = "hedis_semantic_model_complete.yaml"
-    request_body = {
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        "semantic_model_file": f"@{db}.{schema}.{stage_name}/{file_name}",
-    }
-
-    token = conn.rest.token
-    resp = requests.post(
-        url=f"https://{host}/api/v2/cortex/analyst/message",
-        json=request_body,
-        headers={
-            "Authorization": f'Snowflake Token="{token}"',
-            "Content-Type": "application/json",
-        },
-    )
-    return resp.json()
-
-@mcp.tool(
-    name="DFWSearch",
-    description="""
-    Searches HEDIS measure specification documents.
-
-    Example inputs:
-    What is the age criteria for BCS Measure?
-    What is EED Measure in HEDIS?
-    Describe COA Measure?
-    What LOB is COA measure scoped under?
-
-    Returns information utilizing HEDIS measure specification documents.
-
-    Args:
-          query (str): text to be passed
-   """
-)
-async def dfw_search(ctx: Context, query: str):
-    """Tool to provide search against HEDIS business documents for the year 2024, search string should be provided as 'query' parameter"""
-
-    HOST = "carelon-eda-preprod.privatelink.snowflakecomputing.com"
-    conn = snowflake_conn(
-        logger,
-        aplctn_cd="aedl",
-        env="preprod",
-        region_name="us-east-1",
-        warehouse_size_suffix="",
-        prefix=""
-    )
-
-    db = 'POC_SPC_SNOWPARK_DB'
-    schema = 'HEDIS_SCHEMA'
-    search_service = 'CS_HEDIS_FULL_2024'
-    columns = ['chunk']
-    limit = 2
-
-    root = Root(conn)
-    search_service = root.databases[db].schemas[schema].cortex_search_services[search_service]
-    response = search_service.search(
-        query=query,
-        columns=columns,
-        limit=limit
-    )
-    return response.to_json()
-
-@mcp.tool(
-    name="SerpApiRawDebug",
-    description="""
-    DEBUG TOOL: Returns raw SerpApi JSON response using hardcoded URL format.
-    Prints detailed logs to server console for debugging.
-
-    Args:
-           query (str): Search query text
-    """
-)
-async def serpapi_raw_debug(query: str) -> str:
-    """Debug tool that returns raw SerpApi JSON response using hardcoded URL format"""
-    
-    print(f"\n🔧 TOOL INVOKED: SerpApiRawDebug")
-    print(f"📞 DEBUG QUERY: '{query}'")
-    print(f"✅ TOOL CONNECTION CONFIRMED - PROCESSING DEBUG REQUEST...")
-    
-    if not SERPAPI_AVAILABLE:
-        print(f"❌ ERROR: SerpApi not available")
-        return "Error: SerpApi is not available."
-    
-    try:
-        print(f"\n{'='*80}")
-        print(f"SERPAPI DEBUG CALL FOR QUERY: '{query}'")
-        print(f"{'='*80}")
-        
-        url = build_serpapi_url(query)
-        print(f"📡 HARDCODED SERPAPI URL: {url}")
-        print(f"{'='*80}")
-        
-        # Fetch results using hardcoded URL format
-        results = await fetch_serpapi_json(query)
-        
-        # PRINT RAW JSON TO SERVER CONSOLE
-        print(f"RAW SERPAPI JSON RESPONSE:")
-        print(json.dumps(results, indent=2, ensure_ascii=False))
-        print(f"{'='*80}")
-        print(f"END OF SERPAPI RESPONSE FOR: '{query}'")
-        print(f"{'='*80}\n")
-        
-        # Also log specific sections for easy analysis
-        if "answer_box" in results:
-            print(f"ANSWER_BOX CONTENT:")
-            print(json.dumps(results["answer_box"], indent=2))
-            print(f"-" * 40)
-        
-        if "knowledge_graph" in results:
-            print(f"KNOWLEDGE_GRAPH CONTENT:")
-            print(json.dumps(results["knowledge_graph"], indent=2))
-            print(f"-" * 40)
-        
-        if "organic_results" in results:
-            print(f"FIRST 2 ORGANIC RESULTS:")
-            print(json.dumps(results["organic_results"][:2], indent=2))
-            print(f"-" * 40)
-        
-        # Return the JSON for debugging
-        json_output = json.dumps(results, indent=2, ensure_ascii=False)
-        
-        print(f"✅ SERPAPI DEBUG TOOL COMPLETED SUCCESSFULLY")
-        print(f"📤 RETURNING RAW JSON TO CLIENT")
-        
-        return f"""
-SERPAPI RAW DEBUG FOR QUERY: "{query}"
-
-HARDCODED URL USED:
-{url}
-
-RAW SERPAPI RESPONSE:
-```json
-{json_output}
-```
-
-END OF RAW DEBUG DATA - CHECK SERVER LOGS FOR DETAILED PRINTOUT
-"""
-        
-    except Exception as e:
-        print(f"❌ SERPAPI DEBUG ERROR: {str(e)}")
-        return f"Debug error: {str(e)}"
-
-@mcp.tool(
-    name="SerpApiSearch",
-    description="""
-    Performs web searches using SerpApi with hardcoded URL format and returns raw JSON for LLM analysis.
-    
-    Uses exact URL format: https://serpapi.com/search.json?engine=google&q={query}&google_domain=google.com&gl=us&hl=en&api_key=...
-    
-    Process:
-    1. Formats query (spaces become + signs)
-    2. Fetches JSON from SerpApi
-    3. Returns complete JSON response for LLM to analyze and answer user's question
-
-    Example inputs:
-    "who is prime minister of india"
-    "latest AI news" 
-    "weather in New York"
-    "current stock price of Apple"
-
-    Returns complete JSON response for LLM analysis.
-
-    Args:
-           query (str): Search query text
-    """
-)
-async def serpapi_search(query: str) -> str:
-    """Tool to perform web searches using SerpApi hardcoded URL format and return JSON for LLM analysis"""
-    
-    print(f"\n🔍 TOOL INVOKED: SerpApiSearch")
-    print(f"📞 SEARCH QUERY: '{query}'")
-    print(f"✅ TOOL CONNECTION CONFIRMED - BUILDING SERPAPI REQUEST...")
-    
-    if not SERPAPI_AVAILABLE:
-        print(f"❌ ERROR: SerpApi not available")
-        return "Error: SerpApi is not available."
-    
-    try:
-        # Build the exact SerpApi URL format
-        url = build_serpapi_url(query)
-        
-        print(f"📡 USING HARDCODED SERPAPI URL FORMAT")
-        print(f"🔗 FORMATTED QUERY: {format_query_for_serpapi(query)}")
-        
-        # Fetch JSON results
-        results = await fetch_serpapi_json(query)
-        
-        print(f"✅ SERPAPI JSON FETCHED SUCCESSFULLY")
-        print(f"📤 RETURNING COMPLETE JSON TO LLM FOR ANALYSIS")
-        
-        # Return the complete JSON response for LLM analysis
-        json_output = json.dumps(results, indent=2, ensure_ascii=False)
-        
-        return f"""
-SERPAPI SEARCH RESULTS FOR: "{query}"
-
-URL USED: {url}
-
-COMPLETE JSON RESPONSE:
-```json
-{json_output}
-```
-
-LLM ANALYSIS INSTRUCTIONS:
-Please analyze the above JSON response to answer the user's question: "{query}"
-
-Key sections to examine:
-- "answer_box": Direct answers or featured snippets
-- "knowledge_graph": Entity information and key facts
-- "organic_results": Main search results with titles, snippets, links
-- "news_results": Recent news articles (if available)
-- "related_questions": Additional relevant questions
-- "shopping_results": Product information (if applicable)
-
-Extract the most relevant information from these sections to provide a comprehensive answer.
-"""
-        
-    except Exception as e:
-        print(f"❌ SERPAPI SEARCH ERROR: {str(e)}")
-        logger.error(f"SerpApi search error: {str(e)}")
-        if "429" in str(e):
-            return "Error: Rate limit exceeded. Please try again later."
-        elif "401" in str(e):
-            return "Error: Invalid API key in hardcoded URL."
-        else:
-            return f"Search error: {str(e)}"
-
-@mcp.tool(
-    name="SerpApiUrlTest", 
-    description="""
-    TEST TOOL: Shows the exact hardcoded SerpApi URL that will be called.
-    Use this to verify URL construction with the hardcoded format.
-
-    Args:
-           query (str): Search query text
-    """
-)
-async def serpapi_url_test(query: str) -> str:
-    """Test tool that shows the exact hardcoded URL that will be called"""
-    
-    print(f"\n🔗 TOOL INVOKED: SerpApiUrlTest")
-    print(f"📞 TESTING URL CONSTRUCTION FOR: '{query}'")
-    
-    # Build the hardcoded URL
-    url = build_serpapi_url(query)
-    
-    print(f"🔗 CONSTRUCTED HARDCODED URL: {url}")
-    
-    return f"""
-SerpApi URL Test for Query: "{query}"
-
-Hardcoded URL Format:
-{url}
-
-Formatted Query: {format_query_for_serpapi(query)}
-
-This is the exact URL that will be used to fetch JSON data from SerpApi.
-You can test this URL directly in your browser to see the JSON response.
-"""
-
-@mcp.tool(
-    name="calculator",
-    description="""
-    Evaluates a basic arithmetic expression.
-    Supports: +, -, *, /, parentheses, decimals.
-
-    Example inputs:
-    3+4/5
-    3.0/6*8
-
-    Returns decimal result
-
-    Args:
-         expression (str): Arithmetic expression input
-
-    """
-)
-def calculate(expression: str) -> str:
-    """
-    Evaluates a basic arithmetic expression.
-    Supports: +, -, *, /, parentheses, decimals.
-    """
-    print(f"calculate() called with expression: {expression}", flush=True)
-    try:
-        allowed_chars = "0123456789+-*/(). "
-        if any(char not in allowed_chars for char in expression):
-            return "Invalid characters in expression."
-
-        result = eval(expression)
-        return f"Result: {result}"
-    except Exception as e:
-        print("Error in calculate:", str(e), flush=True)
-        return f"Error: {str(e)}"
-
-@mcp.tool(
-    name="suggested_top_prompts",
-    description="""
-    Suggests requested number of prompts with given context.
-
-    Example Input:
-    {
-      top_n_suggestions: 3,
-      context: "Initialization" | "The age criteria for the BCS (Breast Cancer Screening) measure is 50-74 years of age."
-      aplctn_cd: "hedis"
-    }
-
-    Returns List of string values.
-
-    Args:
-        top_n_suggestions (int): how many suggestions to be generated.
-        context (str): context that need to be used for the prompt suggestions.
-        aplctn_cd (str): application code.
-    """
-)
-async def question_suggestions(ctx: Context, aplctn_cd: str, app_lvl_prefix: str, session_id: str, top_n: int = 3, context: str = "Initialization", llm_flg: bool = False):
-    """Tool to suggest additional prompts within the provided context, context should be passed as 'context' input parameter"""
-
-    if not llm_flg:
-        return ctx.read_resource(f"genaiplatform://{aplctn_cd}/frequent_questions/{context}")
-
-    try:
-        # Note: SnowFlakeConnector is not defined in this code - needs to be imported or implemented
-        # from your_module import SnowFlakeConnector  # TODO: Add proper import
-        # For now, this will raise a NameError until SnowFlakeConnector is properly imported
-        sf_conn = SnowFlakeConnector.get_conn(
-            aplctn_cd,
-            app_lvl_prefix,
-            session_id,
+import yaml
+
+from mcp.client.sse import sse_client
+from mcp import ClientSession
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from dependencies import SnowFlakeConnector
+from llmobjectwrapper import ChatSnowflakeCortex
+from snowflake.snowpark import Session
+
+# Page config
+st.set_page_config(page_title="DataFlyWheel MCP Demo", page_icon="🌐")
+st.title("🌐 DataFlyWheel MCP Demo")
+
+# Sidebar configuration
+server_url = st.sidebar.text_input("MCP Server URL", "http://10.126.192.183:8001/sse")
+show_server_info = st.sidebar.checkbox("🛡 Show MCP Server Info", value=False)
+
+# === Server Info ===
+if show_server_info:
+    async def fetch_mcp_info():
+        result = {"resources": [], "tools": [], "prompts": [], "yaml": [], "search": []}
+        try:
+            async with sse_client(url=server_url) as sse_connection:
+                async with ClientSession(*sse_connection) as session:
+                    await session.initialize()
+
+                    # --- Resources ---
+                    resources = await session.list_resources()
+                    if hasattr(resources, 'resources'):
+                        for r in resources.resources:
+                            result["resources"].append({"name": r.name})
+                   
+                    # --- Tools (filtered) ---
+                    tools = await session.list_tools()
+                    hidden_tools = {"add-frequent-questions", "add-prompts", "suggested_top_prompts"}
+                    if hasattr(tools, 'tools'):
+                        for t in tools.tools:
+                            if t.name not in hidden_tools:
+                                result["tools"].append({
+                                    "name": t.name,
+                                    "description": getattr(t, 'description', '')
+                                })
+
+                    # --- Prompts ---
+                    prompts = await session.list_prompts()
+                    if hasattr(prompts, 'prompts'):
+                        for p in prompts.prompts:
+                            args = []
+                            if hasattr(p, 'arguments'):
+                                for arg in p.arguments:
+                                    args.append(f"{arg.name} ({'Required' if arg.required else 'Optional'}): {arg.description}")
+                            result["prompts"].append({
+                                "name": p.name,
+                                "description": getattr(p, 'description', ''),
+                                "args": args
+                            })
+
+                    # --- YAML Resources ---
+                    try:
+                        yaml_content = await session.read_resource("schematiclayer://cortex_analyst/schematic_models/hedis_stage_full/list")
+                        if hasattr(yaml_content, 'contents'):
+                            for item in yaml_content.contents:
+                                if hasattr(item, 'text'):
+                                    parsed = yaml.safe_load(item.text)
+                                    result["yaml"].append(yaml.dump(parsed, sort_keys=False))
+                    except Exception as e:
+                        result["yaml"].append(f"YAML error: {e}")
+
+                    # --- Search Objects ---
+                    try:
+                        content = await session.read_resource("search://cortex_search/search_obj/list")
+                        if hasattr(content, 'contents'):
+                            for item in content.contents:
+                                if hasattr(item, 'text'):
+                                    objs = json.loads(item.text)
+                                    result["search"].extend(objs)
+                    except Exception as e:
+                        result["search"].append(f"Search error: {e}")
+
+        except Exception as e:
+            st.sidebar.error(f"❌ MCP Connection Error: {e}")
+        return result
+
+    mcp_data = asyncio.run(fetch_mcp_info())
+
+    # Display server info in sidebar (same as before)
+    with st.sidebar.expander("📦 Resources", expanded=False):
+        for r in mcp_data["resources"]:
+            if "cortex_search/search_obj/list" in r["name"]:
+                display_name = "🔍 Cortex Search"
+            elif "schematic_models" in r["name"]:
+                display_name = "📊 Hedis Schematic"
+            elif "frequent_questions" in r["name"]:
+                display_name = "❓ Frequent Questions"
+            elif "prompts" in r["name"]:
+                display_name = "💭 Prompt Templates"
+            else:
+                display_name = r["name"]
+            st.markdown(f"**{display_name}**")
+
+    with st.sidebar.expander("🛠 Available Tools", expanded=False):
+        for t in mcp_data["tools"]:
+            st.markdown(f"**{t['name']}**")
+            if t.get('description'):
+                st.caption(t['description'][:100] + "..." if len(t['description']) > 100 else t['description'])
+
+    with st.sidebar.expander("🧐 Available Prompts", expanded=False):
+        for p in mcp_data["prompts"]:
+            st.markdown(f"**{p['name']}**")
+            if p.get('description'):
+                st.caption(p['description'])
+
+else:
+    # Main application
+    @st.cache_resource
+    def get_snowflake_connection():
+        return SnowFlakeConnector.get_conn('aedl', '')
+
+    @st.cache_resource
+    def get_model():
+        sf_conn = get_snowflake_connection()
+        return ChatSnowflakeCortex(
+            model="claude-4-sonnet",
+            cortex_function="complete",
+            session=Session.builder.configs({"connection": sf_conn}).getOrCreate()
         )
-    except DatabaseError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User not authorized to resources"
-        )
+
+    # Fixed prompt selection
+    prompt_type = st.sidebar.radio("Select Prompt Type", [
+        "Calculator", 
+        "HEDIS Expert", 
+        "Weather Expert", 
+        "Web Search Expert",
+        "No Context"
+    ])
     
-    clnt = httpx.AsyncClient(verify=False)
+    # Fixed prompt mapping
+    prompt_map = {
+        "Calculator": "calculator-prompt",        # Fixed typo
+        "HEDIS Expert": "hedis-prompt",
+        "Weather Expert": "weather-prompt",
+        "Web Search Expert": "serpapi-prompt",   # This is the key one for SerpApi
+        "No Context": None
+    }
 
-    request_body = {
-        "model": "llama3.1-70b-elevance",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"""
-                You are an expert in suggesting hypothetical questions.
-                Suggest a list of {top_n} hypothetical questions that the below context could be used to answer:
-
-                {context}
-                Return List with hypothetical questions
-                """
-            }
+    # Example queries
+    examples = {
+        "Calculator": [
+            "Calculate the expression (4+5)/2.0", 
+            "Calculate the expression 3^4 - 12",
+            "What is 15% of 250?"
+        ],
+        "HEDIS Expert": [
+            "What are the codes in BCS Value Set?",
+            "What is the age criteria for BCS Measure?",
+            "Generate SQL to get all diabetes measures"
+        ],
+        "Weather Expert": [
+            "What is the present weather in Richmond?",
+            "What's the weather forecast for Atlanta?",
+            "Weather conditions in Boston"
+        ],
+        "Web Search Expert": [
+            "Who is the current prime minister of India?",
+            "Latest AI news today",
+            "Current stock price of Apple",
+            "Recent developments in healthcare",
+            "Who won the latest election?"
+        ],
+        "No Context": [
+            "Who won the world cup in 2022?", 
+            "Explain quantum computing"
         ]
     }
 
-    headers = {
-        "Authorization": f'Snowflake Token="{sf_conn.rest.token}"',
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "method": "cortex",
-    }
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    url = "https://jib90126.us-east-1.privatelink.snowflakecomputing.com/api/v2/cortex/inference:complete"
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
 
-    response_text = []
+    # Example queries sidebar
+    with st.sidebar.expander("💡 Example Queries", expanded=True):
+        st.markdown(f"**{prompt_type} Examples:**")
+        for example in examples[prompt_type]:
+            if st.button(example, key=example):
+                st.session_state.query_input = example
 
-    async with clnt.stream('POST', url, headers=headers, json=request_body) as response:
-        if response.is_client_error:
-            error_message = await response.aread()
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_message.decode("utf-8")
-            )
-        if response.is_server_error:
-            error_message = await response.aread()
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=error_message.decode("utf-8")
-            )
-        # Stream the response content
-        async for result_chunk in response.aiter_bytes():
-            for elem in result_chunk.split(b'\n\n'):
-                if b'content' in elem:  # Check for data presence
-                    chunk_dict = json.loads(elem.replace(b'data: ', b''))
-                    print(chunk_dict)
-                    full_response = chunk_dict['choices'][0]['delta']['text']
-                    response_text.append(full_response)
+    # Chat input - FIXED WORKFLOW
+    if query := st.chat_input("Type your query here...") or "query_input" in st.session_state:
 
-    return json.loads(''.join(response_text))
+        if "query_input" in st.session_state:
+            query = st.session_state.query_input
+            del st.session_state.query_input
+       
+        with st.chat_message("user"):
+            st.markdown(query, unsafe_allow_html=True)
+       
+        st.session_state.messages.append({"role": "user", "content": query})
+   
+        async def process_query(query_text):
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                message_placeholder.text("🔄 Connecting to MCP server...")
+                
+                try:
+                    # Step 1: Initialize MCP client
+                    client = MultiServerMCPClient(
+                        {"DataFlyWheelServer": {"url": server_url, "transport": "sse"}}
+                    )
+                    
+                    message_placeholder.text("🧠 Loading AI model...")
+                    
+                    # Step 2: Get Snowflake model
+                    model = get_model()
+                    
+                    message_placeholder.text("🛠️ Preparing tools and agent...")
+                    
+                    # Step 3: Create agent with MCP tools
+                    tools = await client.get_tools()
+                    agent = create_react_agent(model=model, tools=tools)
+                    
+                    # Step 4: Get prompt from server or use direct query
+                    prompt_name = prompt_map[prompt_type]
+                    
+                    if prompt_name is None:
+                        # No context - direct query
+                        messages_for_agent = [{"role": "user", "content": query_text}]
+                        message_placeholder.text("💭 Processing direct query...")
+                    else:  
+                        message_placeholder.text(f"📋 Loading {prompt_type} prompt from server...")
+                        
+                        # Step 5: Get prompt from MCP server
+                        prompt_from_server = await client.get_prompt(
+                            server_name="DataFlyWheelServer",
+                            prompt_name=prompt_name,
+                            arguments={"query": query_text}
+                        )
+                        
+                        messages_for_agent = prompt_from_server
+                    
+                    message_placeholder.text("🤖 AI agent is thinking...")
+                    
+                    # Step 6: Process with agent - FIXED RESPONSE HANDLING
+                    response = await agent.ainvoke({"messages": messages_for_agent})
+                    
+                    # Step 7: Extract result more safely
+                    result = None
+                    
+                    # Try different ways to extract the result
+                    if hasattr(response, 'messages') and response.messages:
+                        # LangGraph response with messages
+                        last_message = response.messages[-1]
+                        if hasattr(last_message, 'content'):
+                            result = last_message.content
+                        else:
+                            result = str(last_message)
+                    elif isinstance(response, dict):
+                        # Dictionary response
+                        if 'messages' in response and response['messages']:
+                            last_message = response['messages'][-1]
+                            if isinstance(last_message, dict) and 'content' in last_message:
+                                result = last_message['content']
+                            else:
+                                result = str(last_message)
+                        else:
+                            # Fallback: try to get any content
+                            result = str(response)
+                    else:
+                        # Fallback
+                        result = str(response)
+                    
+                    # Step 8: Display result
+                    if result:
+                        message_placeholder.markdown(result)
+                        st.session_state.messages.append({"role": "assistant", "content": result})
+                    else:
+                        error_msg = "❌ Could not extract response from agent"
+                        message_placeholder.markdown(error_msg)
+                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    
+                except Exception as e:
+                    error_message = f"❌ **Error Processing Request:**\n\n```\n{str(e)}\n```"
+                    message_placeholder.markdown(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+                    
+                    # Show debug info in debug mode
+                    if st.sidebar.checkbox("🐛 Show Debug Info"):
+                        st.sidebar.error(f"Full error: {repr(e)}")
+   
+        if query:
+            asyncio.run(process_query(query))
 
-@mcp.tool()
-async def get_weather(place: str) -> str:
-    """
-    Get weather forecast for a place (e.g., 'New York') without needing an API key.
-    """
-    print(f"get_weather() called for location: {place}", flush=True)
+    # Controls
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🗑️ Clear Chat"):
+            st.session_state.messages = []
+            st.rerun()  # Fixed deprecated function
+    
+    with col2:
+        if st.button("🔄 Refresh"):
+            st.rerun()  # Fixed deprecated function
 
+    # Server status indicator
+    st.sidebar.markdown("---")
+    
+    async def check_server_status():
+        try:
+            async with sse_client(url=server_url) as sse_connection:
+                async with ClientSession(*sse_connection) as session:
+                    await session.initialize()
+                    return True
+        except:
+            return False
+    
     try:
-        # Step 1: Get coordinates using Nominatim (no key needed)
-        nominatim_url = f"https://nominatim.openstreetmap.org/search?q={place}&format=json&limit=1&countrycodes=us"
-        response = requests.get(nominatim_url, headers={"User-Agent": "MCP Weather Tool"})
-        response.raise_for_status()
-        data = response.json()
+        server_online = asyncio.run(check_server_status())
+        status_icon = "🟢" if server_online else "🔴"
+        status_text = "Online" if server_online else "Offline"
+        st.sidebar.markdown(f"**Server Status:** {status_icon} {status_text}")
+    except:
+        st.sidebar.markdown("**Server Status:** 🔴 Offline")
 
-        if not data:
-            return f"Could not find location: {place}. Please try a more specific city name."
+    # Debug section
+    with st.sidebar.expander("🐛 Debug Info", expanded=False):
+        debug_mode = st.checkbox("Enable Debug Mode", value=False)
+        if debug_mode:
+            st.write("🔍 Debug mode enabled")
+            if st.button("Test Server Connection"):
+                try:
+                    test_result = asyncio.run(check_server_status())
+                    st.success(f"Connection test: {'✅ Success' if test_result else '❌ Failed'}")
+                except Exception as e:
+                    st.error(f"Connection error: {e}")
 
-        latitude = data[0]["lat"]
-        longitude = data[0]["lon"]
-        display_name = data[0].get("display_name", place)
-        print(f"Found coordinates: {latitude}, {longitude} for {display_name}", flush=True)
+    # Information section
+    with st.sidebar.expander("ℹ️ SerpApi Workflow", expanded=False):
+        st.markdown("""
+        **🌐 Web Search Expert Workflow:**
+        
+        1. **User Query** → *"Who is prime minister of India?"*
+        2. **Client** → Server: *Request "serpapi-prompt"*
+        3. **Server** → Client: *Returns prompt with instructions*
+        4. **Client** → LLM: *Sends prompt to AI agent*
+        5. **LLM** → Server: *Calls SerpApiSearch tool*
+        6. **Server** → SerpApi: *HTTP request with formatted URL*
+        7. **SerpApi** → Server: *Returns JSON search results*
+        8. **Server** → LLM: *Raw JSON + analysis instructions*
+        9. **LLM** → Client: *Final analyzed answer*
+        10. **Client** → User: *Displays final answer*
+        
+        **🔗 URL Format:**
+        ```
+        https://serpapi.com/search.json?engine=google&q=who+is+prime+minister+of+india&google_domain=google.com&gl=us&hl=en&api_key=...
+        ```
+        """)
 
-        # Step 2: Use NWS API to get forecast
-        nws_url = f"https://api.weather.gov/points/{latitude},{longitude}"
-        headers = {"User-Agent": "MCP Weather Tool"}
-        points_resp = requests.get(nws_url, headers=headers)
-       
-        if points_resp.status_code == 404:
-            return f"Weather service not available for {place}. The National Weather Service only covers US locations."
-       
-        points_resp.raise_for_status()
-        points_data = points_resp.json()
+    # Advanced options
+    with st.sidebar.expander("⚙️ Advanced Options", expanded=False):
+        max_tokens = st.slider("Max Response Tokens", 100, 2000, 1000)
+        temperature = st.slider("Temperature", 0.0, 1.0, 0.7)
+        
+        st.markdown("**Workflow Debug:**")
+        show_workflow_steps = st.checkbox("Show workflow steps", value=False)
+        show_json_response = st.checkbox("Show raw JSON responses", value=False)
 
-        forecast_url = points_data["properties"]["forecast"]
-        city = points_data["properties"]["relativeLocation"]["properties"]["city"]
-        state = points_data["properties"]["relativeLocation"]["properties"]["state"]
+    # Footer
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("*Powered by MCP & Snowflake Cortex*")
 
-        forecast_resp = requests.get(forecast_url, headers=headers)
-        forecast_resp.raise_for_status()
-        forecast_data = forecast_resp.json()
-
-        period = forecast_data["properties"]["periods"][0]
-        return (
-            f"Weather for {city}, {state}:\n"
-            f"- {period['name']}\n"
-            f"- Temp: {period['temperature']}°{period['temperatureUnit']}\n"
-            f"- Conditions: {period['shortForecast']}\n"
-            f"- Wind: {period['windSpeed']} {period['windDirection']}\n"
-            f"- Forecast: {period['detailedForecast']}"
-        )
-
-    except Exception as e:
-        print("Error:", str(e), flush=True)
-        return f"Error fetching weather: {str(e)}"
-
-# Prompts
-@mcp.prompt(
-    name="hedis-prompt",
-    description="HEDIS Expert"
-)
-async def hedis_prompt(query: str) -> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are expert in HEDIS system, HEDIS is a set of standardized measures that aim to improve healthcare quality by promoting accountability and transparency. You are provided with below tools: 1) DFWAnalyst - Generates SQL to retrieve information for hedis codes and value sets. 2) DFWSearch - Provides search capability against HEDIS measures for measurement year. You will respond with the results returned from right tool. {query}"""
-        }
-    ]
-
-@mcp.prompt(
-    name="calculator-prompt",
-    description="Calculator"
-)
-async def calculator_prompt(query: str) -> List[Message]:
-    return [
-        {
-            "role": "user",
-            "content": f"""You are expert in performing arithmetic operations. You are provided with the tool calculator to verify the results. You will respond with the results after verifying with the tool result. {query}"""
-        }
-    ]
-
-@mcp.prompt(
-    name="weather-prompt",
-    description="Weather Expert"
-)
-async def weather_prompt(query: str) -> List[Message]:
-    """Weather expert who intakes the place as input and returns the present weather"""
-    return [
-        {
-            "role": "user",
-            "content": f"You are a weather expert. You have been provided with `get_weather` tool to get up to date weather information for: {query}. Always use the tool first."
-        }
-    ]
-
-@mcp.prompt(
-    name="serpapi-prompt",
-    description="Web Search Expert using SerpApi"
-)
-async def serpapi_prompt(query: str) -> List[Message]:
-    """Web search expert who uses SerpApi through structured HTTP requests"""
-    return [
-        {
-            "role": "user", 
-            "content": f"""You are a web search expert. Use the SerpApiSearch tool to find current information through structured HTTP requests.
-
-            The search system will:
-            - Create structured HTTP requests to SerpApi
-            - Apply appropriate filters automatically (recent results, news search)
-            - Handle authentication and configuration server-side
-            - Return formatted search results for interpretation
-
-            Steps:
-            1. Use SerpApiSearch to search for: {query}
-            2. Read through the search results carefully  
-            3. Provide a clear, accurate answer based on what you find
-            4. Cite the sources when providing information
-
-            Important: Base your answer ONLY on what the search results actually show. Do not make assumptions or add information not found in the search results.
-
-            The system uses structured request configurations for reliable, secure search operations."""
-        }
-    ]
-
-if __name__ == "__main__":
-    mcp.run(transport="sse")
+# Add workflow visualization
+if not show_server_info:
+    with st.expander("🔄 Workflow Visualization", expanded=False):
+        st.mermaid("""
+        graph TD
+            A[User Query] --> B[Client: Select Prompt Type]
+            B --> C[Client: Request Prompt from MCP Server]
+            C --> D[Server: Return serpapi-prompt]
+            D --> E[Client: Send to LLM Agent]
+            E --> F[LLM: Analyze Prompt]
+            F --> G[LLM: Call SerpApiSearch Tool]
+            G --> H[Server: Format Query with + signs]
+            H --> I[Server: Build Hardcoded URL]
+            I --> J[Server: HTTP GET to SerpApi]
+            J --> K[SerpApi: Return JSON Results]
+            K --> L[Server: Return JSON to LLM]
+            L --> M[LLM: Analyze JSON Response]
+            M --> N[LLM: Generate Final Answer]
+            N --> O[Client: Display Answer to User]
+            
+            style A fill:#e1f5fe
+            style G fill:#fff3e0
+            style K fill:#f3e5f5
+            style O fill:#e8f5e8
+        """)
