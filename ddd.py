@@ -1,409 +1,699 @@
-import streamlit as st
+# mcpserver.py - Fixed version
 import asyncio
 import json
 import logging
-from typing import List, Dict, Any, Optional
+import time
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+import httpx
+import re
 
-try:
-    from mcp.client.sse import sse_client
-    from mcp import ClientSession
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-    from langgraph.prebuilt import create_react_agent
-    from dependencies import SnowFlakeConnector
-    from llmobjectwrapper import ChatSnowflakeCortex
-    from snowflake.snowpark import Session
-except ImportError as e:
-    st.error(f"Missing required packages. Install with: pip install mcp langchain-mcp-adapters langgraph snowflake-snowpark-python")
-    st.stop()
+from fastmcp import FastMCP
+from mcp.server.models import InitializationOptions
+from mcp.types import ServerCapabilities, ToolsCapability, PromptsCapability
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("streamlit-mcp-client")
+logger = logging.getLogger("fastmcp-server")
 
-# Page config
-st.set_page_config(
-    page_title="Brave Search MCP Demo", 
-    page_icon="🔍",
-    layout="wide"
-)
+# Create FastMCP instance
+mcp = FastMCP("Brave Search MCP Server")
 
-st.title("🔍 Brave Search MCP Demo")
-st.markdown("*Powered by Model Context Protocol*")
+# Global cache and configuration
+CACHE_DURATION = 1800  # 30 minutes
+search_cache: Dict[str, Dict] = {}
+weather_cache: Dict[str, Dict] = {}
+client_api_keys: Dict[str, str] = {}
 
-# Sidebar Configuration
-st.sidebar.header("⚙️ Configuration")
-server_url = st.sidebar.text_input(
-    "MCP Server URL", 
-    value="http://localhost:8081/sse",
-    help="URL of your MCP server SSE endpoint"
-)
+def is_cache_valid(cache_entry: Dict) -> bool:
+    """Check if cache entry is still valid"""
+    return time.time() - cache_entry['timestamp'] < CACHE_DURATION
 
-show_server_info = st.sidebar.checkbox("🛡 Show MCP Server Info", value=False)
+def get_client_api_key(client_id: str = "default") -> Optional[str]:
+    """Get API key for specific client"""
+    return client_api_keys.get(client_id)
 
-# Initialize session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+def set_client_api_key(api_key: str, client_id: str = "default"):
+    """Set API key for specific client"""
+    client_api_keys[client_id] = api_key
+    logger.info(f"✅ API key configured for client: {client_id}")
 
-if "tools_cache" not in st.session_state:
-    st.session_state.tools_cache = []
+# ============================================================================
+# TOOL IMPLEMENTATIONS
+# ============================================================================
 
-if "prompts_cache" not in st.session_state:
-    st.session_state.prompts_cache = []
-
-# === Snowflake LLM Setup ===
-@st.cache_resource
-def get_snowflake_connection():
-    """Get Snowflake connection"""
-    return SnowFlakeConnector.get_conn('aedl', '')
-
-@st.cache_resource
-def get_model():
-    """Get Snowflake Cortex LLM model"""
-    sf_conn = get_snowflake_connection()
-    return ChatSnowflakeCortex(
-        model="claude-4-sonnet",
-        cortex_function="complete",
-        session=Session.builder.configs({"connection": sf_conn}).getOrCreate()
-    )
-
-# === MCP Server Info Functions ===
-async def fetch_mcp_info():
-    """Fetch information from the MCP server"""
-    result = {"tools": [], "prompts": [], "connection_status": "disconnected"}
+@mcp.tool()
+def configure_brave_key(api_key: str, client_id: str = "default") -> str:
+    """
+    Configure Brave Search API key for this session
     
+    Args:
+        api_key: Brave Search API key
+        client_id: Client identifier (optional, defaults to "default")
+    
+    Returns:
+        Confirmation message
+    """
+    if not api_key:
+        return "❌ Error: API key is required"
+    
+    set_client_api_key(api_key, client_id)
+    return f"✅ Brave API key configured successfully for client: {client_id}"
+
+@mcp.tool()
+async def brave_web_search(
+    query: str, 
+    count: int = 10, 
+    offset: int = 0, 
+    client_id: str = "default"
+) -> str:
+    """
+    Search the web using Brave Search API for fresh, unbiased results
+    
+    Args:
+        query: Search query string
+        count: Number of results to return (max 20)
+        offset: Starting position for results  
+        client_id: Client identifier
+    
+    Returns:
+        Formatted search results with titles, URLs, and descriptions
+    """
     try:
-        st.sidebar.info("🔌 Connecting to MCP server...")
+        api_key = get_client_api_key(client_id)
+        if not api_key:
+            return "❌ **Error:** Brave API key not configured. Please configure API key first using configure_brave_key tool."
         
-        async with sse_client(url=server_url) as sse_connection:
-            async with ClientSession(*sse_connection) as session:
-                await session.initialize()
-                result["connection_status"] = "connected"
+        if not query or not query.strip():
+            return "❌ **Error:** Search query cannot be empty."
+        
+        # Check cache
+        cache_key = f"web_{client_id}_{query.lower()}_{count}_{offset}"
+        if cache_key in search_cache and is_cache_valid(search_cache[cache_key]):
+            cached_result = search_cache[cache_key]['formatted_result']
+            return f"{cached_result}\n\n*⚡ Result from cache (cached {int((time.time() - search_cache[cache_key]['timestamp']) / 60)} minutes ago)*"
+        
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": api_key
+        }
+        
+        params = {
+            "q": query.strip(),
+            "count": min(max(1, count), 20),
+            "offset": max(0, offset),
+            "safesearch": "moderate",
+            "freshness": "pd",  # Past day for fresh results
+            "text_decorations": False,
+            "spellcheck": True
+        }
+        
+        logger.info(f"🔍 Brave web search: '{query}' (count={count}, client={client_id})")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
                 
-                # Fetch Tools
-                try:
-                    tools = await session.list_tools()
-                    if hasattr(tools, 'tools'):
-                        for t in tools.tools:
-                            tool_info = {
-                                "name": t.name,
-                                "description": getattr(t, 'description', 'No description available')
-                            }
-                            
-                            # Get parameters from input schema
-                            if hasattr(t, 'inputSchema') and hasattr(t.inputSchema, 'properties'):
-                                tool_info["parameters"] = list(t.inputSchema.properties.keys())
-                            
-                            result["tools"].append(tool_info)
-                except Exception as e:
-                    st.sidebar.error(f"❌ Failed to fetch tools: {e}")
+                # Format results
+                result = f"🔍 **Brave Web Search Results**\n\n"
+                result += f"**Query:** {query}\n"
                 
-                # Fetch Prompts
-                try:
-                    prompts = await session.list_prompts()
-                    if hasattr(prompts, 'prompts'):
-                        for p in prompts.prompts:
-                            prompt_info = {
-                                "name": p.name,
-                                "description": getattr(p, 'description', 'No description available'),
-                                "arguments": []
-                            }
-                            
-                            if hasattr(p, 'arguments'):
-                                for arg in p.arguments:
-                                    prompt_info["arguments"].append({
-                                        "name": arg.name,
-                                        "required": getattr(arg, 'required', False),
-                                        "description": getattr(arg, 'description', '')
-                                    })
-                            
-                            result["prompts"].append(prompt_info)
-                except Exception as e:
-                    st.sidebar.error(f"❌ Failed to fetch prompts: {e}")
+                web_results = data.get('web', {}).get('results', [])
+                news_results = data.get('news', {}).get('results', [])
                 
-        st.sidebar.success("✅ Connected to MCP server")
+                result += f"**Found:** {len(web_results)} web results"
+                if news_results:
+                    result += f", {len(news_results)} news articles"
+                result += "\n\n"
+                
+                # Web Results
+                if web_results:
+                    result += "## 🌐 Web Results\n\n"
+                    for i, item in enumerate(web_results[:count], 1):
+                        title = item.get('title', 'No title')
+                        url = item.get('url', '')
+                        description = item.get('description', 'No description available')
+                        
+                        # Clean description
+                        description = re.sub(r'<[^>]+>', '', description)
+                        description = description.strip()
+                        if len(description) > 250:
+                            description = description[:247] + "..."
+                        
+                        result += f"**{i}. {title}**\n"
+                        result += f"🔗 {url}\n"
+                        result += f"📝 {description}\n\n"
+                else:
+                    result += "No web results found for this query.\n\n"
+                
+                # News Results
+                if news_results:
+                    result += "## 📰 Related News\n\n"
+                    for i, item in enumerate(news_results[:3], 1):
+                        title = item.get('title', 'No title')
+                        url = item.get('url', '')
+                        age = item.get('age', '')
+                        
+                        result += f"**{i}. {title}**"
+                        if age:
+                            result += f" *({age})*"
+                        result += f"\n🔗 {url}\n\n"
+                
+                # Videos (if available)
+                video_results = data.get('videos', {}).get('results', [])
+                if video_results:
+                    result += "## 🎥 Related Videos\n\n"
+                    for i, item in enumerate(video_results[:2], 1):
+                        title = item.get('title', 'No title')
+                        url = item.get('url', '')
+                        duration = item.get('duration', '')
+                        
+                        result += f"**{i}. {title}**"
+                        if duration:
+                            result += f" *({duration})*"
+                        result += f"\n🔗 {url}\n\n"
+                
+                result += f"---\n*Search performed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n"
+                result += f"*Powered by Brave Search API*"
+                
+                # Cache result
+                search_cache[cache_key] = {
+                    'timestamp': time.time(),
+                    'formatted_result': result
+                }
+                
+                logger.info(f"✅ Brave web search completed: {len(web_results)} results")
+                return result
+                
+            elif response.status_code == 401:
+                return "❌ **Authentication Error:** Invalid Brave Search API key. Please check your API key configuration."
+            elif response.status_code == 429:
+                return "❌ **Rate Limit Error:** Too many requests. Please try again later."
+            elif response.status_code == 400:
+                return f"❌ **Bad Request:** Invalid search parameters. Please check your query: '{query}'"
+            else:
+                error_text = response.text[:200] if response.text else "Unknown error"
+                return f"❌ **API Error:** Request failed with status {response.status_code}: {error_text}"
+                
+    except httpx.TimeoutException:
+        return "❌ **Timeout Error:** Request timed out. Please try again."
+    except httpx.ConnectError:
+        return "❌ **Connection Error:** Could not connect to Brave Search API. Please check your internet connection."
+    except Exception as e:
+        logger.error(f"❌ Brave web search error: {e}")
+        return f"❌ **Unexpected Error:** {str(e)}"
+
+@mcp.tool()
+async def brave_local_search(
+    query: str, 
+    count: int = 5, 
+    client_id: str = "default"
+) -> str:
+    """
+    Search for local businesses and places using Brave Search API
+    
+    Args:
+        query: Local search query (e.g., 'pizza in New York')
+        count: Number of results to return (max 20)
+        client_id: Client identifier
+    
+    Returns:
+        Formatted local search results with business details
+    """
+    try:
+        api_key = get_client_api_key(client_id)
+        if not api_key:
+            return "❌ **Error:** Brave API key not configured. Please configure API key first using configure_brave_key tool."
+        
+        if not query or not query.strip():
+            return "❌ **Error:** Search query cannot be empty."
+        
+        # Check cache
+        cache_key = f"local_{client_id}_{query.lower()}_{count}"
+        if cache_key in search_cache and is_cache_valid(search_cache[cache_key]):
+            cached_result = search_cache[cache_key]['formatted_result']
+            return f"{cached_result}\n\n*⚡ Result from cache (cached {int((time.time() - search_cache[cache_key]['timestamp']) / 60)} minutes ago)*"
+        
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": api_key
+        }
+        
+        params = {
+            "q": query.strip(),
+            "count": min(max(1, count), 20),
+            "safesearch": "moderate",
+            "search_lang": "en",
+            "country": "US",
+            "units": "metric"
+        }
+        
+        logger.info(f"📍 Brave local search: '{query}' (count={count}, client={client_id})")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                "https://api.search.brave.com/res/v1/local/search",
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Format results
+                result = f"📍 **Brave Local Search Results**\n\n"
+                result += f"**Query:** {query}\n"
+                
+                local_results = data.get('local', {}).get('results', [])
+                result += f"**Found:** {len(local_results)} local businesses\n\n"
+                
+                if local_results:
+                    for i, item in enumerate(local_results[:count], 1):
+                        name = item.get('title', 'No name')
+                        address = item.get('address', 'No address available')
+                        phone = item.get('phone', '')
+                        rating = item.get('rating', '')
+                        price_range = item.get('price_range', '')
+                        website = item.get('url', '')
+                        hours = item.get('hours', {})
+                        
+                        result += f"**{i}. {name}**\n"
+                        result += f"📍 **Address:** {address}\n"
+                        
+                        if phone:
+                            result += f"📞 **Phone:** {phone}\n"
+                        
+                        if rating:
+                            try:
+                                rating_val = float(rating)
+                                stars = "⭐" * int(rating_val)
+                                result += f"⭐ **Rating:** {rating} {stars}\n"
+                            except:
+                                result += f"⭐ **Rating:** {rating}\n"
+                        
+                        if price_range:
+                            result += f"💰 **Price Range:** {price_range}\n"
+                        
+                        if website:
+                            result += f"🌐 **Website:** {website}\n"
+                        
+                        # Hours (if available)
+                        if hours and isinstance(hours, dict):
+                            today = datetime.now().strftime('%A').lower()
+                            if today in hours:
+                                result += f"🕒 **Today's Hours:** {hours[today]}\n"
+                        
+                        result += "\n"
+                else:
+                    result += "❌ **No local results found for this query.**\n\n"
+                    result += "💡 **Tips for better local search:**\n"
+                    result += "• Include a specific location (e.g., 'pizza in Manhattan')\n"
+                    result += "• Be specific about the type of business you're looking for\n"
+                    result += "• Try alternative keywords or business categories\n"
+                    result += "• Check spelling and try broader terms\n\n"
+                
+                result += f"---\n*Search performed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n"
+                result += f"*Powered by Brave Local Search API*"
+                
+                # Cache result
+                search_cache[cache_key] = {
+                    'timestamp': time.time(),
+                    'formatted_result': result
+                }
+                
+                logger.info(f"✅ Brave local search completed: {len(local_results)} results")
+                return result
+                
+            elif response.status_code == 401:
+                return "❌ **Authentication Error:** Invalid Brave Search API key."
+            elif response.status_code == 429:
+                return "❌ **Rate Limit Error:** Too many requests. Please try again later."
+            elif response.status_code == 400:
+                return f"❌ **Bad Request:** Invalid search parameters. Please check your query: '{query}'"
+            else:
+                error_text = response.text[:200] if response.text else "Unknown error"
+                return f"❌ **API Error:** Request failed with status {response.status_code}: {error_text}"
+                
+    except httpx.TimeoutException:
+        return "❌ **Timeout Error:** Request timed out. Please try again."
+    except httpx.ConnectError:
+        return "❌ **Connection Error:** Could not connect to Brave Local Search API."
+    except Exception as e:
+        logger.error(f"❌ Brave local search error: {e}")
+        return f"❌ **Unexpected Error:** {str(e)}"
+
+@mcp.tool()
+def calculator(expression: str) -> str:
+    """
+    Calculate mathematical expressions safely
+    
+    Args:
+        expression: Mathematical expression to evaluate (e.g., "2 + 2 * 3")
+    
+    Returns:
+        Calculation result with the expression and answer
+    """
+    try:
+        if not expression or not expression.strip():
+            return "❌ Error: Expression cannot be empty."
+        
+        expression = expression.strip()
+        
+        # Allow only safe characters
+        allowed_chars = "0123456789+-*/(). "
+        if not all(char in allowed_chars for char in expression):
+            return "❌ Error: Invalid characters in expression. Only numbers, +, -, *, /, (, ), and spaces are allowed."
+        
+        # Evaluate the expression
+        result = eval(expression)
+        
+        # Format the result nicely
+        if isinstance(result, float):
+            if result.is_integer():
+                result = int(result)
+            else:
+                result = round(result, 6)
+        
+        response = f"🧮 **Calculation Result**\n\n"
+        response += f"**Expression:** {expression}\n"
+        response += f"**Result:** {result}\n\n"
+        response += f"*Calculated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+        
+        logger.info(f"🧮 Calculator: '{expression}' = {result}")
+        return response
+        
+    except ZeroDivisionError:
+        return "❌ Error: Division by zero is not allowed."
+    except SyntaxError:
+        return f"❌ Error: Invalid mathematical expression: '{expression}'"
+    except Exception as e:
+        return f"❌ Error: Could not calculate '{expression}'. {str(e)}"
+
+@mcp.tool()
+async def get_weather(place: str) -> str:
+    """
+    Get current weather information for a location
+    
+    Args:
+        place: Location name (e.g., "New York", "London, UK")
+    
+    Returns:
+        Current weather conditions and forecast
+    """
+    try:
+        if not place or not place.strip():
+            return "❌ Error: Location cannot be empty."
+        
+        place = place.strip().title()
+        
+        # Check cache
+        cache_key = place.lower()
+        if cache_key in weather_cache and is_cache_valid(weather_cache[cache_key]):
+            cached_result = weather_cache[cache_key]['formatted_result']
+            return f"{cached_result}\n\n*⚡ Result from cache (cached {int((time.time() - weather_cache[cache_key]['timestamp']) / 60)} minutes ago)*"
+        
+        # Mock weather data (replace with real weather API if needed)
+        # This is a simplified implementation - you can integrate with OpenWeatherMap, WeatherAPI, etc.
+        weather_data = {
+            "location": place,
+            "temperature": "22°C",
+            "condition": "Partly Cloudy",
+            "humidity": "65%",
+            "wind": "10 km/h NW",
+            "pressure": "1013 mb",
+            "visibility": "10 km",
+            "uv_index": "5 (Moderate)"
+        }
+        
+        result = f"🌤️ **Weather Report for {place}**\n\n"
+        result += f"**Current Conditions:**\n"
+        result += f"• 🌡️ Temperature: {weather_data['temperature']}\n"
+        result += f"• ☁️ Condition: {weather_data['condition']}\n"
+        result += f"• 💧 Humidity: {weather_data['humidity']}\n"
+        result += f"• 💨 Wind: {weather_data['wind']}\n"
+        result += f"• 📊 Pressure: {weather_data['pressure']}\n"
+        result += f"• 👁️ Visibility: {weather_data['visibility']}\n"
+        result += f"• ☀️ UV Index: {weather_data['uv_index']}\n\n"
+        result += f"**3-Day Forecast:**\n"
+        result += f"• Today: Partly cloudy, high 25°C, low 18°C\n"
+        result += f"• Tomorrow: Sunny, high 27°C, low 20°C\n"
+        result += f"• Day 3: Light rain, high 23°C, low 16°C\n\n"
+        result += f"---\n*Weather updated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n"
+        result += f"*Note: This is a demo implementation. For production use, integrate with a real weather API.*"
+        
+        # Cache result
+        weather_cache[cache_key] = {
+            'timestamp': time.time(),
+            'formatted_result': result
+        }
+        
+        logger.info(f"🌤️ Weather lookup for: {place}")
+        return result
         
     except Exception as e:
-        st.sidebar.error(f"❌ MCP Connection Error: {e}")
-        result["connection_status"] = "failed"
-    
-    return result
+        logger.error(f"❌ Weather error: {e}")
+        return f"❌ **Weather Error:** Could not get weather for '{place}': {str(e)}"
 
-# === Mock LLM for demonstration ===
-def mock_llm_response(prompt_text: str) -> str:
-    """Mock LLM response for demo purposes"""
-    return f"🤖 Mock LLM Response to: '{prompt_text[:100]}...'"
+@mcp.tool()
+def get_cache_stats() -> str:
+    """
+    Get cache statistics and server status
+    
+    Returns:
+        Current cache statistics and server information
+    """
+    try:
+        total_search_entries = len(search_cache)
+        valid_search_entries = sum(1 for entry in search_cache.values() if is_cache_valid(entry))
+        
+        total_weather_entries = len(weather_cache)
+        valid_weather_entries = sum(1 for entry in weather_cache.values() if is_cache_valid(entry))
+        
+        configured_clients = len(client_api_keys)
+        
+        result = f"📊 **MCP Server Statistics**\n\n"
+        result += f"**Server Information:**\n"
+        result += f"• Server: Brave Search MCP Server\n"
+        result += f"• Running since: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        result += f"• Configured clients: {configured_clients}\n\n"
+        
+        result += f"**Search Cache:**\n"
+        result += f"• Total entries: {total_search_entries}\n"
+        result += f"• Valid entries: {valid_search_entries}\n"
+        result += f"• Expired entries: {total_search_entries - valid_search_entries}\n\n"
+        
+        result += f"**Weather Cache:**\n"
+        result += f"• Total entries: {total_weather_entries}\n"
+        result += f"• Valid entries: {valid_weather_entries}\n"
+        result += f"• Expired entries: {total_weather_entries - valid_weather_entries}\n\n"
+        
+        result += f"**Configuration:**\n"
+        result += f"• Cache duration: {CACHE_DURATION // 60} minutes\n"
+        result += f"• Available tools: 6 tools\n\n"
+        
+        if total_search_entries > 0:
+            result += f"**Recent Searches:**\n"
+            recent_keys = list(search_cache.keys())[-5:]  # Last 5 searches
+            for key in recent_keys:
+                search_type = "Web" if key.startswith("web_") else "Local"
+                result += f"• {search_type} search\n"
+        
+        result += f"\n---\n*Statistics generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+        
+        return result
+        
+    except Exception as e:
+        return f"❌ **Error:** Could not generate cache statistics: {str(e)}"
 
-# === Server Info Display ===
-if show_server_info:
-    mcp_data = asyncio.run(fetch_mcp_info())
+@mcp.tool()
+def clear_cache() -> str:
+    """
+    Clear all cached search and weather results
     
-    # Cache the results for use in the main interface
-    st.session_state.tools_cache = mcp_data["tools"]
-    st.session_state.prompts_cache = mcp_data["prompts"]
-    
-    # Connection Status
-    if mcp_data["connection_status"] == "connected":
-        st.sidebar.success("🟢 MCP Server Connected")
-    elif mcp_data["connection_status"] == "failed":
-        st.sidebar.error("🔴 MCP Server Disconnected")
-    else:
-        st.sidebar.warning("🟡 MCP Server Status Unknown")
-    
-    # Display Tools
-    with st.sidebar.expander("🛠 Available Tools", expanded=False):
-        if mcp_data["tools"]:
-            for tool in mcp_data["tools"]:
-                st.markdown(f"**{tool['name']}**")
-                st.markdown(f"*{tool['description']}*")
-                if 'parameters' in tool:
-                    st.markdown(f"Parameters: `{', '.join(tool['parameters'])}`")
-                st.markdown("---")
-        else:
-            st.warning("No tools available")
-    
-    # Display Prompts
-    with st.sidebar.expander("📝 Available Prompts", expanded=False):
-        if mcp_data["prompts"]:
-            for prompt in mcp_data["prompts"]:
-                st.markdown(f"**{prompt['name']}**")
-                st.markdown(f"*{prompt['description']}*")
-                if prompt['arguments']:
-                    for arg in prompt['arguments']:
-                        req_text = "Required" if arg['required'] else "Optional"
-                        st.markdown(f"• `{arg['name']}` ({req_text}): {arg['description']}")
-                st.markdown("---")
-        else:
-            st.warning("No prompts available")
+    Returns:
+        Confirmation message with cleared cache counts
+    """
+    try:
+        search_count = len(search_cache)
+        weather_count = len(weather_cache)
+        
+        search_cache.clear()
+        weather_cache.clear()
+        
+        result = f"🗑️ **Cache Cleared Successfully**\n\n"
+        result += f"**Cleared:**\n"
+        result += f"• Search cache: {search_count} entries\n"
+        result += f"• Weather cache: {weather_count} entries\n"
+        result += f"• Total: {search_count + weather_count} entries\n\n"
+        result += f"*Cache cleared at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*"
+        
+        logger.info(f"🗑️ Cache cleared: {search_count + weather_count} entries")
+        return result
+        
+    except Exception as e:
+        return f"❌ **Error:** Could not clear cache: {str(e)}"
 
-# === Main Chat Interface ===
-else:
-    # Prompt Type Selection
-    st.sidebar.header("🎯 Prompt Types")
-    prompt_type = st.sidebar.radio(
-        "Select Prompt Type", 
-        ["Calculator", "Weather", "Web Search", "Local Search", "No Context"]
-    )
-    
-    # Prompt mapping for server prompts
-    prompt_map = {
-        "Calculator": "calculation_helper",
-        "Weather": "weather_assistant", 
-        "Web Search": "brave_search_expert",
-        "Local Search": "local_business_finder",
-        "No Context": None
-    }
-    
-    # Example queries based on prompt type
-    examples = {
-        "Calculator": [
-            "Calculate the expression (4+5)/2.0", 
-            "Calculate the math function sqrt(16) + 7", 
-            "Calculate the expression 3^4 - 12"
-        ],
-        "Weather": [
-            "What is the present weather in Richmond?",
-            "What's the weather forecast for Atlanta?",
-            "Is it raining in New York City today?"
-        ],
-        "Web Search": [
-            "Latest developments in artificial intelligence",
-            "Python programming best practices 2024",
-            "Climate change recent research",
-            "Cryptocurrency market trends"
-        ],
-        "Local Search": [
-            "Pizza restaurants in New York City",
-            "Coffee shops near San Francisco", 
-            "Gas stations in Atlanta",
-            "Bookstores in Boston"
-        ],
-        "No Context": [
-            "Who won the world cup in 2022?", 
-            "Summarize climate change impact on oceans"
-        ]
-    }
-    
-    # Display example queries
-    with st.sidebar.expander("💡 Example Queries", expanded=True):
-        for example in examples[prompt_type]:
-            if st.button(example, key=f"example_{example}", use_container_width=True):
-                st.session_state.query_input = example
+# ============================================================================
+# PROMPTS
+# ============================================================================
 
-# === Chat Interface ===
-st.header("💬 Chat Interface")
+@mcp.prompt()
+def brave_search_expert(query: str) -> str:
+    """
+    Expert prompt for Brave web search with optimized search strategies
+    
+    Args:
+        query: The search query to optimize and execute
+    
+    Returns:
+        Optimized search prompt for web search
+    """
+    return f"""You are a Brave Search expert. Help the user search for: "{query}"
 
-# Display chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+First, use the brave_web_search tool with this optimized query to get current, unbiased results:
 
-# Handle query input
-query = st.chat_input("Type your query here...") or st.session_state.get("query_input")
+Search Query: {query}
+Search Parameters: Use count=10 for comprehensive results
 
-if query:
-    # Clear the query_input from session state if it was used
-    if "query_input" in st.session_state:
-        del st.session_state.query_input
-    
-    # Display user message
-    with st.chat_message("user"):
-        st.markdown(query)
-    
-    st.session_state.messages.append({"role": "user", "content": query})
-    
-    # Process the query
-    async def process_query(query_text, prompt_type):
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            message_placeholder.text("🤔 Processing your request...")
-            
-            try:
-                # Create MCP client
-                client = MultiServerMCPClient(
-                    {"BraveSearchServer": {"url": server_url, "transport": "sse"}}
-                )
-                
-                # Get model and create agent
-                model = get_model()
-                tools = await client.get_tools()
-                agent = create_react_agent(model=model, tools=tools)
-                
-                # Get prompt from server or use query directly
-                prompt_name = prompt_map[prompt_type]
-                
-                if prompt_name is None:
-                    # No context - just use the query as-is
-                    prompt_from_server = query_text
-                    formatted_prompt = query_text
-                else:
-                    # Get prompt from server
-                    try:
-                        prompt_from_server = await client.get_prompt(
-                            server_name="BraveSearchServer",
-                            prompt_name=prompt_name,
-                            arguments={"query": query_text} if prompt_name == "brave_search_expert" else
-                                     {"location": query_text} if prompt_name == "weather_assistant" else
-                                     {"problem": query_text} if prompt_name == "calculation_helper" else
-                                     {"location": query_text.split(" in ")[-1] if " in " in query_text else "Unknown", 
-                                      "business_type": query_text.split(" in ")[0] if " in " in query_text else query_text} if prompt_name == "local_business_finder" else
-                                     {"query": query_text}
-                        )
-                        
-                        if prompt_from_server and len(prompt_from_server) > 0:
-                            # Format the prompt if it contains {query} placeholder
-                            if hasattr(prompt_from_server[0], 'content'):
-                                prompt_content = prompt_from_server[0].content
-                                if "{query}" in prompt_content:
-                                    formatted_prompt = prompt_content.format(query=query_text)
-                                else:
-                                    formatted_prompt = prompt_content
-                            else:
-                                formatted_prompt = str(prompt_from_server[0])
-                        else:
-                            formatted_prompt = query_text
-                            
-                    except Exception as e:
-                        st.warning(f"Could not retrieve prompt '{prompt_name}': {e}")
-                        formatted_prompt = query_text
-                
-                # Invoke the agent
-                if prompt_name is None:
-                    # For "No Context", just return a simple response
-                    result = f"I understand you're asking about: {query_text}. However, I'm configured to use MCP tools for responses. Please try one of the other prompt types for tool-assisted answers."
-                else:
-                    # Use the agent with the formatted prompt
-                    response = await agent.ainvoke({"messages": [{"role": "user", "content": formatted_prompt}]})
-                    
-                    # Extract the result from the response
-                    if isinstance(response, dict):
-                        # Handle different response formats
-                        if "messages" in response:
-                            messages = response["messages"]
-                            if messages and len(messages) > 0:
-                                last_message = messages[-1]
-                                if hasattr(last_message, 'content'):
-                                    result = last_message.content
-                                else:
-                                    result = str(last_message)
-                            else:
-                                result = "No response generated"
-                        else:
-                            # Try to get the last value if it's a dict
-                            values = list(response.values())
-                            if values:
-                                last_value = values[-1]
-                                if isinstance(last_value, list) and len(last_value) > 1:
-                                    result = last_value[1].content if hasattr(last_value[1], 'content') else str(last_value[1])
-                                else:
-                                    result = str(last_value)
-                            else:
-                                result = str(response)
-                    else:
-                        result = str(response)
-                
-                message_placeholder.markdown(result)
-                st.session_state.messages.append({"role": "assistant", "content": result})
-                        
-            except Exception as e:
-                error_message = f"❌ **Error**: {str(e)}\n\n💡 Make sure the MCP server is running at `{server_url}` and Snowflake connection is configured."
-                message_placeholder.markdown(error_message)
-                st.session_state.messages.append({"role": "assistant", "content": error_message})
-    
-    # Run the async function
-    if query:
-        asyncio.run(process_query(query, prompt_type))
+Then provide:
+1. **Summary**: Key findings from the search results
+2. **Key Sources**: Most relevant and authoritative sources found
+3. **Additional Context**: Any important background information
+4. **Follow-up**: Suggest related search terms if the user wants to explore further
 
-# === Sidebar Actions ===
-st.sidebar.markdown("---")
-st.sidebar.header("🎛️ Actions")
+Focus on providing factual, unbiased information from the search results. If the search results are insufficient, suggest alternative search terms or approaches."""
 
-if st.sidebar.button("🗑️ Clear Chat", use_container_width=True):
-    st.session_state.messages = []
-    st.rerun()
+@mcp.prompt()
+def local_business_finder(location: str, business_type: str) -> str:
+    """
+    Expert prompt for finding local businesses using Brave local search
+    
+    Args:
+        location: The location to search in
+        business_type: Type of business to find
+    
+    Returns:
+        Optimized local search prompt
+    """
+    return f"""You are a local business discovery expert. Help the user find {business_type} in {location}.
 
-if st.sidebar.button("🔄 Refresh Server Info", use_container_width=True):
-    st.session_state.tools_cache = []
-    st.session_state.prompts_cache = []
-    st.rerun()
+First, use the brave_local_search tool with this optimized query:
 
-# === Footer ===
-st.sidebar.markdown("---")
-st.sidebar.markdown("**🔍 Brave Search MCP Demo**")
-st.sidebar.markdown("*Powered by Snowflake Cortex (Claude-4-Sonnet)*")
-st.sidebar.markdown("*Model Context Protocol + LangGraph*")
-st.sidebar.markdown(f"Server: `{server_url}`")
+Search Query: {business_type} in {location}
+Search Parameters: Use count=5 for focused local results
 
-# === Instructions ===
-with st.expander("📖 How to Use", expanded=False):
-    st.markdown("""
-    ### 🚀 Getting Started
+Then provide:
+1. **Top Recommendations**: Best businesses found based on ratings and reviews
+2. **Business Details**: Key information like hours, contact, and specialties
+3. **Location Tips**: How to get there, parking, nearby landmarks
+4. **Alternatives**: Similar businesses if the first options don't meet needs
+
+Focus on providing practical, actionable information to help the user make the best choice for their needs."""
+
+@mcp.prompt()
+def weather_assistant(location: str) -> str:
+    """
+    Expert prompt for weather information and advice
     
-    1. **Start the MCP Server**: Make sure your MCP server is running on the configured URL
-    2. **Enable Server Info**: Check "Show MCP Server Info" to see available tools and prompts
-    3. **Select Interaction Mode**: Choose how you want to interact with the server
-    4. **Try Examples**: Click on example queries in the sidebar
-    5. **Ask Questions**: Type your own questions in the chat input
+    Args:
+        location: Location to get weather for
     
-    ### 🛠️ Available Modes
+    Returns:
+        Weather-focused prompt with advice
+    """
+    return f"""You are a weather expert assistant. Help the user with weather information for {location}.
+
+First, use the get_weather tool to get current conditions:
+
+Location: {location}
+
+Then provide:
+1. **Current Conditions**: Summary of current weather
+2. **What to Expect**: Practical implications for today's activities
+3. **Clothing Advice**: What to wear based on conditions
+4. **Activity Suggestions**: Indoor/outdoor activity recommendations
+5. **Travel Considerations**: How weather might affect travel plans
+
+Make the weather information practical and actionable for daily planning."""
+
+@mcp.prompt()
+def calculation_helper(problem: str) -> str:
+    """
+    Expert prompt for mathematical calculations and problem solving
     
-    - **Calculator**: Perform mathematical calculations using prompts and tools
-    - **Weather**: Get weather information with AI assistance
-    - **Web Search**: Search the internet using AI-guided queries
-    - **Local Search**: Find local businesses with intelligent assistance
-    - **No Context**: Basic chat without MCP tools (limited functionality)
+    Args:
+        problem: Mathematical problem or expression to solve
     
-    ### 🧠 AI Integration
+    Returns:
+        Calculation-focused prompt with explanation
+    """
+    return f"""You are a mathematics expert. Help the user solve: "{problem}"
+
+First, use the calculator tool to compute the result:
+
+Expression: {problem}
+
+Then provide:
+1. **Solution**: The calculated result
+2. **Step-by-Step**: Break down how the calculation works
+3. **Verification**: Double-check the result makes sense
+4. **Related Concepts**: Explain any mathematical concepts involved
+5. **Similar Problems**: Suggest related calculations if helpful
+
+Make mathematics accessible and educational while providing accurate results."""
+
+# ============================================================================
+# CUSTOM MCP SERVER CLASS WITH PROPER INITIALIZATION
+# ============================================================================
+
+class CustomMCPServer:
+    """Custom MCP Server wrapper to handle initialization options properly"""
     
-    This app uses **Snowflake Cortex (Claude-4-Sonnet)** with **LangGraph agents** to:
-    - Understand your queries intelligently
-    - Select appropriate MCP tools automatically  
-    - Provide contextual, helpful responses
-    - Chain multiple tool calls when needed
+    def __init__(self, fastmcp_instance):
+        self._fastmcp = fastmcp_instance
+        self.name = "Brave Search MCP Server"
+        self.version = "1.0.0"
     
-    ### 💡 Tips
+    def create_initialization_options(self):
+        """Create proper initialization options with required capabilities"""
+        return InitializationOptions(
+            server_name=self.name,
+            server_version=self.version,
+            capabilities=ServerCapabilities(
+                tools=ToolsCapability(),
+                prompts=PromptsCapability()
+            )
+        )
     
-    - Use specific, clear queries for better results
-    - Check server info to see what tools are available
-    - Try different interaction modes for different types of questions
-    - Clear chat history with the sidebar button
-    """)
+    async def run(self, read_stream, write_stream, init_options):
+        """Run the MCP server with proper options"""
+        return await self._fastmcp.run(read_stream, write_stream, init_options)
+
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
+
+# Configure default API key if provided
+# Note: In production, you should get this from environment variables or secure configuration
+DEFAULT_API_KEY = "BSAQIFoBulbULfcL6RMBxRWCtopFY0E"
+if DEFAULT_API_KEY:
+    set_client_api_key(DEFAULT_API_KEY, "default")
+    logger.info("🚀 FastMCP Server initialized with default API key")
+
+# Create the custom MCP server instance
+_mcp_server = CustomMCPServer(mcp)
+
+logger.info("🚀 FastMCP Server ready")
+logger.info("🛠️  Available tools: configure_brave_key, brave_web_search, brave_local_search, calculator, get_weather, get_cache_stats, clear_cache")
+logger.info("📝 Available prompts: brave_search_expert, local_business_finder, weather_assistant, calculation_helper")
+
+# Export the custom MCP server instance
+mcp_server = _mcp_server
