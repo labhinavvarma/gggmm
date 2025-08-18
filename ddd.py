@@ -1,230 +1,210 @@
-@route.post("/v2/complete")
-async def llm_gateway(
-        api_key: Annotated[str | None, Header()],
-        query: Annotated[AiCompleteQryModel, Body(embed=True)],
-        config: Annotated[GenAiEnvSettings, Depends(get_config)],
-        logger: Annotated[Logger, Depends(get_logger)],
-        background_tasks: BackgroundTasks,
-        get_load_datetime: Annotated[datetime, Depends(get_load_timestamp)]          
-):
-    prompt = query.prompt.messages[-1].content
-    messages_json = query.prompt.messages
-    session_id = "4533"
-    
-    # The API key validation and generation has been pushed to backend
-    api_validator = ValidApiKey()
+def _extract_entities_with_llm(self, pharmacy_data: Dict[str, Any],
+                               pharmacy_extraction: Dict[str, Any],
+                               medical_extraction: Dict[str, Any],
+                               patient_data: Dict[str, Any],
+                               api_integrator) -> Dict[str, Any]:
+    """Use LLM to extract health entities from claims data"""
     try:
-        if api_validator(api_key, query.application.aplctn_cd, query.application.app_id):
-            try:
-                sf_conn = SnowFlakeConnector.get_conn(
-                    query.application.aplctn_cd,
-                    query.application.app_lvl_prefix,
-                    session_id
-                )
-            except DatabaseError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="User not authorized to resources"
-                )
-            
-            pre_response_format = {"response_format": query.response_format.model_dump()} if query.response_format.schema else {}
-            provisioned_dict = {"provisioned_throughput_id": config.provisioned_id} if query.model.model in config.provisioned_models else {}
-            
-            request_body = {
-                "model": query.model.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": get_conv_response(messages_json) + prompt
-                    }
-                ],
-                **query.model.options,
-                **pre_response_format,
-                **provisioned_dict
+        # Prepare comprehensive context for LLM
+        context_data = {
+            "pharmacy_claims": pharmacy_data,
+            "pharmacy_extraction": pharmacy_extraction,
+            "medical_extraction": medical_extraction,
+            "patient_info": {
+                "gender": patient_data.get("gender", "unknown"),
+                "age": patient_data.get("calculated_age", "unknown")
             }
-            
-            # REMOVED: print statement that was causing text output
-            logger.debug(f"Request body: {request_body}")  # Use logger instead of print
-            
-            headers = {
-                "Authorization": f'Snowflake Token="{sf_conn.rest.token}"',
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-            url = getattr(config.COMPLETE, "{}_host".format(config.env))
+        }
 
-            # Preflight request validation
-            preflight_timeout = httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=10.0)
-            async with httpx.AsyncClient(timeout=preflight_timeout, verify=False) as pre_client:
-                try:
-                    pre = await pre_client.post(url, headers=headers, json=request_body)
-                except httpx.RequestError as e:
-                    logger.error(f"Request error during initial check: {e}")
-                    # Return JSON error instead of streaming
-                    return JSONResponse(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        content={"error": "service_unavailable", "detail": str(e)}
-                    )
+        # Create detailed prompt for entity extraction
+        entity_prompt = f"""
+You are a medical AI expert analyzing patient claims data. Use your medical knowledge to understand what each medication treats and what each ICD-10 code means.
+
+COMPREHENSIVE CLAIMS DATA:
+{json.dumps(context_data, indent=2)}
+
+ANALYSIS METHODOLOGY:
+
+1. MEDICATION ANALYSIS:
+   - For each medication found, determine what medical condition it treats
+   - Use your medical knowledge of therapeutic indications
+   - Consider both generic and brand names
+   - Example: "METFORMIN HCL 500 MG" → treats Type 2 diabetes → diabetics = "yes"
+
+2. ICD-10 CODE ANALYSIS:
+   - For each ICD-10 code found, determine what medical condition it represents
+   - Use your medical knowledge of ICD-10 code meanings
+   - Example: "E11.9" → Type 2 diabetes mellitus without complications → diabetics = "yes"
+   - Example: "I10" → Essential hypertension → blood_pressure = "diagnosed"
+
+3. ENTITY EXTRACTION:
+
+diabetics: "yes" or "no"
+- YES if any medication treats diabetes (any type)
+- YES if any ICD-10 code represents diabetes (any type)
+- Consider: insulin, metformin, sulfonylureas, SGLT2 inhibitors, GLP-1 agonists, etc.
+- Consider: E10.x (Type 1), E11.x (Type 2), E12.x (Malnutrition-related), E13.x (Other specified), E14.x (Unspecified)
+
+smoking: "yes" or "no"
+- YES if any medication is for smoking cessation
+- YES if any ICD-10 code represents tobacco use/dependence
+- Consider: nicotine replacement, varenicline, bupropion for smoking cessation
+- Consider: Z72.0 (Tobacco use), F17.x (Tobacco dependence)
+
+alcohol: "yes" or "no"
+- YES if any medication treats alcohol use disorders
+- YES if any ICD-10 code represents alcohol use/dependence
+- Consider: naltrexone, disulfiram, acamprosate
+- Consider: F10.x (Alcohol use disorders), Z72.1 (Alcohol use)
+
+blood_pressure: "unknown", "managed", or "diagnosed"
+- "managed" if taking antihypertensive medications
+- "diagnosed" if ICD-10 codes represent hypertension
+- "unknown" if no evidence
+- Consider: ACE inhibitors, ARBs, beta-blockers, calcium channel blockers, diuretics
+- Consider: I10 (Essential hypertension), I11.x (Hypertensive heart disease), I12.x (Hypertensive chronic kidney disease), etc.
+
+medical_conditions: Array of all conditions identified
+
+CRITICAL INSTRUCTIONS:
+- Use your medical knowledge to understand what each medication TREATS
+- Use your medical knowledge to understand what each ICD-10 code MEANS
+- Don't just pattern match - understand the medical meaning
+- Cross-reference findings between medications and diagnosis codes
+- Be comprehensive in your medical analysis
+
+RESPONSE FORMAT - RETURN ONLY VALID JSON, NO MARKDOWN:
+{{
+    "diabetics": "yes/no",
+    "smoking": "yes/no", 
+    "alcohol": "yes/no",
+    "blood_pressure": "unknown/managed/diagnosed",
+    "medical_conditions": ["condition1", "condition2"],
+    "llm_reasoning": "Medical analysis summary",
+    "diabetes_evidence": ["medication/code → medical meaning"],
+    "bp_evidence": ["medication/code → medical meaning"],
+    "smoking_evidence": ["medication/code → medical meaning"],
+    "alcohol_evidence": ["medication/code → medical meaning"],
+    "medication_analysis": ["medication_name → treats_condition"],
+    "icd10_analysis": ["ICD_code → medical_condition_meaning"]
+}}
+"""
+
+        logger.info("🤖 Calling LLM for entity extraction...")
+
+        # Call LLM with entity extraction prompt
+        llm_response = api_integrator.call_llm(entity_prompt)
+
+        if llm_response and not llm_response.startswith("Error"):
+            # Log the full response for debugging
+            logger.info(f"📄 Full LLM response length: {len(llm_response)} characters")
+            logger.info(f"📄 LLM response preview: {llm_response[:200]}...")
             
-            # Handle client errors with JSON response
-            if pre.is_client_error:
-                error_message = pre.text or ""
-                status_code = pre.status_code
-                error_details = {
-                    429: "Too many requests. Please implement retry with backoff.",
-                    402: "Budget exceeded. Check your Cortex token quota.",
-                    400: "Bad request sent to Snowflake Cortex."
-                }
-                detail = error_details.get(status_code, "") + " " + error_message
-                return JSONResponse(
-                    status_code=status_code,
-                    content={"error": "client_error", "detail": detail.strip()}
-                )
-            
-            if pre.is_server_error:
-                return JSONResponse(
-                    status_code=pre.status_code,
-                    content={"error": "server_error", "detail": pre.text or ""}
-                )
-            
-            # Process the successful response
-            response_text = []
-            query_id = [None]
-            fdbck_id = [str(uuid.uuid4())]
-            
-            # Initialize response data
-            vModel = query.model.model
-            Created = datetime.utcnow().isoformat()
-            usage_info = {
-                "total_tokens": 0,
-                "prompt_tokens": 0,
-                "completion_tokens": 0
-            }
-            
-            # Stream and collect response
-            stream_timeout = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=10.0)
-            async with httpx.AsyncClient(timeout=stream_timeout, verify=False) as clnt:
-                try:
-                    async with clnt.stream('POST', url, headers=headers, json=request_body) as response:
-                        if response.is_client_error or response.is_server_error:
-                            error_message = await response.aread()
-                            decoded_error = error_message.decode("utf-8", errors="replace")
-                            logger.error(f"Upstream stream error {response.status_code}: {decoded_error}")
-                            return JSONResponse(
-                                status_code=response.status_code,
-                                content={"error": "upstream_error", "detail": decoded_error}
-                            )
+            # Try to parse JSON response with improved extraction
+            try:
+                # Method 1: Handle markdown code blocks
+                json_str = llm_response.strip()
+                
+                # Remove markdown code block wrappers if present
+                if json_str.startswith('```json'):
+                    json_str = json_str[7:]  # Remove ```json
+                elif json_str.startswith('```'):
+                    json_str = json_str[3:]   # Remove ```
+                    
+                if json_str.endswith('```'):
+                    json_str = json_str[:-3]  # Remove closing ```
+                
+                json_str = json_str.strip()
+                
+                # Method 2: Find JSON boundaries more carefully
+                json_start = json_str.find('{')
+                
+                # Find the matching closing brace by counting braces
+                if json_start != -1:
+                    brace_count = 0
+                    json_end = -1
+                    
+                    for i in range(json_start, len(json_str)):
+                        if json_str[i] == '{':
+                            brace_count += 1
+                        elif json_str[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                json_end = i + 1
+                                break
+                    
+                    if json_end != -1:
+                        json_str = json_str[json_start:json_end]
+                        logger.info(f"🔍 Extracted JSON string: {json_str[:100]}...")
                         
-                        # Process stream content
-                        buffer = b""
-                        async for result_chunk in response.aiter_bytes():
-                            buffer += result_chunk
-                            while b'\n\n' in buffer:
-                                elem, buffer = buffer.split(b'\n\n', 1)
-                                if b'content' in elem or b'text' in elem:
-                                    try:
-                                        chunk_dict = json.loads(elem.replace(b'data: ', b''))
-                                        
-                                        # Extract query ID if available
-                                        if 'id' in chunk_dict:
-                                            query_id[0] = chunk_dict['id']
-                                        
-                                        # Update usage information if available
-                                        if 'usage' in chunk_dict:
-                                            usage_info.update(chunk_dict['usage'])
-                                        
-                                        # Extract content based on Snowflake Cortex format
-                                        text_content = None
-                                        if 'choices' in chunk_dict and len(chunk_dict['choices']) > 0:
-                                            choice = chunk_dict['choices'][0]
-                                            if 'delta' in choice:
-                                                delta = choice['delta']
-                                                if 'text' in delta:
-                                                    text_content = delta['text']
-                                                elif 'content' in delta:
-                                                    text_content = delta['content']
-                                            elif 'message' in choice:
-                                                message = choice['message']
-                                                if 'content' in message:
-                                                    text_content = message['content']
-                                        
-                                        if text_content:
-                                            response_text.append(text_content)
-                                            
-                                    except json.JSONDecodeError as e:
-                                        logger.error(f"Error decoding JSON: {e}")
-                                        # Continue processing instead of returning error
-                                        continue
-                                        
-                except httpx.RequestError as e:
-                    logger.error(f"Request error: {e}")
-                    return JSONResponse(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        content={"error": "request_error", "detail": str(e)}
-                    )
-                except Exception as e:
-                    logger.error(f"Unexpected error: {e}")
-                    return JSONResponse(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        content={"error": "unexpected_error", "detail": str(e)}
-                    )
-            
-            # Build final response
-            full_final_response = "".join(response_text)
-            final_response = {
-                "model": vModel,
-                "created": Created,
-                "prompt": prompt,
-                "query_id": query_id[0],
-                "fdbck_id": fdbck_id[0],
-                "content": full_final_response,
-                "usage": usage_info,
-                "tool_use": {}
-            }
-            
-            # Add background task for auditing
-            token_count = usage_info.get("total_tokens", 0)
-            audit_rec = GenAiCortexAudit(
-                edl_load_dtm=get_load_datetime,
-                edl_run_id="0000",
-                edl_scrty_lvl_cd="NA",
-                edl_lob_cd="NA",
-                srvc_type="complete",
-                aplctn_cd=config.pltfrm_aplctn_cd,
-                user_id="Complete_User",
-                mdl_id=vModel,
-                cnvrstn_chat_lmt_txt="0",
-                sesn_id=session_id,
-                prmpt_txt=prompt.replace("'", "\\'"),
-                tkn_cnt=str(token_count),
-                feedbk_actn_txt="",
-                feedbk_cmnt_txt="",
-                feedbk_updt_dtm=get_load_datetime,
-            )
-            background_tasks.add_task(
-                log_response,
-                audit_rec,
-                query_id,
-                str(full_final_response),
-                fdbck_id,
-                session_id
-            )
-            
-            # Return JSON response instead of streaming
-            return JSONResponse(content=final_response)
-            
+                        # Parse the JSON
+                        llm_entities = json.loads(json_str)
+                        
+                        # Validate and clean the entities
+                        cleaned_entities = {
+                            "diabetics": str(llm_entities.get("diabetics", "no")).lower(),
+                            "smoking": str(llm_entities.get("smoking", "no")).lower(),
+                            "alcohol": str(llm_entities.get("alcohol", "no")).lower(),
+                            "blood_pressure": str(llm_entities.get("blood_pressure", "unknown")).lower(),
+                            "medical_conditions": llm_entities.get("medical_conditions", []),
+                            "llm_reasoning": llm_entities.get("llm_reasoning", "LLM analysis completed"),
+                            "diabetes_evidence": llm_entities.get("diabetes_evidence", []),
+                            "bp_evidence": llm_entities.get("bp_evidence", []),
+                            "smoking_evidence": llm_entities.get("smoking_evidence", []),
+                            "alcohol_evidence": llm_entities.get("alcohol_evidence", []),
+                            "medication_analysis": llm_entities.get("medication_analysis", []),
+                            "icd10_analysis": llm_entities.get("icd10_analysis", [])
+                        }
+
+                        logger.info(f"✅ LLM entity extraction successful: {cleaned_entities}")
+                        return cleaned_entities
+                    else:
+                        logger.error("❌ Could not find matching closing brace for JSON")
+                        return None
+                else:
+                    logger.error("❌ Could not find JSON start marker '{'")
+                    return None
+
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Failed to parse LLM JSON response: {e}")
+                logger.error(f"📄 Problematic JSON string: {json_str[:500]}...")
+                
+                # Try to fix common JSON issues
+                try:
+                    # Attempt to fix truncated JSON by adding missing closing braces
+                    fixed_json = json_str
+                    
+                    # Count opening vs closing braces
+                    open_braces = fixed_json.count('{')
+                    close_braces = fixed_json.count('}')
+                    
+                    if open_braces > close_braces:
+                        missing_braces = open_braces - close_braces
+                        fixed_json += '}' * missing_braces
+                        logger.info(f"🔧 Attempting to fix JSON by adding {missing_braces} closing braces")
+                        
+                        llm_entities = json.loads(fixed_json)
+                        
+                        cleaned_entities = {
+                            "diabetics": str(llm_entities.get("diabetics", "no")).lower(),
+                            "smoking": str(llm_entities.get("smoking", "no")).lower(),
+                            "alcohol": str(llm_entities.get("alcohol", "no")).lower(),
+                            "blood_pressure": str(llm_entities.get("blood_pressure", "unknown")).lower(),
+                            "medical_conditions": llm_entities.get("medical_conditions", []),
+                            "llm_reasoning": "LLM analysis completed (JSON repaired)"
+                        }
+                        
+                        logger.info(f"✅ LLM entity extraction successful after JSON repair: {cleaned_entities}")
+                        return cleaned_entities
+                        
+                except Exception as repair_error:
+                    logger.error(f"❌ JSON repair attempt failed: {repair_error}")
+                    return None
+                    
         else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="unauthenticated user"
-            )
-            
-    except HTTPException as e:
-        logger.error(f"Request error: {e}")
-        raise e
+            logger.error(f"❌ LLM call failed: {llm_response}")
+            return None
+
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
-        )
+        logger.error(f"❌ Error in LLM entity extraction: {e}")
+        return None
