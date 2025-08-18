@@ -163,6 +163,7 @@ RESPONSE FORMAT - RETURN ONLY VALID JSON, NO MARKDOWN:
                         return None
                 else:
                     logger.error("❌ Could not find JSON start marker '{'")
+                    return NoneSON start marker '{'")
                     return None
 
             except json.JSONDecodeError as e:
