@@ -1,1203 +1,1537 @@
-# Configure Streamlit page FIRST - before any other Streamlit commands
-import streamlit as st
-
-# Determine sidebar state based on chatbot readiness
-if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
-    sidebar_state = "expanded"
-else:
-    sidebar_state = "collapsed"
-
-st.set_page_config(
-    page_title="⚡ Enhanced Health Agent",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state=sidebar_state
-)
-
-# Now import other modules
 import json
-import pandas as pd
-from datetime import datetime, timedelta
+import re
 import time
 import sys
-import os
+import traceback
+from datetime import datetime, date
+from typing import Dict, Any, List, Union, Optional
 import logging
-from typing import Dict, Any, Optional
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend for stability
-import io
-import base64
-import re
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-
-# Add current directory to path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
 
 # Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('health_data_processor.log', mode='a')
+    ]
+)
 logger = logging.getLogger(__name__)
 
-# Import the health analysis agent (using your original structure)
-AGENT_AVAILABLE = False
-import_error = None
-HealthAnalysisAgent = None
-Config = None
-
-try:
-    from health_agent_core import HealthAnalysisAgent, Config
-    AGENT_AVAILABLE = True
-except ImportError as e:
-    AGENT_AVAILABLE = False
-    import_error = str(e)
-
-# Enhanced CSS with advanced animations and modern styling
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-* {
-    font-family: 'Inter', sans-serif;
-}
-
-.main-header {
-    font-size: 3.2rem;
-    color: #2c3e50;
-    text-align: center;
-    margin-bottom: 2rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    animation: glow-pulse 3s ease-in-out infinite;
-}
-
-@keyframes glow-pulse {
-    0%, 100% { filter: drop-shadow(0 0 10px rgba(102, 126, 234, 0.3)); }
-    50% { filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.6)); }
-}
-
-.enhanced-badge {
-    background: linear-gradient(135deg, #00ff87 0%, #60efff 100%);
-    color: #2c3e50;
-    padding: 0.6rem 1.2rem;
-    border-radius: 25px;
-    font-weight: 600;
-    font-size: 0.9rem;
-    display: inline-block;
-    margin: 0.4rem;
-    box-shadow: 0 8px 25px rgba(0, 255, 135, 0.4);
-    animation: float 3s ease-in-out infinite;
-}
-
-@keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-5px); }
-}
-
-.section-box {
-    background: white;
-    padding: 1.8rem;
-    border-radius: 15px;
-    border: 1px solid #e9ecef;
-    margin: 1.2rem 0;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-.section-box:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 35px rgba(0,0,0,0.15);
-}
-
-.section-title {
-    font-size: 1.4rem;
-    color: #2c3e50;
-    font-weight: 600;
-    margin-bottom: 1rem;
-    border-bottom: 3px solid #3498db;
-    padding-bottom: 0.6rem;
-}
-
-.claims-viewer-card {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 2.2rem;
-    border-radius: 18px;
-    border: 2px solid #dee2e6;
-    margin: 1.2rem 0;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.12);
-}
-
-.mcid-container {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    padding: 1.8rem;
-    border-radius: 15px;
-    border: 2px solid #2196f3;
-    margin: 1rem 0;
-    box-shadow: 0 8px 25px rgba(33, 150, 243, 0.2);
-}
-
-.mcid-match-card {
-    background: white;
-    padding: 1.5rem;
-    border-radius: 12px;
-    margin: 0.8rem 0;
-    border-left: 4px solid #4caf50;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-}
-
-.metric-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.2rem;
-    margin: 1.2rem 0;
-}
-
-.metric-card {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1.5rem;
-    border-radius: 12px;
-    text-align: center;
-    border: 1px solid #dee2e6;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-}
-
-.metric-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-}
-
-.chatbot-loading-container {
-    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
-    padding: 2rem;
-    border-radius: 20px;
-    margin: 1.5rem 0;
-    border: 2px solid #28a745;
-    text-align: center;
-    animation: pulse-glow 2s infinite;
-}
-
-@keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 20px rgba(40, 167, 69, 0.3); }
-    50% { box-shadow: 0 0 40px rgba(40, 167, 69, 0.6); }
-}
-
-.quick-prompts-enhanced {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    padding: 1.8rem;
-    border-radius: 18px;
-    margin: 1.2rem 0;
-    border: 2px solid #2196f3;
-}
-
-.prompt-button-enhanced {
-    background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
-    color: white;
-    border: none;
-    padding: 0.8rem 1.4rem;
-    border-radius: 25px;
-    margin: 0.4rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-weight: 500;
-    transition: all 0.3s ease;
-    box-shadow: 0 6px 20px rgba(33, 150, 243, 0.3);
-}
-
-.prompt-button-enhanced:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(33, 150, 243, 0.5);
-}
-
-/* Enhanced workflow animations */
-.advanced-workflow-container {
-    background: linear-gradient(135deg, #e8f0fe 0%, #f3e5f5 25%, #e1f5fe 50%, #f1f8e9 75%, #fff8e1 100%);
-    padding: 3rem;
-    border-radius: 25px;
-    margin: 2rem 0;
-    border: 2px solid rgba(52, 152, 219, 0.3);
-    box-shadow: 0 20px 50px rgba(52, 152, 219, 0.2);
-    position: relative;
-    overflow: hidden;
-}
-
-.advanced-workflow-container::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-    animation: rotate-glow 20s linear infinite;
-    pointer-events: none;
-}
-
-@keyframes rotate-glow {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.workflow-step {
-    background: rgba(255, 255, 255, 0.8);
-    padding: 1.5rem;
-    border-radius: 15px;
-    margin: 1rem 0;
-    border-left: 4px solid #6c757d;
-    transition: all 0.4s ease;
-    backdrop-filter: blur(10px);
-}
-
-.workflow-step.running {
-    border-left-color: #ffc107;
-    background: rgba(255, 193, 7, 0.15);
-    animation: pulse-step 2s infinite;
-    box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
-}
-
-.workflow-step.completed {
-    border-left-color: #28a745;
-    background: rgba(40, 167, 69, 0.15);
-    box-shadow: 0 10px 30px rgba(40, 167, 69, 0.2);
-}
-
-@keyframes pulse-step {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.02); }
-}
-
-/* Green Run Analysis Button */
-.stButton button[kind="primary"] {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    padding: 0.75rem 2rem !important;
-    border-radius: 12px !important;
-    box-shadow: 0 8px 25px rgba(40, 167, 69, 0.4) !important;
-    transition: all 0.3s ease !important;
-}
-
-.stButton button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #218838 0%, #1abc9c 100%) !important;
-    transform: translateY(-3px) !important;
-    box-shadow: 0 12px 35px rgba(40, 167, 69, 0.5) !important;
-}
-
-/* Enhanced sidebar styling */
-.css-1d391kg {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-/* Graph loading animation */
-.graph-loading {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 2rem;
-    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
-    border-radius: 15px;
-    margin: 1rem 0;
-}
-
-.loading-spinner {
-    width: 40px;
-    height: 40px;
-    border: 4px solid #e3f2fd;
-    border-top: 4px solid #2196f3;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-def initialize_session_state():
-    """Initialize session state variables for enhanced processing"""
-    if 'analysis_results' not in st.session_state:
-        st.session_state.analysis_results = None
-    if 'analysis_running' not in st.session_state:
-        st.session_state.analysis_running = False
-    if 'agent' not in st.session_state:
-        st.session_state.agent = None
-    if 'config' not in st.session_state:
-        st.session_state.config = None
-    if 'chatbot_messages' not in st.session_state:
-        st.session_state.chatbot_messages = []
-    if 'chatbot_context' not in st.session_state:
-        st.session_state.chatbot_context = None
-    
-    # Section toggle states
-    if 'show_all_claims_data' not in st.session_state:
-        st.session_state.show_all_claims_data = False
-    if 'show_batch_extraction' not in st.session_state:
-        st.session_state.show_batch_extraction = False
-    if 'show_entity_extraction' not in st.session_state:
-        st.session_state.show_entity_extraction = False
-    if 'show_enhanced_trajectory' not in st.session_state:
-        st.session_state.show_enhanced_trajectory = False
-    if 'show_heart_attack' not in st.session_state:
-        st.session_state.show_heart_attack = False
-    
-    # Enhanced workflow steps
-    if 'workflow_steps' not in st.session_state:
-        st.session_state.workflow_steps = [
-            {'name': 'FAST API Fetch', 'status': 'pending', 'description': 'Fetching claims data with enhanced timeout', 'icon': '⚡'},
-            {'name': 'ENHANCED Deidentification', 'status': 'pending', 'description': 'Advanced PII removal with structure preservation', 'icon': '🔒'},
-            {'name': 'BATCH Code Processing', 'status': 'pending', 'description': 'Processing codes in batches (93% fewer API calls)', 'icon': '🚀'},
-            {'name': 'DETAILED Entity Extraction', 'status': 'pending', 'description': 'Advanced health entity identification', 'icon': '🎯'},
-            {'name': 'ENHANCED Health Trajectory', 'status': 'pending', 'description': 'Detailed predictive analysis with specific evaluation questions', 'icon': '📈'},
-            {'name': 'IMPROVED Heart Risk Prediction', 'status': 'pending', 'description': 'Enhanced ML-based risk assessment', 'icon': '❤️'},
-            {'name': 'STABLE Graph Chatbot', 'status': 'pending', 'description': 'AI assistant with enhanced graph stability', 'icon': '📊'}
-        ]
-    if 'current_step' not in st.session_state:
-        st.session_state.current_step = 0
-    if 'show_animation' not in st.session_state:
-        st.session_state.show_animation = False
-
-def reset_workflow():
-    """Reset workflow to initial state"""
-    st.session_state.workflow_steps = [
-        {'name': 'FAST API Fetch', 'status': 'pending', 'description': 'Fetching claims data with enhanced timeout', 'icon': '⚡'},
-        {'name': 'ENHANCED Deidentification', 'status': 'pending', 'description': 'Advanced PII removal with structure preservation', 'icon': '🔒'},
-        {'name': 'BATCH Code Processing', 'status': 'pending', 'description': 'Processing codes in batches (93% fewer API calls)', 'icon': '🚀'},
-        {'name': 'DETAILED Entity Extraction', 'status': 'pending', 'description': 'Advanced health entity identification', 'icon': '🎯'},
-        {'name': 'ENHANCED Health Trajectory', 'status': 'pending', 'description': 'Detailed predictive analysis with specific evaluation questions', 'icon': '📈'},
-        {'name': 'IMPROVED Heart Risk Prediction', 'status': 'pending', 'description': 'Enhanced ML-based risk assessment', 'icon': '❤️'},
-        {'name': 'STABLE Graph Chatbot', 'status': 'pending', 'description': 'AI assistant with enhanced graph stability', 'icon': '📊'}
-    ]
-    st.session_state.current_step = 0
-
-def display_advanced_professional_workflow():
-    """Display the advanced professional workflow animation"""
-    
-    # Calculate statistics
-    total_steps = len(st.session_state.workflow_steps)
-    completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
-    running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
-    error_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'error')
-    progress_percentage = (completed_steps / total_steps) * 100
-    
-    # Main container
-    st.markdown('<div class="advanced-workflow-container">', unsafe_allow_html=True)
-    
-    # Header
-    st.markdown("""
-    <div style="text-align: center; margin-bottom: 2rem;">
-        <h2 style="color: #2c3e50; font-weight: 700;">🔬 LangGraph Healthcare Analysis Pipeline</h2>
-        <p style="color: #34495e; font-size: 1.1rem;">Advanced multi-step processing workflow</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Progress metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Steps", total_steps)
-    with col2:
-        st.metric("Completed", completed_steps)
-    with col3:
-        st.metric("Processing", running_steps)
-    with col4:
-        st.metric("Progress", f"{progress_percentage:.0f}%")
-    
-    # Progress bar
-    st.progress(progress_percentage / 100)
-    
-    # Display each step
-    for i, step in enumerate(st.session_state.workflow_steps):
-        status = step['status']
-        name = step['name']
-        description = step['description']
-        icon = step['icon']
-        
-        # Determine styling based on status
-        if status == 'completed':
-            step_class = "workflow-step completed"
-            status_emoji = "✅"
-        elif status == 'running':
-            step_class = "workflow-step running"
-            status_emoji = "🔄"
-        elif status == 'error':
-            step_class = "workflow-step error"
-            status_emoji = "❌"
-        else:
-            step_class = "workflow-step"
-            status_emoji = "⏳"
-        
-        st.markdown(f"""
-        <div class="{step_class}">
-            <div style="display: flex; align-items: center; gap: 1rem;">
-                <div style="font-size: 1.5rem;">{icon}</div>
-                <div style="flex: 1;">
-                    <h4 style="margin: 0; color: #2c3e50;">{name}</h4>
-                    <p style="margin: 0; color: #666; font-size: 0.9rem;">{description}</p>
-                </div>
-                <div style="font-size: 1.2rem;">{status_emoji}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Status message
-    if running_steps > 0:
-        current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
-        status_message = f"🔄 Currently executing: {current_step_name}"
-    elif completed_steps == total_steps:
-        status_message = "🎉 All LangGraph workflow steps completed successfully!"
-    elif error_steps > 0:
-        status_message = f"⚠️ {error_steps} step(s) encountered errors"
-    else:
-        status_message = "⏳ LangGraph healthcare analysis pipeline in progress..."
-    
-    st.markdown(f"""
-    <div style="text-align: center; margin-top: 2rem; padding: 1rem; background: rgba(255,255,255,0.8); border-radius: 10px;">
-        <p style="margin: 0; font-weight: 600; color: #2c3e50;">{status_message}</p>
-    </div>
-    </div>
-    """, unsafe_allow_html=True)
-    """Safely get a value from a dictionary"""
+def safe_get(data: Union[Dict[str, Any], Any], key: str, default: Any = None) -> Any:
+    """Safely get a value from a dictionary or object"""
     try:
-        return data.get(key, default) if data else default
-    except:
+        if data is None:
+            return default
+        if isinstance(data, dict):
+            return data.get(key, default)
+        elif hasattr(data, key):
+            return getattr(data, key, default)
+        else:
+            return default
+    except Exception as e:
+        logger.warning(f"Error in safe_get for key '{key}': {e}")
         return default
 
-def calculate_age(birth_date):
-    """Calculate age from birth date"""
-    if not birth_date:
-        return None
-    
-    today = datetime.now().date()
-    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-    return age
-
-def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
-    """Validate patient data"""
-    errors = []
-    required_fields = {
-        'first_name': 'First Name',
-        'last_name': 'Last Name', 
-        'ssn': 'SSN',
-        'date_of_birth': 'Date of Birth',
-        'gender': 'Gender',
-        'zip_code': 'Zip Code'
-    }
-    
-    for field, display_name in required_fields.items():
-        if not data.get(field):
-            errors.append(f"{display_name} is required")
-        elif field == 'ssn' and len(str(data[field])) < 9:
-            errors.append("SSN must be at least 9 digits")
-        elif field == 'zip_code' and len(str(data[field])) < 5:
-            errors.append("Zip code must be at least 5 digits")
-    
-    if data.get('date_of_birth'):
-        try:
-            birth_date = datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date()
-            age = calculate_age(birth_date)
-            
-            if age and age > 150:
-                errors.append("Age cannot be greater than 150 years")
-            elif age and age < 0:
-                errors.append("Date of birth cannot be in the future")
-        except:
-            errors.append("Invalid date format")
-    
-    return len(errors) == 0, errors
-
-def display_enhanced_mcid_data(mcid_data):
-    """Enhanced MCID data display with improved styling and functionality"""
-    if not mcid_data:
-        st.warning("⚠️ No MCID data available")
-        return
-    
-    st.markdown("""
-    <div class="mcid-container">
-        <h3>🆔 MCID (Member Consumer ID) Analysis</h3>
-        <p><strong>Purpose:</strong> Patient identity verification and matching across healthcare systems</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Display MCID status information
-    status_code = mcid_data.get('status_code', 'Unknown')
-    service = mcid_data.get('service', 'Unknown')
-    timestamp = mcid_data.get('timestamp', '')
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Response Status", f"HTTP {status_code}")
-    with col2:
-        st.metric("Service", service)
-    with col3:
-        if timestamp:
-            try:
-                formatted_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
-                st.metric("Query Time", formatted_time)
-            except:
-                st.metric("Query Time", "Recent")
-        else:
-            st.metric("Query Time", "Unknown")
-    
-    # Process and display consumer matches
-    if status_code == 200 and mcid_data.get('body'):
-        mcid_body = mcid_data.get('body', {})
-        consumers = mcid_body.get('consumer', [])
-        
-        if consumers and len(consumers) > 0:
-            st.success(f"✅ Found {len(consumers)} consumer match(es)")
-            
-            for i, consumer in enumerate(consumers, 1):
-                st.markdown(f"""
-                <div class="mcid-match-card">
-                    <h4>🔍 Consumer Match #{i}</h4>
-                """, unsafe_allow_html=True)
-                
-                # Create two columns for consumer info
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("**Consumer Information:**")
-                    st.write(f"• **Consumer ID:** {consumer.get('consumerId', 'N/A')}")
-                    st.write(f"• **Match Score:** {consumer.get('score', 'N/A')}")
-                    st.write(f"• **Status:** {consumer.get('status', 'N/A')}")
-                    st.write(f"• **Date of Birth:** {consumer.get('dateOfBirth', 'N/A')}")
-                
-                with col2:
-                    st.write("**Address Information:**")
-                    address = consumer.get('address', {})
-                    if address:
-                        st.write(f"• **City:** {address.get('city', 'N/A')}")
-                        st.write(f"• **State:** {address.get('state', 'N/A')}")
-                        st.write(f"• **ZIP Code:** {address.get('zip', 'N/A')}")
-                        st.write(f"• **County:** {address.get('county', 'N/A')}")
-                    else:
-                        st.write("• No address information available")
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-                
-                # Show additional consumer data if available
-                if consumer.get('additionalData'):
-                    with st.expander(f"Additional Data for Consumer #{i}"):
-                        st.json(consumer.get('additionalData'))
-        else:
-            st.info("ℹ️ No consumer matches found in MCID search")
-            st.markdown("""
-            **Possible reasons:**
-            - Patient may be new to the healthcare system
-            - Different name variations or spelling
-            - Updated personal information not yet synchronized
-            """)
-    else:
-        st.warning(f"⚠️ MCID search returned status code: {status_code}")
-        if mcid_data.get('error'):
-            st.error(f"Error details: {mcid_data['error']}")
-    
-    # Raw MCID data in expandable section
-    with st.expander("🔍 View Raw MCID JSON Data"):
-        st.json(mcid_data)
-
-def create_chatbot_loading_graphs():
-    """Create interactive graphs to display while chatbot is loading"""
-    
-    # Create sample health data for visualization
-    sample_data = {
-        'dates': pd.date_range('2023-01-01', periods=12, freq='M'),
-        'risk_scores': np.random.uniform(0.1, 0.8, 12),
-        'health_metrics': {
-            'Blood Pressure': np.random.uniform(110, 140, 12),
-            'Heart Rate': np.random.uniform(60, 100, 12),
-            'Cholesterol': np.random.uniform(150, 250, 12)
-        }
-    }
-    
-    # Create subplot figure
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Health Risk Trend', 'Vital Signs Monitor', 'Risk Distribution', 'Health Score'),
-        specs=[[{"secondary_y": True}, {"secondary_y": True}],
-               [{"type": "pie"}, {"type": "indicator"}]]
-    )
-    
-    # Risk trend line
-    fig.add_trace(
-        go.Scatter(
-            x=sample_data['dates'],
-            y=sample_data['risk_scores'],
-            mode='lines+markers',
-            name='Risk Score',
-            line=dict(color='#ff6b6b', width=3),
-            marker=dict(size=8)
-        ),
-        row=1, col=1
-    )
-    
-    # Vital signs
-    for i, (metric, values) in enumerate(sample_data['health_metrics'].items()):
-        fig.add_trace(
-            go.Scatter(
-                x=sample_data['dates'],
-                y=values,
-                mode='lines',
-                name=metric,
-                line=dict(width=2)
-            ),
-            row=1, col=2
-        )
-    
-    # Risk distribution pie chart
-    risk_categories = ['Low Risk', 'Medium Risk', 'High Risk']
-    risk_values = [45, 35, 20]
-    colors = ['#4caf50', '#ff9800', '#f44336']
-    
-    fig.add_trace(
-        go.Pie(
-            labels=risk_categories,
-            values=risk_values,
-            marker_colors=colors,
-            name="Risk Distribution"
-        ),
-        row=2, col=1
-    )
-    
-    # Health score gauge
-    current_score = np.random.uniform(60, 90)
-    fig.add_trace(
-        go.Indicator(
-            mode = "gauge+number+delta",
-            value = current_score,
-            domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "Health Score"},
-            delta = {'reference': 75},
-            gauge = {
-                'axis': {'range': [None, 100]},
-                'bar': {'color': "#2196f3"},
-                'steps': [
-                    {'range': [0, 50], 'color': "#ffebee"},
-                    {'range': [50, 80], 'color': "#e8f5e8"},
-                    {'range': [80, 100], 'color': "#c8e6c9"}
-                ],
-                'threshold': {
-                    'line': {'color': "red", 'width': 4},
-                    'thickness': 0.75,
-                    'value': 90
-                }
-            }
-        ),
-        row=2, col=2
-    )
-    
-    # Update layout
-    fig.update_layout(
-        height=600,
-        showlegend=True,
-        title_text="Real-Time Health Analytics Dashboard",
-        title_x=0.5,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    # Update subplot properties
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-    
-    return fig
-
-def display_enhanced_quick_prompts():
-    """Display enhanced quick prompt buttons for improved chatbot interaction"""
-    
-    st.markdown("""
-    <div class="quick-prompts-enhanced">
-        <div style="font-weight: 600; margin-bottom: 1rem; font-size: 1.1rem;">💡 Enhanced Healthcare Analysis Prompts</div>
-        <p style="margin-bottom: 1rem; color: #666;">Click any prompt below to instantly analyze your healthcare data with advanced AI capabilities:</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Enhanced healthcare-specific prompts
-    enhanced_prompts = [
-        "📊 Create a comprehensive health risk assessment chart with all my risk factors",
-        "📈 Generate a detailed heart attack risk visualization with confidence intervals", 
-        "🩺 Analyze my complete medication profile and create a therapeutic summary chart",
-        "💓 Show my cardiovascular risk factors in an interactive bar chart",
-        "🩸 Create a diabetes risk assessment based on my medical and pharmacy history",
-        "📋 Generate a comprehensive timeline of my medical conditions and treatments",
-        "📊 Visualize my medication adherence patterns and fill frequency",
-        "❤️ Compare my health profile to age-matched population averages",
-        "🔍 Analyze potential drug interactions in my current medication regimen",
-        "📈 Create a health trajectory prediction model based on my claims data"
-    ]
-    
-    # Display enhanced prompts in grid
-    cols_per_row = 2
-    for i in range(0, len(enhanced_prompts), cols_per_row):
-        cols = st.columns(cols_per_row)
-        for j, col in enumerate(cols):
-            if i + j < len(enhanced_prompts):
-                prompt = enhanced_prompts[i + j]
-                with col:
-                    if st.button(prompt, key=f"enhanced_prompt_{i+j}", use_container_width=True):
-                        # Add the prompt to chat messages
-                        st.session_state.chatbot_messages.append({"role": "user", "content": prompt})
-                        
-                        # Get enhanced response
-                        try:
-                            with st.spinner("🤖 Processing your healthcare analysis request..."):
-                                # Use the standard chat_with_data method from your agent
-                                response = st.session_state.agent.chat_with_data(
-                                    prompt, 
-                                    st.session_state.chatbot_context, 
-                                    st.session_state.chatbot_messages
-                                )
-                                st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
-                            
-                            st.rerun()
-                            
-                        except Exception as e:
-                            st.error(f"Error: {str(e)}")
-
-def execute_matplotlib_code_enhanced_stability(code: str):
-    """Execute matplotlib code with enhanced stability and error recovery"""
+def safe_execute(func, *args, **kwargs) -> tuple[bool, Any]:
+    """Safely execute a function and return success status and result"""
     try:
-        # Clear any existing plots
-        plt.clf()
-        plt.close('all')
-        plt.ioff()
-        
-        # Create namespace for code execution
-        namespace = {
-            'plt': plt,
-            'matplotlib': matplotlib,
-            'np': np,
-            'numpy': np,
-            'pd': pd,
-            'pandas': pd,
-            'json': json,
-            'datetime': datetime,
-            'time': time,
-            'math': __import__('math')
-        }
-        
-        # Add sample patient data
-        namespace.update({
-            'patient_age': 45,
-            'heart_risk_score': 0.25,
-            'medications_count': 3,
-            'conditions': ['Hypertension', 'Type 2 Diabetes'],
-            'risk_factors': {
-                'Age': 45, 
-                'Diabetes': 1, 
-                'Smoking': 0, 
-                'High_BP': 1,
-                'Family_History': 1
-            },
-            'medication_list': ['Metformin', 'Lisinopril', 'Atorvastatin'],
-            'risk_scores': [0.15, 0.25, 0.35, 0.20],
-            'risk_labels': ['Low', 'Medium', 'High', 'Very High'],
-            'months': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-            'utilization_data': [2, 3, 1, 4, 2, 3]
-        })
-        
-        # Execute the code
-        exec(code, namespace)
-        
-        # Get the figure
-        fig = plt.gcf()
-        
-        # Check if figure has content
-        if not fig.axes:
-            # Create fallback visualization
-            plt.figure(figsize=(10, 6))
-            plt.text(0.5, 0.5, 'Enhanced Healthcare Visualization\nGenerated Successfully\n\nYour data analysis is ready!', 
-                    ha='center', va='center', fontsize=16, 
-                    bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.7))
-            plt.title('Healthcare Data Analysis Dashboard', fontsize=18, fontweight='bold')
-            plt.axis('off')
-            fig = plt.gcf()
-        
-        # Enhance figure styling
-        for ax in fig.axes:
-            ax.tick_params(labelsize=10)
-            ax.grid(True, alpha=0.3)
-            
-            if ax.get_title():
-                ax.set_title(ax.get_title(), fontsize=12, fontweight='bold')
-            if ax.get_xlabel():
-                ax.set_xlabel(ax.get_xlabel(), fontsize=11)
-            if ax.get_ylabel():
-                ax.set_ylabel(ax.get_ylabel(), fontsize=11)
-        
-        # Convert to image
-        img_buffer = io.BytesIO()
-        fig.savefig(
-            img_buffer, 
-            format='png', 
-            bbox_inches='tight', 
-            dpi=200,
-            facecolor='white', 
-            edgecolor='none', 
-            pad_inches=0.2,
-            transparent=False
-        )
-        img_buffer.seek(0)
-        
-        # Cleanup
-        plt.clf()
-        plt.close('all')
-        plt.ion()
-        
-        return img_buffer
-        
+        result = func(*args, **kwargs)
+        return True, result
     except Exception as e:
-        # Error handling
-        plt.clf()
-        plt.close('all')
-        plt.ion()
-        
-        error_msg = str(e)
-        logger.error(f"Enhanced matplotlib execution error: {error_msg}")
-        
-        # Create error visualization
-        try:
-            plt.figure(figsize=(10, 6))
-            plt.text(0.5, 0.6, '⚠️ Graph Generation Error', 
-                    ha='center', va='center', fontsize=20, fontweight='bold', color='red')
-            plt.text(0.5, 0.4, f'Error: {error_msg[:100]}...', 
-                    ha='center', va='center', fontsize=12, color='darkred')
-            plt.text(0.5, 0.3, 'Please try a different visualization request', 
-                    ha='center', va='center', fontsize=12, color='blue')
-            plt.title('Healthcare Data Visualization', fontsize=16)
-            plt.axis('off')
-            
-            error_buffer = io.BytesIO()
-            plt.savefig(error_buffer, format='png', bbox_inches='tight', dpi=150, facecolor='white')
-            error_buffer.seek(0)
-            plt.clf()
-            plt.close('all')
-            
-            return error_buffer
-        except:
-            st.error(f"Enhanced graph generation failed: {error_msg}")
-            return None
+        logger.error(f"Error executing {func.__name__}: {e}")
+        logger.debug(traceback.format_exc())
+        return False, str(e)
 
-# Initialize session state
-initialize_session_state()
+def safe_int(value: Any, default: int = 0) -> int:
+    """Safely convert value to integer"""
+    try:
+        if value is None:
+            return default
+        return int(float(str(value)))
+    except (ValueError, TypeError):
+        return default
 
-# Enhanced Main Title
-st.markdown('<h1 class="main-header">🔬 Deep Research Health Agent</h1>', unsafe_allow_html=True)
+def safe_str(value: Any, default: str = "") -> str:
+    """Safely convert value to string"""
+    try:
+        if value is None:
+            return default
+        return str(value)
+    except Exception:
+        return default
 
-# Enhanced optimization badges
-st.markdown("""
-<div style="text-align: center; margin-bottom: 2rem;">
-    <div class="enhanced-badge">⚡ 93% Fewer API Calls</div>
-    <div class="enhanced-badge">🚀 90% Faster Processing</div>
-    <div class="enhanced-badge">📊 Enhanced Graph Stability</div>
-    <div class="enhanced-badge">🗂️ Complete Claims Data Viewer</div>
-    <div class="enhanced-badge">🎯 Detailed Health Analysis</div>
-    <div class="enhanced-badge">💡 Specific Healthcare Prompts</div>
-</div>
-""", unsafe_allow_html=True)
+class EnhancedHealthDataProcessor:
+    """Enhanced data processor with DETAILED healthcare analysis and comprehensive medical code processing"""
 
-# Display import status
-if not AGENT_AVAILABLE:
-    st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
-    st.stop()
-
-# ENHANCED SIDEBAR CHATBOT WITH STABLE GRAPHS
-with st.sidebar:
-    if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-        st.title("💬 Enhanced AI Healthcare Assistant")
-        st.markdown("""
-        <div class="enhanced-badge" style="margin: 0.5rem 0;">📊 Advanced Graph Generation</div>
-        <div class="enhanced-badge" style="margin: 0.5rem 0;">🎯 Specialized Healthcare Analysis</div>
-        """, unsafe_allow_html=True)
+    def __init__(self, api_integrator=None):
+        self.api_integrator = api_integrator
+        logger.info("🔬 EnhancedHealthDataProcessor initialized with healthcare specialization")
         
-        # Enhanced quick prompt buttons
-        display_enhanced_quick_prompts()
-        
-        st.markdown("---")
-        
-        # Enhanced chat history display
-        chat_container = st.container()
-        with chat_container:
-            if st.session_state.chatbot_messages:
-                for i, message in enumerate(st.session_state.chatbot_messages):
-                    with st.chat_message(message["role"]):
-                        st.write(message["content"])
+        # Enhanced API integrator validation
+        if self.api_integrator:
+            logger.info("✅ Enhanced API integrator provided")
+            if hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
+                logger.info("✅ Enhanced isolated LLM method found - batch processing enabled")
             else:
-                st.info("👋 Hello! I'm your AI Healthcare Assistant!")
-                st.info("💡 **Features:** Advanced analytics, detailed health insights, and comprehensive analysis!")
-                st.info("🎯 **Specialized:** Ask specific healthcare questions about your claims data!")
-        
-        # Enhanced chat input
-        st.markdown("---")
-        user_question = st.chat_input("Ask detailed healthcare questions or request advanced visualizations...")
-        
-        # Handle enhanced chat input
-        if user_question:
-            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
-            
-            try:
-                with st.spinner("🤖 Processing your healthcare question..."):
-                    # Use the standard chat_with_data method from your LangGraph agent
-                    response = st.session_state.agent.chat_with_data(
-                        user_question, 
-                        st.session_state.chatbot_context, 
-                        st.session_state.chatbot_messages
-                    )
-                    st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
-                
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-                st.info("💡 Please try rephrasing your question or check if the analysis completed successfully.")
-        
-        # Enhanced clear chat button
-        if st.button("🗑️ Clear Chat History", use_container_width=True):
-            st.session_state.chatbot_messages = []
-            st.rerun()
-    
-    else:
-        st.title("💬 AI Healthcare Assistant")
-        st.info("💤 Assistant available after analysis completion")
-        st.markdown("---")
-        
-        # Debug information for troubleshooting
-        if st.session_state.analysis_results:
-            st.info("🔍 **Debug Info:** Analysis completed, but chatbot not ready")
-            chatbot_ready = st.session_state.analysis_results.get("chatbot_ready", False)
-            has_context = bool(st.session_state.chatbot_context)
-            st.write(f"• Chatbot Ready: {chatbot_ready}")
-            st.write(f"• Has Context: {has_context}")
-            if not chatbot_ready:
-                st.warning("⚠️ LangGraph workflow may not have completed successfully")
-        
-        # Show loading graphs while chatbot is being prepared
-        if st.session_state.analysis_running or (st.session_state.analysis_results and not st.session_state.analysis_results.get("chatbot_ready", False)):
-            st.markdown("""
-            <div class="chatbot-loading-container">
-                <div class="loading-spinner"></div>
-                <h4>🤖 Preparing AI Assistant...</h4>
-                <p>Loading healthcare analysis capabilities</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Display interactive loading graphs
-            try:
-                loading_fig = create_chatbot_loading_graphs()
-                st.plotly_chart(loading_fig, use_container_width=True, key="chatbot_loading_graphs")
-            except Exception as e:
-                st.info("📊 Health analytics dashboard loading...")
-        
-        st.markdown("**🚀 Features:**")
-        st.markdown("• 📊 **Graph Generation** - Chart creation capabilities")
-        st.markdown("• 🎯 **Healthcare Analysis** - Domain-specific insights") 
-        st.markdown("• ❤️ **Risk Assessment** - Health modeling")
-        st.markdown("• 💡 **Smart Prompts** - Pre-built questions")
-        st.markdown("• 🔤 **Code Meanings** - Medical terminology explanations")
-        st.markdown("• 🗂️ **Complete Data Access** - All claims data")
+                logger.warning("❌ Enhanced isolated LLM method missing - using fallback")
+        else:
+            logger.warning("⚠️ No API integrator - batch processing disabled")
 
-# 1. PATIENT INFORMATION (Same as before)
-st.markdown("""
-<div class="section-box">
-    <div class="section-title">👤 Patient Information</div>
-</div>
-""", unsafe_allow_html=True)
+    def deidentify_medical_data_enhanced(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced medical data deidentification with clinical context preservation"""
+        try:
+            if not medical_data:
+                return {"error": "No medical data available for enhanced deidentification"}
 
-with st.container():
-    with st.form("patient_input_form"):
-        col1, col2, col3 = st.columns(3)
+            # Enhanced age calculation with clinical context
+            success, age = safe_execute(self._calculate_age_with_clinical_context, safe_get(patient_data, 'date_of_birth', ''))
+            if not success:
+                age = "unknown (Age calculation failed - clinical assessment recommended)"
+
+            # Enhanced JSON processing with clinical structure preservation
+            raw_medical_data = safe_get(medical_data, 'body', medical_data)
+            success, deidentified_medical_data = safe_execute(self._enhanced_deidentify_json, raw_medical_data)
+            if not success:
+                logger.error(f"Medical deidentification failed: {deidentified_medical_data}")
+                deidentified_medical_data = {}
+
+            success, masked_data = safe_execute(self._mask_clinical_fields_enhanced, deidentified_medical_data)
+            if success:
+                deidentified_medical_data = masked_data
+
+            enhanced_deidentified = {
+                "src_mbr_first_nm": "[CLINICAL_DATA_MASKED]",
+                "src_mbr_last_nm": "[CLINICAL_DATA_MASKED]",
+                "src_mbr_mid_init_nm": None,
+                "src_mbr_age": age,
+                "src_mbr_zip_cd": safe_get(patient_data, 'zip_code', '12345'),
+                "medical_claims_data": deidentified_medical_data,
+                "original_structure_preserved": True,
+                "clinical_context_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "data_type": "enhanced_medical_claims",
+                "healthcare_specialization": "advanced",
+                "clinical_data_elements_preserved": self._count_clinical_elements(deidentified_medical_data)
+            }
+
+            logger.info("✅ Enhanced medical deidentification completed with clinical preservation")
+            logger.info(f"🔬 Clinical elements preserved: {enhanced_deidentified['clinical_data_elements_preserved']}")
+            
+            return enhanced_deidentified
+
+        except Exception as e:
+            logger.error(f"Error in enhanced medical deidentification: {e}")
+            logger.debug(traceback.format_exc())
+            return {"error": f"Enhanced deidentification failed: {str(e)}"}
+
+    def deidentify_pharmacy_data_enhanced(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced pharmacy data deidentification with therapeutic context preservation"""
+        try:
+            if not pharmacy_data:
+                return {"error": "No pharmacy data available for enhanced deidentification"}
+
+            raw_pharmacy_data = safe_get(pharmacy_data, 'body', pharmacy_data)
+            success, deidentified_pharmacy_data = safe_execute(self._enhanced_deidentify_pharmacy_json, raw_pharmacy_data)
+            if not success:
+                logger.error(f"Pharmacy deidentification failed: {deidentified_pharmacy_data}")
+                deidentified_pharmacy_data = {}
+
+            enhanced_result = {
+                "pharmacy_claims_data": deidentified_pharmacy_data,
+                "original_structure_preserved": True,
+                "therapeutic_context_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "data_type": "enhanced_pharmacy_claims",
+                "healthcare_specialization": "advanced",
+                "name_fields_masked": ["src_mbr_first_nm", "scr_mbr_last_nm"],
+                "therapeutic_data_elements_preserved": self._count_therapeutic_elements(deidentified_pharmacy_data)
+            }
+
+            logger.info("✅ Enhanced pharmacy deidentification completed with therapeutic preservation")
+            logger.info(f"💊 Therapeutic elements preserved: {enhanced_result['therapeutic_data_elements_preserved']}")
+            
+            return enhanced_result
+
+        except Exception as e:
+            logger.error(f"Error in enhanced pharmacy deidentification: {e}")
+            logger.debug(traceback.format_exc())
+            return {"error": f"Enhanced deidentification failed: {str(e)}"}
+
+    def deidentify_mcid_data_enhanced(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced MCID data deidentification with identity verification context"""
+        try:
+            if not mcid_data:
+                return {"error": "No MCID data available for enhanced deidentification"}
+
+            raw_mcid_data = safe_get(mcid_data, 'body', mcid_data)
+            success, deidentified_mcid_data = safe_execute(self._enhanced_deidentify_json, raw_mcid_data)
+            if not success:
+                logger.error(f"MCID deidentification failed: {deidentified_mcid_data}")
+                deidentified_mcid_data = {}
+
+            enhanced_result = {
+                "mcid_claims_data": deidentified_mcid_data,
+                "original_structure_preserved": True,
+                "identity_verification_context_preserved": True,
+                "deidentification_timestamp": datetime.now().isoformat(),
+                "data_type": "enhanced_mcid_claims",
+                "healthcare_specialization": "advanced"
+            }
+
+            logger.info("✅ Enhanced MCID deidentification completed with identity context preservation")
+            return enhanced_result
+
+        except Exception as e:
+            logger.error(f"Error in enhanced MCID deidentification: {e}")
+            logger.debug(traceback.format_exc())
+            return {"error": f"Enhanced deidentification failed: {str(e)}"}
+
+    def extract_medical_fields_batch_enhanced(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced BATCH PROCESSING: Medical field extraction with DETAILED clinical analysis"""
+        logger.info("🔬 ===== STARTING ENHANCED BATCH MEDICAL EXTRACTION =====")
         
-        with col1:
-            first_name = st.text_input("First Name *", value="")
-            last_name = st.text_input("Last Name *", value="")
+        enhanced_extraction_result = {
+            "hlth_srvc_records": [],
+            "extraction_summary": {
+                "total_hlth_srvc_records": 0,
+                "total_diagnosis_codes": 0,
+                "unique_service_codes": set(),
+                "unique_diagnosis_codes": set(),
+                "clinical_complexity_score": 0,
+                "therapeutic_categories_identified": []
+            },
+            "code_meanings": {
+                "service_code_meanings": {},
+                "diagnosis_code_meanings": {}
+            },
+            "clinical_insights": {
+                "primary_diagnoses": [],
+                "comorbidities": [],
+                "treatment_patterns": [],
+                "care_complexity": "Standard"
+            },
+            "code_meanings_added": False,
+            "enhanced_analysis": False,
+            "llm_call_status": "not_attempted",
+            "batch_stats": {
+                "individual_calls_saved": 0,
+                "processing_time_seconds": 0,
+                "api_calls_made": 0,
+                "codes_processed": 0,
+                "clinical_analysis_depth": "comprehensive"
+            }
+        }
+
+        start_time = time.time()
+
+        try:
+            medical_data = safe_get(deidentified_medical, "medical_claims_data", {})
+            if not medical_data:
+                logger.warning("⚠️ No medical claims data found for enhanced analysis")
+                return enhanced_extraction_result
+
+            # Step 1: Enhanced extraction with clinical analysis
+            logger.info("🔬 Step 1: Enhanced clinical code extraction...")
+            success, _ = safe_execute(self._enhanced_medical_extraction_with_clinical_analysis, medical_data, enhanced_extraction_result)
+            if not success:
+                logger.warning("Medical extraction had issues, continuing with available data")
+
+            # Convert sets to lists and apply clinical prioritization
+            unique_service_codes = list(enhanced_extraction_result["extraction_summary"]["unique_service_codes"])[:20]
+            unique_diagnosis_codes = list(enhanced_extraction_result["extraction_summary"]["unique_diagnosis_codes"])[:25]
+            
+            enhanced_extraction_result["extraction_summary"]["unique_service_codes"] = unique_service_codes
+            enhanced_extraction_result["extraction_summary"]["unique_diagnosis_codes"] = unique_diagnosis_codes
+
+            total_codes = len(unique_service_codes) + len(unique_diagnosis_codes)
+            enhanced_extraction_result["batch_stats"]["codes_processed"] = total_codes
+
+            # Step 2: Enhanced BATCH PROCESSING with detailed clinical explanations
+            if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
+                if unique_service_codes or unique_diagnosis_codes:
+                    logger.info(f"🔬 Step 2: Enhanced BATCH processing {total_codes} codes...")
+                    enhanced_extraction_result["llm_call_status"] = "in_progress"
+                    
+                    try:
+                        api_calls_made = 0
+                        
+                        # Enhanced BATCH 1: Service Codes
+                        if unique_service_codes:
+                            logger.info(f"🏥 Processing {len(unique_service_codes)} service codes...")
+                            success, service_meanings = safe_execute(self._enhanced_batch_service_codes_with_clinical_context, unique_service_codes)
+                            if success:
+                                enhanced_extraction_result["code_meanings"]["service_code_meanings"] = service_meanings
+                                api_calls_made += 1
+                                logger.info(f"✅ Service codes batch: {len(service_meanings)} meanings generated")
+                            else:
+                                logger.warning(f"Service codes batch failed: {service_meanings}")
+                        
+                        # Enhanced BATCH 2: Diagnosis Codes
+                        if unique_diagnosis_codes:
+                            logger.info(f"🩺 Processing {len(unique_diagnosis_codes)} diagnosis codes...")
+                            success, diagnosis_meanings = safe_execute(self._enhanced_batch_diagnosis_codes_with_clinical_significance, unique_diagnosis_codes)
+                            if success:
+                                enhanced_extraction_result["code_meanings"]["diagnosis_code_meanings"] = diagnosis_meanings
+                                api_calls_made += 1
+                                logger.info(f"✅ Diagnosis codes batch: {len(diagnosis_meanings)} meanings generated")
+                            else:
+                                logger.warning(f"Diagnosis codes batch failed: {diagnosis_meanings}")
+                        
+                        # Calculate enhanced savings
+                        individual_calls_would_be = len(unique_service_codes) + len(unique_diagnosis_codes)
+                        calls_saved = individual_calls_would_be - api_calls_made
+                        
+                        enhanced_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
+                        enhanced_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
+                        
+                        # Step 3: Enhanced clinical analysis integration
+                        logger.info("🔬 Step 3: Clinical analysis integration...")
+                        success, _ = safe_execute(self._enhanced_clinical_analysis_integration, enhanced_extraction_result)
+                        if not success:
+                            logger.warning("Clinical analysis integration had issues")
+                        
+                        # Final enhanced status
+                        total_meanings = len(enhanced_extraction_result["code_meanings"]["service_code_meanings"]) + len(enhanced_extraction_result["code_meanings"]["diagnosis_code_meanings"])
+                        
+                        if total_meanings > 0:
+                            enhanced_extraction_result["code_meanings_added"] = True
+                            enhanced_extraction_result["enhanced_analysis"] = True
+                            enhanced_extraction_result["llm_call_status"] = "completed"
+                            logger.info(f"🔬 BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
+                        else:
+                            enhanced_extraction_result["llm_call_status"] = "completed_no_meanings"
+                            logger.warning("⚠️ Batch completed but no meanings generated")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Enhanced batch processing error: {e}")
+                        enhanced_extraction_result["code_meaning_error"] = str(e)
+                        enhanced_extraction_result["llm_call_status"] = "failed"
+                else:
+                    enhanced_extraction_result["llm_call_status"] = "skipped_no_codes"
+                    logger.warning("⚠️ No codes found for batch processing")
+            else:
+                enhanced_extraction_result["llm_call_status"] = "skipped_no_api"
+                logger.warning("❌ No API integrator for batch processing")
+
+            # Enhanced performance stats
+            processing_time = time.time() - start_time
+            enhanced_extraction_result["batch_stats"]["processing_time_seconds"] = round(processing_time, 2)
+
+            logger.info(f"🔬 ===== ENHANCED BATCH MEDICAL EXTRACTION COMPLETED =====")
+            logger.info(f"  ⚡ Time: {processing_time:.2f}s")
+            logger.info(f"  📊 API calls: {enhanced_extraction_result['batch_stats']['api_calls_made']}")
+            logger.info(f"  💾 Calls saved: {enhanced_extraction_result['batch_stats']['individual_calls_saved']}")
+
+        except Exception as e:
+            logger.error(f"❌ Error in enhanced batch medical extraction: {e}")
+            logger.debug(traceback.format_exc())
+            enhanced_extraction_result["error"] = f"Enhanced batch extraction failed: {str(e)}"
+
+        return enhanced_extraction_result
+
+    def extract_pharmacy_fields_batch_enhanced(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced BATCH PROCESSING: Pharmacy field extraction with DETAILED therapeutic analysis"""
+        logger.info("🔬 ===== STARTING ENHANCED BATCH PHARMACY EXTRACTION =====")
         
-        with col2:
-            ssn = st.text_input("SSN *", value="")
-            date_of_birth = st.date_input(
-                "Date of Birth *", 
-                value=datetime.now().date(),
-                min_value=datetime(1900, 1, 1).date(),
-                max_value=datetime.now().date()
-            )
+        enhanced_extraction_result = {
+            "ndc_records": [],
+            "extraction_summary": {
+                "total_ndc_records": 0,
+                "unique_ndc_codes": set(),
+                "unique_label_names": set(),
+                "therapeutic_classes_identified": [],
+                "polypharmacy_indicators": [],
+                "medication_complexity_score": 0
+            },
+            "code_meanings": {
+                "ndc_code_meanings": {},
+                "medication_meanings": {}
+            },
+            "therapeutic_insights": {
+                "primary_medications": [],
+                "drug_interactions_potential": [],
+                "therapeutic_duplications": [],
+                "adherence_indicators": []
+            },
+            "code_meanings_added": False,
+            "enhanced_analysis": False,
+            "llm_call_status": "not_attempted",
+            "batch_stats": {
+                "individual_calls_saved": 0,
+                "processing_time_seconds": 0,
+                "api_calls_made": 0,
+                "codes_processed": 0,
+                "therapeutic_analysis_depth": "comprehensive"
+            }
+        }
+
+        start_time = time.time()
+
+        try:
+            pharmacy_data = safe_get(deidentified_pharmacy, "pharmacy_claims_data", {})
+            if not pharmacy_data:
+                logger.warning("⚠️ No pharmacy claims data found")
+                return enhanced_extraction_result
+
+            # Step 1: Enhanced extraction with therapeutic analysis
+            logger.info("🔬 Step 1: Enhanced therapeutic code extraction...")
+            success, _ = safe_execute(self._enhanced_pharmacy_extraction_with_therapeutic_analysis, pharmacy_data, enhanced_extraction_result)
+            if not success:
+                logger.warning("Pharmacy extraction had issues, continuing with available data")
+
+            # Convert sets to lists and apply therapeutic prioritization
+            unique_ndc_codes = list(enhanced_extraction_result["extraction_summary"]["unique_ndc_codes"])[:15]
+            unique_label_names = list(enhanced_extraction_result["extraction_summary"]["unique_label_names"])[:20]
+            
+            enhanced_extraction_result["extraction_summary"]["unique_ndc_codes"] = unique_ndc_codes
+            enhanced_extraction_result["extraction_summary"]["unique_label_names"] = unique_label_names
+
+            total_codes = len(unique_ndc_codes) + len(unique_label_names)
+            enhanced_extraction_result["batch_stats"]["codes_processed"] = total_codes
+
+            # Step 2: Enhanced BATCH PROCESSING
+            if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
+                if unique_ndc_codes or unique_label_names:
+                    logger.info(f"🔬 Step 2: Enhanced BATCH processing {total_codes} pharmacy codes...")
+                    enhanced_extraction_result["llm_call_status"] = "in_progress"
+                    
+                    try:
+                        api_calls_made = 0
+                        
+                        # Enhanced BATCH 1: NDC Codes
+                        if unique_ndc_codes:
+                            logger.info(f"💊 Processing {len(unique_ndc_codes)} NDC codes...")
+                            success, ndc_meanings = safe_execute(self._enhanced_batch_ndc_codes_with_therapeutic_context, unique_ndc_codes)
+                            if success:
+                                enhanced_extraction_result["code_meanings"]["ndc_code_meanings"] = ndc_meanings
+                                api_calls_made += 1
+                                logger.info(f"✅ NDC codes batch: {len(ndc_meanings)} meanings generated")
+                            else:
+                                logger.warning(f"NDC codes batch failed: {ndc_meanings}")
+                        
+                        # Enhanced BATCH 2: Medications
+                        if unique_label_names:
+                            logger.info(f"💉 Processing {len(unique_label_names)} medications...")
+                            success, med_meanings = safe_execute(self._enhanced_batch_medications_with_clinical_significance, unique_label_names)
+                            if success:
+                                enhanced_extraction_result["code_meanings"]["medication_meanings"] = med_meanings
+                                api_calls_made += 1
+                                logger.info(f"✅ Medications batch: {len(med_meanings)} meanings generated")
+                            else:
+                                logger.warning(f"Medications batch failed: {med_meanings}")
+                        
+                        # Calculate enhanced savings
+                        individual_calls_would_be = len(unique_ndc_codes) + len(unique_label_names)
+                        calls_saved = individual_calls_would_be - api_calls_made
+                        
+                        enhanced_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
+                        enhanced_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
+                        
+                        # Step 3: Enhanced therapeutic analysis integration
+                        logger.info("🔬 Step 3: Therapeutic analysis integration...")
+                        success, _ = safe_execute(self._enhanced_therapeutic_analysis_integration, enhanced_extraction_result)
+                        if not success:
+                            logger.warning("Therapeutic analysis integration had issues")
+                        
+                        # Final enhanced status
+                        total_meanings = len(enhanced_extraction_result["code_meanings"]["ndc_code_meanings"]) + len(enhanced_extraction_result["code_meanings"]["medication_meanings"])
+                        
+                        if total_meanings > 0:
+                            enhanced_extraction_result["code_meanings_added"] = True
+                            enhanced_extraction_result["enhanced_analysis"] = True
+                            enhanced_extraction_result["llm_call_status"] = "completed"
+                            logger.info(f"🔬 PHARMACY BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
+                        else:
+                            enhanced_extraction_result["llm_call_status"] = "completed_no_meanings"
+                            logger.warning("⚠️ Pharmacy batch completed but no meanings generated")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Enhanced pharmacy batch error: {e}")
+                        enhanced_extraction_result["code_meaning_error"] = str(e)
+                        enhanced_extraction_result["llm_call_status"] = "failed"
+                else:
+                    enhanced_extraction_result["llm_call_status"] = "skipped_no_codes"
+                    logger.warning("⚠️ No pharmacy codes for batch processing")
+            else:
+                enhanced_extraction_result["llm_call_status"] = "skipped_no_api"
+                logger.warning("❌ No API integrator for pharmacy batch processing")
+
+            # Enhanced performance stats
+            processing_time = time.time() - start_time
+            enhanced_extraction_result["batch_stats"]["processing_time_seconds"] = round(processing_time, 2)
+
+            logger.info(f"💊 ===== ENHANCED BATCH PHARMACY EXTRACTION COMPLETED =====")
+            logger.info(f"  ⚡ Time: {processing_time:.2f}s")
+            logger.info(f"  📊 API calls: {enhanced_extraction_result['batch_stats']['api_calls_made']}")
+
+        except Exception as e:
+            logger.error(f"❌ Error in enhanced batch pharmacy extraction: {e}")
+            logger.debug(traceback.format_exc())
+            enhanced_extraction_result["error"] = f"Enhanced pharmacy batch extraction failed: {str(e)}"
+
+        return enhanced_extraction_result
+
+    def _enhanced_batch_service_codes_with_clinical_context(self, service_codes: List[str]) -> Dict[str, str]:
+        """Enhanced BATCH process ALL service codes with detailed clinical context"""
+        try:
+            if not service_codes or not self.api_integrator:
+                return {}
+                
+            logger.info(f"🏥 === BATCH PROCESSING {len(service_codes)} SERVICE CODES ===")
+            
+            codes_list = "\n".join([f"- {code}" for code in service_codes])
+            
+            enhanced_prompt = f"""You are Dr. ProcedureAI, a medical coding specialist. Provide clinical explanations for these healthcare service codes:
+
+Service Codes:
+{codes_list}
+
+For each code, provide comprehensive clinical information including procedure description, clinical purpose, indications, healthcare setting, and clinical significance.
+
+Return ONLY valid JSON in this exact format:
+{{
+    "{service_codes[0] if service_codes else 'example'}": "Detailed clinical explanation with procedure purpose and significance"
+}}
+
+IMPORTANT: Return ONLY the JSON object, no other text."""
+
+            enhanced_system_msg = """You are a medical coding expert specializing in healthcare procedures. Provide detailed, clinically accurate explanations."""
+            
+            success, response = safe_execute(self.api_integrator.call_llm_isolated_enhanced, enhanced_prompt, enhanced_system_msg)
+            
+            if success and response and response != "Detailed explanation unavailable":
+                try:
+                    clean_response = self._clean_json_response_enhanced(response)
+                    meanings_dict = json.loads(clean_response)
+                    logger.info(f"✅ Service codes batch: {len(meanings_dict)} meanings extracted")
+                    return meanings_dict
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Service codes JSON parse error: {e}")
+                    return {}
+            else:
+                logger.warning(f"⚠️ Service codes batch returned unavailable")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Service codes batch exception: {e}")
+            return {}
+
+    def _enhanced_batch_diagnosis_codes_with_clinical_significance(self, diagnosis_codes: List[str]) -> Dict[str, str]:
+        """Enhanced BATCH process ALL diagnosis codes with detailed clinical significance"""
+        try:
+            if not diagnosis_codes or not self.api_integrator:
+                return {}
+                
+            logger.info(f"🩺 === BATCH PROCESSING {len(diagnosis_codes)} DIAGNOSIS CODES ===")
+            
+            codes_list = "\n".join([f"- {code}" for code in diagnosis_codes])
+            
+            enhanced_prompt = f"""You are Dr. DiagnosisAI, a clinical specialist with ICD-10 knowledge. Provide clinical explanations for these diagnosis codes:
+
+Diagnosis Codes:
+{codes_list}
+
+For each code, provide comprehensive clinical information including condition description, symptoms, risk factors, complications, treatment approaches, and clinical management.
+
+Return ONLY valid JSON in this exact format:
+{{
+    "{diagnosis_codes[0] if diagnosis_codes else 'example'}": "Detailed clinical explanation with condition description and treatment approaches"
+}}
+
+IMPORTANT: Return ONLY the JSON object, no other text."""
+
+            enhanced_system_msg = """You are a clinical medicine expert specializing in diagnostic coding. Provide detailed, evidence-based explanations."""
+            
+            success, response = safe_execute(self.api_integrator.call_llm_isolated_enhanced, enhanced_prompt, enhanced_system_msg)
+            
+            if success and response and response != "Detailed explanation unavailable":
+                try:
+                    clean_response = self._clean_json_response_enhanced(response)
+                    meanings_dict = json.loads(clean_response)
+                    logger.info(f"✅ Diagnosis codes batch: {len(meanings_dict)} meanings extracted")
+                    return meanings_dict
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Diagnosis codes JSON parse error: {e}")
+                    return {}
+            else:
+                logger.warning(f"⚠️ Diagnosis codes batch returned unavailable")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Diagnosis codes batch exception: {e}")
+            return {}
+
+    def _enhanced_batch_ndc_codes_with_therapeutic_context(self, ndc_codes: List[str]) -> Dict[str, str]:
+        """Enhanced BATCH process ALL NDC codes with detailed therapeutic context"""
+        try:
+            if not ndc_codes or not self.api_integrator:
+                return {}
+                
+            logger.info(f"💊 === BATCH PROCESSING {len(ndc_codes)} NDC CODES ===")
+            
+            codes_list = "\n".join([f"- {code}" for code in ndc_codes])
+            
+            enhanced_prompt = f"""You are Dr. PharmaAI, a clinical pharmacist with NDC code knowledge. Provide therapeutic explanations for these NDC codes:
+
+NDC Codes:
+{codes_list}
+
+For each NDC code, provide comprehensive pharmaceutical information including medication name, therapeutic class, mechanism of action, clinical indications, dosing, contraindications, and therapeutic considerations.
+
+Return ONLY valid JSON in this exact format:
+{{
+    "{ndc_codes[0] if ndc_codes else 'example'}": "Detailed therapeutic explanation with medication name and clinical considerations"
+}}
+
+IMPORTANT: Return ONLY the JSON object, no other text."""
+
+            enhanced_system_msg = """You are a clinical pharmacy expert specializing in NDC codes and pharmaceutical therapeutics."""
+            
+            success, response = safe_execute(self.api_integrator.call_llm_isolated_enhanced, enhanced_prompt, enhanced_system_msg)
+            
+            if success and response and response != "Detailed explanation unavailable":
+                try:
+                    clean_response = self._clean_json_response_enhanced(response)
+                    meanings_dict = json.loads(clean_response)
+                    logger.info(f"✅ NDC codes batch: {len(meanings_dict)} meanings extracted")
+                    return meanings_dict
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ NDC codes JSON parse error: {e}")
+                    return {}
+            else:
+                logger.warning(f"⚠️ NDC codes batch returned unavailable")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ NDC codes batch exception: {e}")
+            return {}
+
+    def _enhanced_batch_medications_with_clinical_significance(self, medications: List[str]) -> Dict[str, str]:
+        """Enhanced BATCH process ALL medications with detailed clinical significance"""
+        try:
+            if not medications or not self.api_integrator:
+                return {}
+                
+            logger.info(f"💉 === BATCH PROCESSING {len(medications)} MEDICATIONS ===")
+            
+            meds_list = "\n".join([f"- {med}" for med in medications])
+            
+            enhanced_prompt = f"""You are Dr. TherapeuticAI, a clinical pharmacologist. Provide clinical explanations for these medications:
+
+Medications:
+{meds_list}
+
+For each medication, provide comprehensive clinical information including therapeutic class, mechanism of action, clinical indications, dosing strategies, contraindications, drug interactions, and place in therapy.
+
+Return ONLY valid JSON in this exact format:
+{{
+    "{medications[0] if medications else 'example'}": "Detailed clinical explanation with therapeutic class and clinical considerations"
+}}
+
+IMPORTANT: Return ONLY the JSON object, no other text."""
+
+            enhanced_system_msg = """You are a clinical pharmacology expert specializing in medication therapy management."""
+            
+            success, response = safe_execute(self.api_integrator.call_llm_isolated_enhanced, enhanced_prompt, enhanced_system_msg)
+            
+            if success and response and response != "Detailed explanation unavailable":
+                try:
+                    clean_response = self._clean_json_response_enhanced(response)
+                    meanings_dict = json.loads(clean_response)
+                    logger.info(f"✅ Medications batch: {len(meanings_dict)} meanings extracted")
+                    return meanings_dict
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Medications JSON parse error: {e}")
+                    return {}
+            else:
+                logger.warning(f"⚠️ Medications batch returned unavailable")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Medications batch exception: {e}")
+            return {}
+
+    def _clean_json_response_enhanced(self, response: str) -> str:
+        """Enhanced LLM response cleaning for JSON extraction"""
+        try:
+            # Enhanced markdown wrapper removal
+            if response.startswith('```json'):
+                response = response[7:]
+            elif response.startswith('```'):
+                response = response[3:]
+            if response.endswith('```'):
+                response = response[:-3]
+            
+            # Enhanced JSON boundary detection
+            response = response.strip()
+            
+            # Find JSON object boundaries
+            start = response.find('{')
+            end = response.rfind('}') + 1
+            
+            if start != -1 and end > start:
+                json_content = response[start:end]
+                
+                # Enhanced JSON validation
+                try:
+                    json.loads(json_content)
+                    return json_content
+                except json.JSONDecodeError:
+                    # Try to fix common JSON issues
+                    fixed_content = self._fix_common_json_issues(json_content)
+                    return fixed_content
+            else:
+                return response
+                
+        except Exception as e:
+            logger.warning(f"Enhanced JSON cleaning failed: {e}")
+            return response
+
+    def _fix_common_json_issues(self, json_content: str) -> str:
+        """Fix common JSON formatting issues"""
+        try:
+            # Fix trailing commas
+            json_content = re.sub(r',\s*}', '}', json_content)
+            json_content = re.sub(r',\s*]', ']', json_content)
+            
+            # Fix unescaped quotes in values - simplified approach
+            json_content = json_content.replace('\\"', '"')
+            
+            return json_content
+        except Exception as e:
+            logger.warning(f"JSON fixing failed: {e}")
+            return json_content
+
+    def _calculate_age_with_clinical_context(self, date_of_birth: str) -> str:
+        """Enhanced age calculation with clinical context"""
+        try:
+            if not date_of_birth:
+                return "unknown"
+            dob = datetime.strptime(date_of_birth, '%Y-%m-%d').date()
+            today = date.today()
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            
+            # Add clinical context
+            if age < 18:
+                clinical_context = f"{age} (Pediatric population - specialized care considerations)"
+            elif age < 65:
+                clinical_context = f"{age} (Adult population - standard care protocols)"
+            else:
+                clinical_context = f"{age} (Geriatric population - enhanced monitoring recommended)"
+                
+            return clinical_context
+        except Exception as e:
+            logger.error(f"Age calculation error: {e}")
+            return "unknown (Age calculation failed - clinical assessment recommended)"
+
+    def _count_clinical_elements(self, data: Any) -> int:
+        """Count clinical data elements preserved in deidentification"""
+        try:
+            clinical_fields = [
+                'hlth_srvc_cd', 'health_service_code', 'diag_1_50_cd', 'clm_rcvd_dt',
+                'diagnosis_code', 'procedure_code', 'treatment_code', 'medical_code'
+            ]
+            
+            count = 0
+            
+            def count_recursive(obj):
+                nonlocal count
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if any(clinical_field in safe_str(key).lower() for clinical_field in clinical_fields):
+                            if value and safe_str(value).strip() and safe_str(value).lower() not in ['null', 'none', '']:
+                                count += 1
+                        if isinstance(value, (dict, list)):
+                            count_recursive(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        count_recursive(item)
+            
+            count_recursive(data)
+            return count
+        except Exception as e:
+            logger.warning(f"Clinical elements counting failed: {e}")
+            return 0
+
+    def _count_therapeutic_elements(self, data: Any) -> int:
+        """Count therapeutic data elements preserved in deidentification"""
+        try:
+            therapeutic_fields = [
+                'ndc', 'ndc_code', 'lbl_nm', 'label_name', 'drug_name', 'medication_name',
+                'rx_filled_dt', 'prescription_date', 'therapeutic_class', 'medication_code'
+            ]
+            
+            count = 0
+            
+            def count_recursive(obj):
+                nonlocal count
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if any(therapeutic_field in safe_str(key).lower() for therapeutic_field in therapeutic_fields):
+                            if value and safe_str(value).strip() and safe_str(value).lower() not in ['null', 'none', '']:
+                                count += 1
+                        if isinstance(value, (dict, list)):
+                            count_recursive(value)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        count_recursive(item)
+            
+            count_recursive(data)
+            return count
+        except Exception as e:
+            logger.warning(f"Therapeutic elements counting failed: {e}")
+            return 0
+
+    def _enhanced_deidentify_json(self, data: Any) -> Any:
+        """Enhanced JSON deidentification with clinical structure preservation"""
+        if isinstance(data, dict):
+            deidentified_dict = {}
+            for key, value in data.items():
+                if isinstance(value, (dict, list)):
+                    deidentified_dict[key] = self._enhanced_deidentify_json(value)
+                elif isinstance(value, str):
+                    deidentified_dict[key] = self._enhanced_deidentify_string(value)
+                else:
+                    deidentified_dict[key] = value
+            return deidentified_dict
+        elif isinstance(data, list):
+            return [self._enhanced_deidentify_json(item) for item in data]
+        elif isinstance(data, str):
+            return self._enhanced_deidentify_string(data)
+        else:
+            return data
+
+    def _enhanced_deidentify_pharmacy_json(self, data: Any) -> Any:
+        """Enhanced pharmacy JSON deidentification with therapeutic context preservation"""
+        if isinstance(data, dict):
+            deidentified_dict = {}
+            for key, value in data.items():
+                if safe_str(key).lower() in ['src_mbr_first_nm', 'src_mbr_frst_nm', 'scr_mbr_last_nm', 'src_mbr_last_nm']:
+                    deidentified_dict[key] = "[THERAPEUTIC_DATA_MASKED]"
+                elif isinstance(value, (dict, list)):
+                    deidentified_dict[key] = self._enhanced_deidentify_pharmacy_json(value)
+                elif isinstance(value, str):
+                    deidentified_dict[key] = self._enhanced_deidentify_string(value)
+                else:
+                    deidentified_dict[key] = value
+            return deidentified_dict
+        elif isinstance(data, list):
+            return [self._enhanced_deidentify_pharmacy_json(item) for item in data]
+        elif isinstance(data, str):
+            return self._enhanced_deidentify_string(data)
+        else:
+            return data
+
+    def _mask_clinical_fields_enhanced(self, data: Any) -> Any:
+        """Enhanced clinical field masking with structure preservation"""
+        if isinstance(data, dict):
+            masked_data = {}
+            for key, value in data.items():
+                if safe_str(key).lower() in ['src_mbr_frst_nm', 'src_mbr_first_nm', 'src_mbr_last_nm', 'src_mvr_last_nm']:
+                    masked_data[key] = "[CLINICAL_DATA_MASKED]"
+                elif isinstance(value, (dict, list)):
+                    masked_data[key] = self._mask_clinical_fields_enhanced(value)
+                else:
+                    masked_data[key] = value
+            return masked_data
+        elif isinstance(data, list):
+            return [self._mask_clinical_fields_enhanced(item) for item in data]
+        else:
+            return data
+
+    def _enhanced_deidentify_string(self, data: str) -> str:
+        """Enhanced string deidentification with clinical context preservation"""
+        if not isinstance(data, str) or not data.strip():
+            return safe_str(data)
+
+        deidentified = safe_str(data)
         
-        with col3:
-            gender = st.selectbox("Gender *", ["F", "M"])
-            zip_code = st.text_input("Zip Code *", value="")
+        # Enhanced pattern replacements with clinical context
+        deidentified = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[CLINICAL_SSN_MASKED]', deidentified)
+        deidentified = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[CLINICAL_PHONE_MASKED]', deidentified)
+        deidentified = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[CLINICAL_EMAIL_MASKED]', deidentified)
+        deidentified = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', '[CLINICAL_NAME_MASKED]', deidentified)
         
-        # Show calculated age
-        if date_of_birth:
-            calculated_age = calculate_age(date_of_birth)
-            if calculated_age is not None:
-                st.info(f"📅 **Calculated Age:** {calculated_age} years old")
+        return deidentified
+
+    def _enhanced_medical_extraction_with_clinical_analysis(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Enhanced recursive medical field extraction with clinical complexity analysis"""
+        if isinstance(data, dict):
+            current_record = {}
+            clinical_complexity_indicators = []
+
+            # Enhanced health service code extraction
+            if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
+                service_code = safe_str(data["hlth_srvc_cd"]).strip()
+                current_record["hlth_srvc_cd"] = service_code
+                result["extraction_summary"]["unique_service_codes"].add(service_code)
+                
+                # Analyze clinical complexity
+                if service_code.startswith('99'):  # Office visits
+                    clinical_complexity_indicators.append("Office visit")
+                elif service_code.startswith('90'):  # Procedures
+                    clinical_complexity_indicators.append("Medical procedure")
+
+            # Enhanced claim received date extraction
+            if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
+                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
+
+            # Enhanced diagnosis codes extraction
+            diagnosis_codes = []
+            primary_diagnoses = []
+            comorbidities = []
+
+            # Handle comma-separated diagnosis codes
+            if "diag_1_50_cd" in data and data["diag_1_50_cd"]:
+                diag_value = safe_str(data["diag_1_50_cd"]).strip()
+                if diag_value and diag_value.lower() not in ['null', 'none', '']:
+                    individual_codes = [code.strip() for code in diag_value.split(',') if code.strip()]
+                    for i, code in enumerate(individual_codes, 1):
+                        if code and code.lower() not in ['null', 'none', '']:
+                            diagnosis_info = {
+                                "code": code,
+                                "position": i,
+                                "source": "diag_1_50_cd",
+                                "clinical_priority": "Primary" if i == 1 else "Secondary"
+                            }
+                            diagnosis_codes.append(diagnosis_info)
+                            result["extraction_summary"]["unique_diagnosis_codes"].add(code)
+                            
+                            # Clinical categorization
+                            if i == 1:
+                                primary_diagnoses.append(code)
+                            else:
+                                comorbidities.append(code)
+
+            # Handle individual diagnosis fields
+            for i in range(1, 51):
+                diag_key = f"diag_{i}_cd"
+                if diag_key in data and data[diag_key]:
+                    diag_code = safe_str(data[diag_key]).strip()
+                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
+                        diagnosis_info = {
+                            "code": diag_code,
+                            "position": i,
+                            "source": f"individual_{diag_key}",
+                            "clinical_priority": "Primary" if i <= 3 else "Secondary"
+                        }
+                        diagnosis_codes.append(diagnosis_info)
+                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
+                        
+                        # Enhanced clinical categorization
+                        if i <= 3:
+                            primary_diagnoses.append(diag_code)
+                        else:
+                            comorbidities.append(diag_code)
+
+            if diagnosis_codes:
+                current_record["diagnosis_codes"] = diagnosis_codes
+                current_record["clinical_complexity_indicators"] = clinical_complexity_indicators
+                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
+                
+                # Update clinical insights
+                result["clinical_insights"]["primary_diagnoses"].extend(primary_diagnoses)
+                result["clinical_insights"]["comorbidities"].extend(comorbidities)
+
+            if current_record:
+                current_record["data_path"] = path
+                current_record["clinical_complexity_score"] = len(clinical_complexity_indicators) + len(diagnosis_codes)
+                result["hlth_srvc_records"].append(current_record)
+                result["extraction_summary"]["total_hlth_srvc_records"] += 1
+                
+                # Update overall complexity score
+                result["extraction_summary"]["clinical_complexity_score"] += current_record["clinical_complexity_score"]
+
+            # Continue enhanced recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._enhanced_medical_extraction_with_clinical_analysis(value, result, new_path)
+
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._enhanced_medical_extraction_with_clinical_analysis(item, result, new_path)
+
+    def _enhanced_pharmacy_extraction_with_therapeutic_analysis(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Enhanced recursive pharmacy field extraction with therapeutic complexity analysis"""
+        if isinstance(data, dict):
+            current_record = {}
+            therapeutic_indicators = []
+
+            # Enhanced NDC code extraction
+            ndc_found = False
+            for key in data:
+                if safe_str(key).lower() in ['ndc', 'ndc_code', 'ndc_number', 'national_drug_code']:
+                    ndc_code = safe_str(data[key]).strip()
+                    current_record["ndc"] = ndc_code
+                    result["extraction_summary"]["unique_ndc_codes"].add(ndc_code)
+                    ndc_found = True
+                    therapeutic_indicators.append("NDC medication code")
+                    break
+
+            # Enhanced medication name extraction
+            label_found = False
+            for key in data:
+                if safe_str(key).lower() in ['lbl_nm', 'label_name', 'drug_name', 'medication_name', 'product_name']:
+                    medication_name = safe_str(data[key]).strip()
+                    current_record["lbl_nm"] = medication_name
+                    result["extraction_summary"]["unique_label_names"].add(medication_name)
+                    label_found = True
+                    
+                    # Enhanced therapeutic categorization
+                    medication_lower = medication_name.lower()
+                    if any(term in medication_lower for term in ['metformin', 'insulin', 'glipizide']):
+                        therapeutic_indicators.append("Diabetes medication")
+                        result["extraction_summary"]["therapeutic_classes_identified"].append("Antidiabetic")
+                    elif any(term in medication_lower for term in ['lisinopril', 'amlodipine', 'atenolol']):
+                        therapeutic_indicators.append("Cardiovascular medication")
+                        result["extraction_summary"]["therapeutic_classes_identified"].append("Cardiovascular")
+                    elif any(term in medication_lower for term in ['atorvastatin', 'simvastatin']):
+                        therapeutic_indicators.append("Lipid-lowering medication")
+                        result["extraction_summary"]["therapeutic_classes_identified"].append("Lipid management")
+                    
+                    break
+
+            # Enhanced prescription filled date extraction
+            if "rx_filled_dt" in data and data["rx_filled_dt"]:
+                current_record["rx_filled_dt"] = data["rx_filled_dt"]
+                therapeutic_indicators.append("Prescription fill date")
+
+            if ndc_found or label_found or "rx_filled_dt" in current_record:
+                current_record["data_path"] = path
+                current_record["therapeutic_indicators"] = therapeutic_indicators
+                current_record["therapeutic_complexity_score"] = len(therapeutic_indicators)
+                result["ndc_records"].append(current_record)
+                result["extraction_summary"]["total_ndc_records"] += 1
+                
+                # Update medication complexity score
+                result["extraction_summary"]["medication_complexity_score"] += current_record["therapeutic_complexity_score"]
+
+            # Continue enhanced recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._enhanced_pharmacy_extraction_with_therapeutic_analysis(value, result, new_path)
+
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._enhanced_pharmacy_extraction_with_therapeutic_analysis(item, result, new_path)
+
+    def _enhanced_clinical_analysis_integration(self, extraction_result: Dict[str, Any]):
+        """Enhanced integration of clinical analysis with code meanings"""
+        try:
+            # Enhance medical records with detailed clinical meanings
+            service_meanings = safe_get(extraction_result, "code_meanings", {}).get("service_code_meanings", {})
+            diagnosis_meanings = safe_get(extraction_result, "code_meanings", {}).get("diagnosis_code_meanings", {})
+            
+            for record in safe_get(extraction_result, "hlth_srvc_records", []):
+                # Enhanced service code meaning integration
+                if "hlth_srvc_cd" in record:
+                    service_code = safe_str(record["hlth_srvc_cd"])
+                    detailed_meaning = service_meanings.get(service_code, "Clinical meaning not available")
+                    record["hlth_srvc_detailed_meaning"] = detailed_meaning
+                    record["clinical_context_enhanced"] = True
+                
+                # Enhanced diagnosis code meanings integration
+                if "diagnosis_codes" in record:
+                    for diag in record["diagnosis_codes"]:
+                        if isinstance(diag, dict) and "code" in diag:
+                            diag_code = safe_str(diag["code"])
+                            detailed_meaning = diagnosis_meanings.get(diag_code, "Clinical meaning not available")
+                            diag["detailed_clinical_meaning"] = detailed_meaning
+                            diag["clinical_significance_enhanced"] = True
+
+            # Enhanced care complexity assessment
+            total_records = len(safe_get(extraction_result, "hlth_srvc_records", []))
+            avg_complexity = safe_get(extraction_result, "extraction_summary", {}).get("clinical_complexity_score", 0) / max(total_records, 1)
+            
+            if avg_complexity >= 5:
+                safe_get(extraction_result, "clinical_insights", {})["care_complexity"] = "High complexity - Multiple comorbidities and procedures"
+            elif avg_complexity >= 3:
+                safe_get(extraction_result, "clinical_insights", {})["care_complexity"] = "Moderate complexity - Some comorbidities or procedures"
+            else:
+                safe_get(extraction_result, "clinical_insights", {})["care_complexity"] = "Standard complexity - Routine care patterns"
+
+            logger.info(f"✅ Enhanced clinical analysis integration completed")
+
+        except Exception as e:
+            logger.error(f"Enhanced clinical analysis integration error: {e}")
+
+    def _enhanced_therapeutic_analysis_integration(self, extraction_result: Dict[str, Any]):
+        """Enhanced integration of therapeutic analysis with medication meanings"""
+        try:
+            # Enhance pharmacy records with detailed therapeutic meanings
+            ndc_meanings = safe_get(extraction_result, "code_meanings", {}).get("ndc_code_meanings", {})
+            medication_meanings = safe_get(extraction_result, "code_meanings", {}).get("medication_meanings", {})
+            
+            for record in safe_get(extraction_result, "ndc_records", []):
+                # Enhanced NDC code meaning integration
+                if "ndc" in record:
+                    ndc_code = safe_str(record["ndc"])
+                    detailed_meaning = ndc_meanings.get(ndc_code, "Therapeutic meaning not available")
+                    record["ndc_detailed_meaning"] = detailed_meaning
+                    record["therapeutic_context_enhanced"] = True
+                
+                # Enhanced medication meaning integration
+                if "lbl_nm" in record:
+                    medication = safe_str(record["lbl_nm"])
+                    detailed_meaning = medication_meanings.get(medication, "Therapeutic meaning not available")
+                    record["medication_detailed_meaning"] = detailed_meaning
+                    record["clinical_significance_enhanced"] = True
+
+            # Enhanced medication complexity assessment
+            total_medications = len(safe_get(extraction_result, "ndc_records", []))
+            unique_therapeutic_classes = len(set(safe_get(extraction_result, "extraction_summary", {}).get("therapeutic_classes_identified", [])))
+            
+            if total_medications >= 5 or unique_therapeutic_classes >= 3:
+                safe_get(extraction_result, "therapeutic_insights", {})["medication_complexity"] = "High complexity - Polypharmacy considerations"
+                safe_get(extraction_result, "extraction_summary", {})["polypharmacy_indicators"] = ["Multiple medications", "Multiple therapeutic classes"]
+            elif total_medications >= 3 or unique_therapeutic_classes >= 2:
+                safe_get(extraction_result, "therapeutic_insights", {})["medication_complexity"] = "Moderate complexity - Multiple medications"
+            else:
+                safe_get(extraction_result, "therapeutic_insights", {})["medication_complexity"] = "Standard complexity - Limited medications"
+
+            logger.info(f"✅ Enhanced therapeutic analysis integration completed")
+
+        except Exception as e:
+            logger.error(f"Enhanced therapeutic analysis integration error: {e}")
+
+    def extract_health_entities_with_clinical_insights(self, pharmacy_data: Dict[str, Any],
+                                                      pharmacy_extraction: Dict[str, Any],
+                                                      medical_extraction: Dict[str, Any],
+                                                      patient_data: Dict[str, Any] = None,
+                                                      api_integrator = None) -> Dict[str, Any]:
+        """Enhanced health entity extraction with DETAILED clinical insights"""
+        logger.info("🔬 ===== Enhanced CLINICAL ENTITY EXTRACTION =====")
         
-        # ENHANCED RUN ANALYSIS BUTTON
-        submitted = st.form_submit_button(
-            "🚀 Run Enhanced Healthcare Analysis", 
-            use_container_width=True,
-            disabled=st.session_state.analysis_running,
-            type="primary"
+        enhanced_entities = {
+            "diabetics": "no",
+            "age_group": "unknown",
+            "age": None,
+            "smoking": "no",
+            "alcohol": "no",
+            "blood_pressure": "unknown",
+            "analysis_details": [],
+            "medical_conditions": [],
+            "medications_identified": [],
+            "clinical_risk_factors": [],
+            "therapeutic_insights": [],
+            "comorbidity_analysis": [],
+            "medication_adherence_indicators": [],
+            "care_gaps_identified": [],
+            "llm_analysis": "not_performed",
+            "enhanced_clinical_analysis": False,
+            "clinical_complexity_score": 0,
+            "cardiovascular_risk_indicators": [],
+            "preventive_care_opportunities": []
+        }
+
+        try:
+            # Enhanced age calculation with clinical risk stratification
+            if patient_data and safe_get(patient_data, 'date_of_birth'):
+                success, age = safe_execute(self._calculate_age_enhanced, safe_get(patient_data, 'date_of_birth'))
+                if success and age != "unknown":
+                    try:
+                        age_num = safe_int(age.split()[0], 0)
+                        enhanced_entities["age"] = age_num
+                        enhanced_entities["age_group"] = self._get_enhanced_age_group(age_num)
+                        enhanced_entities["analysis_details"].append(f"Enhanced age analysis: {age}")
+                    except:
+                        enhanced_entities["age"] = 50
+                        enhanced_entities["age_group"] = "adult_standard_care"
+
+            # Enhanced entity extraction using batch meanings
+            medical_meanings_available = (medical_extraction and 
+                                        safe_get(medical_extraction, "code_meanings_added", False) and
+                                        safe_get(medical_extraction, "enhanced_analysis", False))
+            
+            pharmacy_meanings_available = (pharmacy_extraction and 
+                                         safe_get(pharmacy_extraction, "code_meanings_added", False) and
+                                         safe_get(pharmacy_extraction, "enhanced_analysis", False))
+            
+            if medical_meanings_available or pharmacy_meanings_available:
+                logger.info("🔬 Using enhanced batch-generated clinical meanings")
+                enhanced_entities = self._enhanced_analyze_entities_with_clinical_meanings(
+                    enhanced_entities, medical_extraction, pharmacy_extraction
+                )
+                enhanced_entities["enhanced_clinical_analysis"] = True
+                enhanced_entities["llm_analysis"] = "used_enhanced_batch_meanings"
+                enhanced_entities["analysis_details"].append("Used enhanced batch-generated clinical meanings")
+            else:
+                logger.info("🔬 Using enhanced direct pattern matching")
+                success, _ = safe_execute(self._enhanced_analyze_entities_direct, pharmacy_data, pharmacy_extraction, medical_extraction, enhanced_entities)
+                if not success:
+                    logger.warning("Direct entity analysis had issues")
+
+            # Enhanced medication identification
+            if pharmacy_extraction and safe_get(pharmacy_extraction, "ndc_records"):
+                for record in safe_get(pharmacy_extraction, "ndc_records", []):
+                    if safe_get(record, "lbl_nm"):
+                        medication_info = {
+                            "ndc": safe_get(record, "ndc", ""),
+                            "label_name": safe_get(record, "lbl_nm", ""),
+                            "detailed_meaning": safe_get(record, "medication_detailed_meaning", ""),
+                            "therapeutic_indicators": safe_get(record, "therapeutic_indicators", []),
+                            "clinical_significance": safe_get(record, "clinical_significance_enhanced", False)
+                        }
+                        enhanced_entities["medications_identified"].append(medication_info)
+
+            # Enhanced clinical complexity scoring
+            enhanced_entities["clinical_complexity_score"] = self._calculate_enhanced_clinical_complexity(enhanced_entities)
+
+            # Enhanced cardiovascular risk assessment
+            enhanced_entities["cardiovascular_risk_indicators"] = self._assess_enhanced_cardiovascular_risk(enhanced_entities)
+
+            # Enhanced preventive care opportunities
+            enhanced_entities["preventive_care_opportunities"] = self._identify_enhanced_preventive_care_opportunities(enhanced_entities)
+
+            logger.info(f"🔬 ===== Enhanced CLINICAL ENTITY EXTRACTION COMPLETED =====")
+            logger.info(f"  ✅ Enhanced analysis: {enhanced_entities['enhanced_clinical_analysis']}")
+            logger.info(f"  🩺 Diabetes: {enhanced_entities['diabetics']}")
+            logger.info(f"  💓 Blood pressure: {enhanced_entities['blood_pressure']}")
+            logger.info(f"  💊 Medications: {len(enhanced_entities['medications_identified'])}")
+
+        except Exception as e:
+            logger.error(f"❌ Error in enhanced clinical entity extraction: {e}")
+            logger.debug(traceback.format_exc())
+            enhanced_entities["analysis_details"].append(f"Enhanced analysis error: {str(e)}")
+
+        return enhanced_entities
+
+    def _calculate_age_enhanced(self, date_of_birth: str) -> str:
+        """Enhanced age calculation with clinical context"""
+        try:
+            if not date_of_birth:
+                return "unknown"
+            dob = datetime.strptime(date_of_birth, '%Y-%m-%d').date()
+            today = date.today()
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            
+            # Enhanced clinical context
+            if age < 18:
+                return f"{age} years (Pediatric - specialized care protocols)"
+            elif age < 65:
+                return f"{age} years (Adult - standard care guidelines)"
+            else:
+                return f"{age} years (Geriatric - enhanced monitoring protocols)"
+        except Exception as e:
+            logger.error(f"Age calculation error: {e}")
+            return "unknown (Clinical assessment recommended)"
+
+    def _get_enhanced_age_group(self, age: int) -> str:
+        """Enhanced age group determination with clinical significance"""
+        if age < 18:
+            return "pediatric_specialized_care"
+        elif age < 35:
+            return "young_adult_preventive_focus"
+        elif age < 50:
+            return "adult_screening_emphasis"
+        elif age < 65:
+            return "middle_aged_risk_assessment"
+        else:
+            return "senior_comprehensive_monitoring"
+
+    def _enhanced_analyze_entities_with_clinical_meanings(self, entities: Dict[str, Any], 
+                                                         medical_extraction: Dict[str, Any], 
+                                                         pharmacy_extraction: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced entity analysis using detailed clinical meanings"""
+        try:
+            clinical_conditions = []
+            therapeutic_insights = []
+            cardiovascular_indicators = []
+            
+            # Enhanced analysis of medical meanings
+            medical_meanings = safe_get(medical_extraction, "code_meanings", {})
+            diagnosis_meanings = safe_get(medical_meanings, "diagnosis_code_meanings", {})
+            
+            for code, meaning in diagnosis_meanings.items():
+                meaning_lower = safe_str(meaning).lower()
+                
+                # Enhanced diabetes analysis
+                if any(term in meaning_lower for term in ['diabetes', 'diabetic', 'insulin', 'glucose', 'mellitus']):
+                    entities["diabetics"] = "yes"
+                    clinical_conditions.append(f"Diabetes mellitus (ICD-10 {code}) - {meaning[:100]}...")
+                    entities["clinical_risk_factors"].append("Diabetes mellitus - Major CVD risk factor")
+                    cardiovascular_indicators.append("Diabetes mellitus increases cardiovascular risk by 2-4x")
+                
+                # Enhanced hypertension analysis
+                if any(term in meaning_lower for term in ['hypertension', 'high blood pressure', 'elevated blood pressure']):
+                    entities["blood_pressure"] = "diagnosed"
+                    clinical_conditions.append(f"Hypertension (ICD-10 {code}) - {meaning[:100]}...")
+                    entities["clinical_risk_factors"].append("Hypertension - Major modifiable risk factor")
+                    cardiovascular_indicators.append("Hypertension is leading risk factor for stroke and MI")
+                
+                # Enhanced tobacco use analysis
+                if any(term in meaning_lower for term in ['tobacco', 'smoking', 'nicotine', 'cigarette']):
+                    entities["smoking"] = "yes"
+                    clinical_conditions.append(f"Tobacco use (ICD-10 {code}) - {meaning[:100]}...")
+                    entities["clinical_risk_factors"].append("Tobacco use - Critical modifiable risk factor")
+                    cardiovascular_indicators.append("Smoking increases cardiovascular risk by 200-300%")
+                
+                # Enhanced alcohol analysis
+                if any(term in meaning_lower for term in ['alcohol', 'alcoholism', 'substance']):
+                    entities["alcohol"] = "yes"
+                    clinical_conditions.append(f"Alcohol-related condition (ICD-10 {code}) - {meaning[:100]}...")
+                    entities["clinical_risk_factors"].append("Alcohol use - Health risk factor")
+
+                # Enhanced comorbidity analysis
+                if any(term in meaning_lower for term in ['chronic', 'disease', 'disorder', 'syndrome']):
+                    entities["comorbidity_analysis"].append(f"Chronic condition: {code} - {meaning[:80]}...")
+
+            # Enhanced analysis of pharmacy meanings
+            pharmacy_meanings = safe_get(pharmacy_extraction, "code_meanings", {})
+            medication_meanings = safe_get(pharmacy_meanings, "medication_meanings", {})
+            
+            for medication, meaning in medication_meanings.items():
+                meaning_lower = safe_str(meaning).lower()
+                
+                # Enhanced diabetes medication analysis
+                if any(term in meaning_lower for term in ['diabetes', 'blood sugar', 'insulin', 'metformin', 'glucose']):
+                    entities["diabetics"] = "yes"
+                    therapeutic_insights.append(f"Diabetes medication: {medication} - {meaning[:100]}...")
+                    entities["medication_adherence_indicators"].append(f"Diabetes therapy: {medication}")
+                
+                # Enhanced cardiovascular medication analysis
+                if any(term in meaning_lower for term in ['blood pressure', 'hypertension', 'ace inhibitor', 'beta blocker', 'cardiovascular']):
+                    if entities["blood_pressure"] == "unknown":
+                        entities["blood_pressure"] = "managed"
+                    therapeutic_insights.append(f"Cardiovascular medication: {medication} - {meaning[:100]}...")
+                    entities["medication_adherence_indicators"].append(f"BP management: {medication}")
+
+                # Enhanced lipid management analysis
+                if any(term in meaning_lower for term in ['cholesterol', 'statin', 'lipid', 'atorvastatin']):
+                    cardiovascular_indicators.append(f"Lipid management therapy: {medication}")
+                    therapeutic_insights.append(f"Lipid medication: {medication} - {meaning[:100]}...")
+
+            entities["medical_conditions"] = clinical_conditions
+            entities["therapeutic_insights"] = therapeutic_insights
+            entities["cardiovascular_risk_indicators"] = cardiovascular_indicators
+            
+            logger.info(f"🔬 Enhanced clinical meaning analysis: {len(clinical_conditions)} conditions, {len(therapeutic_insights)} insights")
+            
+            return entities
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced clinical meaning analysis: {e}")
+            return entities
+
+    def _enhanced_analyze_entities_direct(self, pharmacy_data: Dict[str, Any],
+                                        pharmacy_extraction: Dict[str, Any],
+                                        medical_extraction: Dict[str, Any],
+                                        entities: Dict[str, Any]):
+        """Enhanced direct entity analysis using clinical pattern matching"""
+        try:
+            logger.info("🔬 Enhanced direct clinical pattern matching")
+            
+            # Enhanced medication pattern matching
+            if pharmacy_extraction and safe_get(pharmacy_extraction, "ndc_records"):
+                for record in safe_get(pharmacy_extraction, "ndc_records", []):
+                    medication_name = safe_str(safe_get(record, "lbl_nm", "")).lower()
+                    
+                    # Enhanced diabetes detection
+                    if any(term in medication_name for term in ['metformin', 'insulin', 'glipizide', 'glimepiride']):
+                        entities["diabetics"] = "yes"
+                        entities["clinical_risk_factors"].append(f"Diabetes medication detected: {medication_name}")
+                        
+                    # Enhanced cardiovascular detection
+                    if any(term in medication_name for term in ['amlodipine', 'lisinopril', 'atenolol', 'metoprolol']):
+                        entities["blood_pressure"] = "managed"
+                        entities["clinical_risk_factors"].append(f"Cardiovascular medication detected: {medication_name}")
+
+            entities["analysis_details"].append("Enhanced direct clinical pattern matching completed")
+
+        except Exception as e:
+            logger.error(f"Error in enhanced direct clinical analysis: {e}")
+            entities["analysis_details"].append(f"Enhanced direct analysis error: {str(e)}")
+
+    def _calculate_enhanced_clinical_complexity(self, entities: Dict[str, Any]) -> int:
+        """Calculate enhanced clinical complexity score"""
+        try:
+            complexity_score = 0
+            
+            # Age-based complexity
+            age = safe_get(entities, "age", 0)
+            if age >= 65:
+                complexity_score += 2
+            elif age >= 50:
+                complexity_score += 1
+            
+            # Condition-based complexity
+            if safe_get(entities, "diabetics") == "yes":
+                complexity_score += 3
+            if safe_get(entities, "blood_pressure") in ["diagnosed", "managed"]:
+                complexity_score += 2
+            if safe_get(entities, "smoking") == "yes":
+                complexity_score += 2
+            
+            # Medication complexity
+            medication_count = len(safe_get(entities, "medications_identified", []))
+            if medication_count >= 5:
+                complexity_score += 3
+            elif medication_count >= 3:
+                complexity_score += 2
+            elif medication_count >= 1:
+                complexity_score += 1
+            
+            # Risk factor complexity
+            risk_factor_count = len(safe_get(entities, "clinical_risk_factors", []))
+            complexity_score += min(risk_factor_count, 5)
+            
+            return complexity_score
+            
+        except Exception as e:
+            logger.error(f"Clinical complexity calculation error: {e}")
+            return 0
+
+    def _assess_enhanced_cardiovascular_risk(self, entities: Dict[str, Any]) -> List[str]:
+        """Assess enhanced cardiovascular risk indicators"""
+        try:
+            risk_indicators = []
+            
+            # Age-based risk
+            age = safe_get(entities, "age", 0)
+            if age >= 65:
+                risk_indicators.append("Advanced age (≥65) - Major non-modifiable risk factor")
+            elif age >= 45:
+                risk_indicators.append("Intermediate age (45-64) - Moderate risk factor")
+            
+            # Clinical condition risks
+            if safe_get(entities, "diabetics") == "yes":
+                risk_indicators.append("Diabetes mellitus - 2-4x increased cardiovascular risk")
+            if safe_get(entities, "blood_pressure") in ["diagnosed", "managed"]:
+                risk_indicators.append("Hypertension - Leading risk factor for stroke and MI")
+            if safe_get(entities, "smoking") == "yes":
+                risk_indicators.append("Tobacco use - 200-300% increased cardiovascular risk")
+            
+            # Medication-based risk assessment
+            medication_count = len(safe_get(entities, "medications_identified", []))
+            if medication_count >= 5:
+                risk_indicators.append("Polypharmacy (≥5 medications) - Complexity and interaction risks")
+            
+            return risk_indicators
+            
+        except Exception as e:
+            logger.error(f"Cardiovascular risk assessment error: {e}")
+            return []
+
+    def _identify_enhanced_preventive_care_opportunities(self, entities: Dict[str, Any]) -> List[str]:
+        """Identify enhanced preventive care opportunities"""
+        try:
+            opportunities = []
+            
+            age = safe_get(entities, "age", 0)
+            
+            # Age-based preventive care
+            if age >= 50:
+                opportunities.append("Colorectal cancer screening (colonoscopy every 10 years)")
+                opportunities.append("Annual cardiovascular risk assessment")
+            if age >= 65:
+                opportunities.append("Annual influenza vaccination")
+                opportunities.append("Pneumococcal vaccination")
+                opportunities.append("Fall risk assessment")
+            
+            # Condition-based preventive care
+            if safe_get(entities, "diabetics") == "yes":
+                opportunities.append("HbA1c monitoring every 3-6 months")
+                opportunities.append("Annual diabetic eye examination")
+                opportunities.append("Annual diabetic foot examination")
+                opportunities.append("Annual nephropathy screening")
+            
+            if safe_get(entities, "blood_pressure") in ["diagnosed", "managed"]:
+                opportunities.append("Blood pressure monitoring and medication adherence")
+                opportunities.append("Sodium restriction counseling")
+                opportunities.append("Regular cardiovascular risk assessment")
+            
+            if safe_get(entities, "smoking") == "yes":
+                opportunities.append("Tobacco cessation counseling and support")
+                opportunities.append("Enhanced lung cancer screening consideration")
+            
+            # General preventive care
+            if age >= 40:
+                opportunities.append("Annual lipid panel screening")
+                opportunities.append("Blood pressure monitoring")
+            
+            return opportunities
+            
+        except Exception as e:
+            logger.error(f"Preventive care opportunities identification error: {e}")
+            return []
+
+    def prepare_enhanced_clinical_context(self, chat_context: Dict[str, Any]) -> str:
+        """Enhanced context preparation for clinical chatbot"""
+        try:
+            context_sections = []
+
+            # Enhanced patient overview
+            patient_overview = safe_get(chat_context, "patient_overview", {})
+            if patient_overview:
+                context_sections.append(f"**ENHANCED PATIENT PROFILE**: Age {safe_get(patient_overview, 'age', 'unknown')}, ZIP {safe_get(patient_overview, 'zip', 'unknown')}")
+                context_sections.append(f"**CLINICAL ANALYSIS TYPE**: {safe_get(patient_overview, 'model_type', 'standard')}")
+                context_sections.append(f"**CARDIOVASCULAR RISK LEVEL**: {safe_get(patient_overview, 'cardiovascular_risk_level', 'unknown')}")
+
+            # Enhanced medical extractions
+            medical_extraction = safe_get(chat_context, "medical_extraction", {})
+            if medical_extraction and not safe_get(medical_extraction, 'error'):
+                context_sections.append(f"**ENHANCED MEDICAL DATA**: {json.dumps(medical_extraction, indent=2)[:1000]}...")
+
+            # Enhanced pharmacy extractions
+            pharmacy_extraction = safe_get(chat_context, "pharmacy_extraction", {})
+            if pharmacy_extraction and not safe_get(pharmacy_extraction, 'error'):
+                context_sections.append(f"**ENHANCED PHARMACY DATA**: {json.dumps(pharmacy_extraction, indent=2)[:1000]}...")
+
+            # Enhanced entity extraction
+            entity_extraction = safe_get(chat_context, "entity_extraction", {})
+            if entity_extraction:
+                context_sections.append(f"**ENHANCED CLINICAL ENTITIES**: {json.dumps(entity_extraction, indent=2)[:1000]}...")
+
+            # Enhanced health trajectory
+            enhanced_trajectory = safe_get(chat_context, "enhanced_health_trajectory", "")
+            if enhanced_trajectory:
+                context_sections.append(f"**ENHANCED HEALTH TRAJECTORY**: {enhanced_trajectory[:1000]}...")
+
+            # Enhanced cardiovascular risk assessment
+            heart_attack_prediction = safe_get(chat_context, "heart_attack_prediction", {})
+            if heart_attack_prediction:
+                context_sections.append(f"**ENHANCED CARDIOVASCULAR RISK**: {json.dumps(heart_attack_prediction, indent=2)[:1000]}...")
+
+            return "\n\n" + "\n\n".join(context_sections)
+
+        except Exception as e:
+            logger.error(f"Error preparing enhanced clinical context: {e}")
+            return "Enhanced comprehensive patient healthcare data available for analysis."
+
+    # Backward compatibility methods
+    def extract_medical_fields_batch(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced extraction"""
+        return self.extract_medical_fields_batch_enhanced(deidentified_medical)
+
+    def extract_pharmacy_fields_batch(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced extraction"""
+        return self.extract_pharmacy_fields_batch_enhanced(deidentified_pharmacy)
+
+    def deidentify_medical_data(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced deidentification"""
+        return self.deidentify_medical_data_enhanced(medical_data, patient_data)
+
+    def deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced deidentification"""
+        return self.deidentify_pharmacy_data_enhanced(pharmacy_data)
+
+    def deidentify_mcid_data(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced deidentification"""
+        return self.deidentify_mcid_data_enhanced(mcid_data)
+
+    def extract_health_entities_enhanced(self, pharmacy_data: Dict[str, Any],
+                                       pharmacy_extraction: Dict[str, Any],
+                                       medical_extraction: Dict[str, Any],
+                                       patient_data: Dict[str, Any] = None,
+                                       api_integrator = None) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced clinical insights"""
+        return self.extract_health_entities_with_clinical_insights(
+            pharmacy_data, pharmacy_extraction, medical_extraction, patient_data, api_integrator
         )
 
-# Enhanced workflow animation logic here would follow the same pattern as the original...
-# [Workflow animation code remains the same]
-
-# ENHANCED RESULTS SECTION
-if st.session_state.analysis_results and not st.session_state.analysis_running:
-    results = st.session_state.analysis_results
-    
-    st.markdown("---")
-    st.markdown("## 📊 Healthcare Analysis Results")
-    
-    # Show errors if any
-    errors = safe_get(results, 'errors', [])
-    if errors:
-        st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
-        with st.expander("🐛 Debug Information"):
-            st.write("**Errors:**")
-            for error in errors:
-                st.write(f"• {error}")
-
-    # 2. ENHANCED ALL CLAIMS DATA VIEWER WITH MCID
-    if st.button("🗂️ Complete Claims Data Viewer - Enhanced Edition", use_container_width=True, key="enhanced_all_claims_btn"):
-        st.session_state.show_all_claims_data = not st.session_state.show_all_claims_data
-    
-    if st.session_state.show_all_claims_data:
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">🗂️ Complete Claims Data Viewer - Enhanced Analysis</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("""
-        <div class="claims-viewer-card">
-            <h3>📋 Complete Deidentified Claims Database</h3>
-            <p><strong>Enhanced Features:</strong> This viewer provides complete access to ALL deidentified claims data with detailed viewing options, structured data analysis, and comprehensive JSON exploration capabilities.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        deidentified_data = safe_get(results, 'deidentified_data', {})
-        api_outputs = safe_get(results, 'api_outputs', {})
-        
-        if deidentified_data or api_outputs:
-            # Enhanced tabs including MCID
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "🏥 Medical Claims Details", 
-                "💊 Pharmacy Claims Details", 
-                "🆔 MCID Consumer Data",
-                "📊 Complete JSON Explorer"
-            ])
-            
-            with tab1:
-                medical_data = safe_get(deidentified_data, 'medical', {})
-                if medical_data and not medical_data.get('error'):
-                    st.markdown("### 🏥 Enhanced Medical Claims Analysis")
-                    
-                    # Patient demographics
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Patient Age", medical_data.get('src_mbr_age', 'Unknown'))
-                    with col2:
-                        st.metric("ZIP Code", medical_data.get('src_mbr_zip_cd', 'Unknown'))
-                    with col3:
-                        deident_time = medical_data.get('deidentification_timestamp', '')
-                        if deident_time:
-                            try:
-                                formatted_time = datetime.fromisoformat(deident_time.replace('Z', '+00:00')).strftime('%m/%d/%Y %H:%M')
-                                st.metric("Deidentified", formatted_time)
-                            except:
-                                st.metric("Deidentified", "Recently")
-                        else:
-                            st.metric("Deidentified", "Unknown")
-                    
-                    # Medical claims data exploration
-                    medical_claims_data = medical_data.get('medical_claims_data', {})
-                    if medical_claims_data:
-                        with st.expander("🔍 Explore Medical Claims JSON Structure", expanded=False):
-                            st.json(medical_claims_data)
-                else:
-                    st.error("❌ No medical claims data available")
-            
-            with tab2:
-                pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
-                if pharmacy_data and not pharmacy_data.get('error'):
-                    st.markdown("### 💊 Enhanced Pharmacy Claims Analysis")
-                    
-                    # Pharmacy processing details
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        data_type = pharmacy_data.get('data_type', 'Unknown')
-                        st.metric("Data Type", data_type)
-                    with col2:
-                        deident_time = pharmacy_data.get('deidentification_timestamp', '')
-                        if deident_time:
-                            try:
-                                formatted_time = datetime.fromisoformat(deident_time.replace('Z', '+00:00')).strftime('%m/%d/%Y %H:%M')
-                                st.metric("Processed", formatted_time)
-                            except:
-                                st.metric("Processed", "Recently")
-                        else:
-                            st.metric("Processed", "Unknown")
-                    with col3:
-                        masked_fields = pharmacy_data.get('name_fields_masked', [])
-                        st.metric("Fields Masked", len(masked_fields))
-                    
-                    # Pharmacy claims data
-                    pharmacy_claims_data = pharmacy_data.get('pharmacy_claims_data', {})
-                    if pharmacy_claims_data:
-                        with st.expander("🔍 Explore Pharmacy Claims JSON Structure", expanded=False):
-                            st.json(pharmacy_claims_data)
-                else:
-                    st.error("❌ No pharmacy claims data available")
-            
-            with tab3:
-                # Enhanced MCID data display
-                mcid_data = safe_get(api_outputs, 'mcid', {})
-                display_enhanced_mcid_data(mcid_data)
-            
-            with tab4:
-                st.markdown("### 🔍 Complete JSON Data Explorer")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("#### 🏥 Medical + Pharmacy Data")
-                    if deidentified_data:
-                        with st.expander("Expand Deidentified Data JSON", expanded=False):
-                            st.json(deidentified_data)
-                    else:
-                        st.warning("No deidentified data available")
-                
-                with col2:
-                    st.markdown("#### 🆔 MCID + API Outputs")
-                    if api_outputs:
-                        with st.expander("Expand API Outputs JSON", expanded=False):
-                            st.json(api_outputs)
-                    else:
-                        st.warning("No API outputs available")
-        else:
-            st.error("❌ No claims data available for display")
-
-    # Additional sections would follow the same enhanced pattern...
-    # [Other sections like batch extraction, entity extraction, etc.]
-
-# Enhanced Footer
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #666; margin: 2rem 0;">
-    🔬 Deep Research Health Agent v2.0 | 
-    <span class="enhanced-badge" style="margin: 0;">⚡ LangGraph Powered</span>
-    <span class="enhanced-badge" style="margin: 0;">🚀 Fast Processing</span>
-    <span class="enhanced-badge" style="margin: 0;">📊 Interactive Graphs</span>
-    <span class="enhanced-badge" style="margin: 0;">🗂️ Complete Claims Viewer</span>
-    <span class="enhanced-badge" style="margin: 0;">🎯 Healthcare Analysis</span>
-</div>
-""", unsafe_allow_html=True)
+    def prepare_chunked_context(self, chat_context: Dict[str, Any]) -> str:
+        """Backward compatibility - uses enhanced clinical context"""
+        return self.prepare_enhanced_clinical_context(chat_context)
