@@ -1,1069 +1,1575 @@
+# Configure Streamlit page FIRST - before any other Streamlit commands
+import streamlit as st
+
+# Determine sidebar state based on chatbot readiness
+if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
+    sidebar_state = "expanded"
+else:
+    sidebar_state = "collapsed"
+
+st.set_page_config(
+    page_title="Deep Research Health Agent",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state=sidebar_state
+)
+
+# Now import other modules
 import json
-import re
-from datetime import datetime, date
-from typing import Dict, Any, List
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import sys
+import os
 import logging
- 
+from typing import Dict, Any, Optional
+import asyncio
+
+# Add current directory to path for importing the agent
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
 # Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
- 
-class HealthDataProcessor:
-    """Handles all data processing, extraction, and deidentification with enhanced code meanings"""
- 
-    def __init__(self, api_integrator=None):
-        self.api_integrator = api_integrator
-        logger.info("🔧 Enhanced HealthDataProcessor initialized with code meaning capabilities")
- 
-    def deidentify_medical_data(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Deidentify medical data with complete JSON processing - KEEP REAL ZIP CODE"""
-        try:
-            if not medical_data:
-                return {"error": "No medical data to deidentify"}
- 
-            # Calculate age
-            try:
-                dob_str = patient_data.get('date_of_birth', '')
-                if dob_str:
-                    dob = datetime.strptime(dob_str, '%Y-%m-%d').date()
-                    today = date.today()
-                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                else:
-                    age = "unknown"
-            except Exception as e:
-                logger.warning(f"Error calculating age: {e}")
-                age = "unknown"
- 
-            # Get real zip code from patient data (NO MASKING)
-            real_zip_code = patient_data.get('zip_code', 'unknown')
- 
-            # Process the entire JSON structure properly
-            if 'body' in medical_data:
-                raw_medical_data = medical_data['body']
-            else:
-                raw_medical_data = medical_data
- 
-            # Deep copy and process the entire JSON structure
-            deidentified_medical_data = self._deep_deidentify_json(raw_medical_data)
- 
-            # Additional masking for specific fields
-            deidentified_medical_data = self._mask_specific_fields(deidentified_medical_data)
- 
-            deidentified = {
-                "src_mbr_first_nm": "[MASKED_NAME]",
-                "src_mbr_last_nm": "[MASKED_NAME]",
-                "src_mbr_mid_init_nm": None,
-                "src_mbr_age": age,
-                "src_mbr_zip_cd": real_zip_code,  # KEEP REAL ZIP CODE
-                "medical_claims_data": deidentified_medical_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "medical_claims",
-                "zip_code_preserved": True  # Flag to indicate zip was preserved
-            }
- 
-            logger.info("✅ Successfully deidentified medical claims JSON structure - ZIP CODE PRESERVED")
-            return deidentified
- 
-        except Exception as e:
-            logger.error(f"Error in medical deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
 
-    def _mask_specific_fields(self, data: Any) -> Any:
-        """Mask specific sensitive fields in the data"""
-        if isinstance(data, dict):
-            masked_data = {}
-            for key, value in data.items():
-                # Mask specific name fields
-                if key.lower() in ['src_mbr_frst_nm', 'src_mbr_first_nm', 'src_mbr_last_nm', 'src_mvr_last_nm']:
-                    masked_data[key] = "[MASKED_NAME]"
-                elif isinstance(value, (dict, list)):
-                    masked_data[key] = self._mask_specific_fields(value)
-                else:
-                    masked_data[key] = value
-            return masked_data
-        elif isinstance(data, list):
-            return [self._mask_specific_fields(item) for item in data]
+# Import the Enhanced Modular LangGraph health analysis agent
+AGENT_AVAILABLE = False
+import_error = None
+HealthAnalysisAgent = None
+Config = None
+
+try:
+    from health_agent_core import HealthAnalysisAgent, Config
+    AGENT_AVAILABLE = True
+except ImportError as e:
+    AGENT_AVAILABLE = False
+    import_error = str(e)
+
+# Advanced CSS for sophisticated professional animation with DARK TEXT + CODE EXPLANATIONS
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+    font-family: 'Inter', sans-serif;
+}
+
+.main-header {
+    font-size: 2.8rem;
+    color: #2c3e50;
+    text-align: center;
+    margin-bottom: 2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+}
+
+.section-box {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid #e9ecef;
+    margin: 1rem 0;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.section-title {
+    font-size: 1.3rem;
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 0.5rem;
+}
+
+.status-success {
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #28a745;
+    margin: 1rem 0;
+}
+
+.status-error {
+    background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 4px solid #dc3545;
+    margin: 1rem 0;
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.metric-card {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    padding: 1rem;
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid #dee2e6;
+}
+
+.json-container {
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.code-explanation {
+    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
+    padding: 0.8rem;
+    border-radius: 6px;
+    border-left: 3px solid #28a745;
+    margin: 0.5rem 0;
+    font-size: 0.9rem;
+    font-style: italic;
+    color: #155724;
+}
+
+.code-container {
+    background: #f1f3f4;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: monospace;
+    font-weight: bold;
+    display: inline-block;
+    margin: 0.2rem;
+}
+
+/* Green Run Analysis Button */
+.stButton button[kind="primary"] {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+    padding: 0.75rem 2rem !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3) !important;
+    transition: all 0.3s ease !important;
+}
+
+.stButton button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #218838 0%, #1abc9c 100%) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4) !important;
+}
+
+/* Code Table Styling */
+.code-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+}
+
+.code-table th {
+    background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+    color: white;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    border: 1px solid #2980b9;
+}
+
+.code-table td {
+    padding: 10px 12px;
+    border: 1px solid #dee2e6;
+    background: #f8f9fa;
+}
+
+.code-table tr:nth-child(even) td {
+    background: #ffffff;
+}
+
+.code-table tr:hover td {
+    background: #e3f2fd;
+}
+
+.code-column {
+    font-family: monospace;
+    font-weight: bold;
+    color: #2c3e50;
+    background: #ecf0f1 !important;
+    border-left: 3px solid #3498db;
+}
+
+.meaning-column {
+    color: #34495e;
+    line-height: 1.4;
+}
+
+/* Advanced Professional Workflow Container with Lighter Background */
+.advanced-workflow-container {
+    background: linear-gradient(135deg, #e8f0fe 0%, #f3e5f5 25%, #e1f5fe 50%, #f1f8e9 75%, #fff8e1 100%);
+    padding: 3rem;
+    border-radius: 25px;
+    margin: 2rem 0;
+    color: #2c3e50;
+    box-shadow: 
+        0 25px 50px rgba(52, 152, 219, 0.2),
+        0 0 0 1px rgba(0, 0, 0, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    position: relative;
+    overflow: hidden;
+    border: 2px solid rgba(0, 0, 0, 0.1);
+}
+
+.advanced-workflow-container::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+    animation: rotate 20s linear infinite;
+    pointer-events: none;
+}
+
+.advanced-workflow-container::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(45deg, 
+        transparent 30%, 
+        rgba(255,255,255,0.4) 50%, 
+        transparent 70%);
+    animation: shimmer 3s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes rotate {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+    0%, 100% { transform: translateX(-100%) translateY(-100%); }
+    50% { transform: translateX(100%) translateY(100%); }
+}
+
+.workflow-header {
+    text-align: center;
+    margin-bottom: 3rem;
+    position: relative;
+    z-index: 10;
+}
+
+.workflow-title {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    text-shadow: 2px 2px 4px rgba(255,255,255,0.8);
+    color: #2c3e50;
+}
+
+.workflow-subtitle {
+    font-size: 1.2rem;
+    margin-bottom: 2rem;
+    font-weight: 500;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+    color: #34495e;
+}
+
+.progress-dashboard {
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 20px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    position: relative;
+    z-index: 10;
+    box-shadow: 
+        0 15px 35px rgba(0, 0, 0, 0.1),
+        0 5px 15px rgba(0, 0, 0, 0.05);
+}
+
+.progress-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.progress-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.8);
+    padding: 1.5rem;
+    border-radius: 15px;
+    text-align: center;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+    transition: left 0.5s ease;
+}
+
+.stat-card:hover::before {
+    left: 100%;
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
+}
+
+.stat-number {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+    margin-bottom: 0.5rem;
+}
+
+.stat-label {
+    font-size: 1rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #34495e;
+}
+
+.advanced-progress-container {
+    margin: 2rem 0;
+}
+
+.progress-bar-wrapper {
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 25px;
+    padding: 8px;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.progress-bar-fill {
+    height: 20px;
+    background: linear-gradient(90deg, #00ff87, #60efff, #ff6b9d, #ffd93d);
+    border-radius: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 5px 15px rgba(0, 255, 135, 0.4);
+}
+
+.progress-bar-fill::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, 
+        transparent, 
+        rgba(255,255,255,0.6), 
+        transparent);
+    animation: progress-shine 2s infinite;
+}
+
+@keyframes progress-shine {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.steps-section {
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 20px;
+    padding: 2rem;
+    backdrop-filter: blur(15px);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    position: relative;
+    z-index: 10;
+}
+
+.steps-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 2rem;
+    text-align: center;
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+}
+
+.step-item {
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 15px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.step-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 15px;
+    transition: all 0.3s ease;
+    z-index: -1;
+}
+
+.step-pending {
+    border-left: 4px solid #6c757d;
+}
+
+.step-running {
+    border-left: 4px solid #ffc107;
+    background: rgba(255, 193, 7, 0.15);
+    animation: pulse-step 2s infinite;
+    box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+}
+
+.step-completed {
+    border-left: 4px solid #28a745;
+    background: rgba(40, 167, 69, 0.15);
+    box-shadow: 0 10px 30px rgba(40, 167, 69, 0.2);
+}
+
+.step-error {
+    border-left: 4px solid #dc3545;
+    background: rgba(220, 53, 69, 0.15);
+    animation: shake-step 0.5s ease-in-out;
+}
+
+@keyframes pulse-step {
+    0%, 100% { 
+        transform: scale(1);
+        box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+    }
+    50% { 
+        transform: scale(1.02);
+        box-shadow: 0 15px 40px rgba(255, 193, 7, 0.5);
+    }
+}
+
+@keyframes shake-step {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-10px); }
+    75% { transform: translateX(10px); }
+}
+
+.step-content {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.step-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    position: relative;
+    transition: all 0.4s ease;
+    flex-shrink: 0;
+}
+
+.step-icon-pending {
+    background: rgba(108, 117, 125, 0.2);
+    color: #6c757d;
+    border: 2px solid #6c757d;
+}
+
+.step-icon-running {
+    background: linear-gradient(135deg, #ffc107, #ff8f00);
+    color: #000;
+    border: 2px solid #ffca28;
+    animation: spin-icon 2s linear infinite;
+    box-shadow: 0 0 25px rgba(255, 193, 7, 0.6);
+}
+
+.step-icon-completed {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    color: white;
+    border: 2px solid #34ce57;
+    box-shadow: 0 0 20px rgba(40, 167, 69, 0.5);
+}
+
+.step-icon-error {
+    background: linear-gradient(135deg, #dc3545, #ff6b6b);
+    color: white;
+    border: 2px solid #e74c3c;
+    box-shadow: 0 0 20px rgba(220, 53, 69, 0.5);
+}
+
+@keyframes spin-icon {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.step-details {
+    flex: 1;
+}
+
+.step-name {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+}
+
+.step-description {
+    font-size: 1rem;
+    line-height: 1.5;
+    color: #34495e;
+}
+
+.step-status {
+    padding: 0.5rem 1.5rem;
+    border-radius: 25px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    flex-shrink: 0;
+}
+
+.status-pending {
+    background: rgba(108, 117, 125, 0.2);
+    color: #6c757d;
+}
+
+.status-running {
+    background: linear-gradient(135deg, #ffc107, #ff8f00);
+    color: #000;
+    animation: pulse-status 1.5s infinite;
+}
+
+.status-completed {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    color: white;
+}
+
+.status-error {
+    background: linear-gradient(135deg, #dc3545, #ff6b6b);
+    color: white;
+}
+
+@keyframes pulse-status {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+.workflow-footer {
+    text-align: center;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+    position: relative;
+    z-index: 10;
+}
+
+.footer-status {
+    font-size: 1.2rem;
+    font-weight: 500;
+    color: #2c3e50;
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+    animation: breathe 3s infinite;
+}
+
+@keyframes breathe {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 1; }
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.css-1d391kg .css-10trblm {
+    color: white;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_running' not in st.session_state:
+        st.session_state.analysis_running = False
+    if 'agent' not in st.session_state:
+        st.session_state.agent = None
+    if 'config' not in st.session_state:
+        st.session_state.config = None
+    if 'chatbot_messages' not in st.session_state:
+        st.session_state.chatbot_messages = []
+    if 'chatbot_context' not in st.session_state:
+        st.session_state.chatbot_context = None
+    
+    # Section toggle states
+    if 'show_claims_data' not in st.session_state:
+        st.session_state.show_claims_data = False
+    if 'show_claims_extraction' not in st.session_state:
+        st.session_state.show_claims_extraction = False
+    if 'show_entity_extraction' not in st.session_state:
+        st.session_state.show_entity_extraction = False
+    if 'show_health_trajectory' not in st.session_state:
+        st.session_state.show_health_trajectory = False
+    if 'show_heart_attack' not in st.session_state:
+        st.session_state.show_heart_attack = False
+    
+    # Advanced workflow steps with enhanced details
+    if 'workflow_steps' not in st.session_state:
+        st.session_state.workflow_steps = [
+            {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡', 'emoji': '🌐'},
+            {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers while preserving clinical value', 'icon': '🔒', 'emoji': '🛡️'},
+            {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes, NDC numbers, and structured data', 'icon': '🔍', 'emoji': '⚙️'},
+            {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying conditions, medications, and risk factors', 'icon': '🎯', 'emoji': '🧬'},
+            {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing longitudinal health patterns and trends', 'icon': '📈', 'emoji': '📊'},
+            {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running advanced ML risk assessment algorithms', 'icon': '❤️', 'emoji': '🤖'},
+            {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up AI medical assistant with full context', 'icon': '🤖', 'emoji': '💬'}
+        ]
+    if 'current_step' not in st.session_state:
+        st.session_state.current_step = 0
+    if 'show_animation' not in st.session_state:
+        st.session_state.show_animation = False
+
+def reset_workflow():
+    """Reset workflow to initial state"""
+    st.session_state.workflow_steps = [
+        {'name': 'Fetching Claims Data', 'status': 'pending', 'description': 'Retrieving medical and pharmacy claims from secure APIs', 'icon': '📡', 'emoji': '🌐'},
+        {'name': 'Deidentifying Claims Data', 'status': 'pending', 'description': 'Removing personal identifiers while preserving clinical value', 'icon': '🔒', 'emoji': '🛡️'},
+        {'name': 'Extracting Claims Fields', 'status': 'pending', 'description': 'Parsing medical codes, NDC numbers, and structured data', 'icon': '🔍', 'emoji': '⚙️'},
+        {'name': 'Extracting Health Entities', 'status': 'pending', 'description': 'Identifying conditions, medications, and risk factors', 'icon': '🎯', 'emoji': '🧬'},
+        {'name': 'Analyzing Health Trajectory', 'status': 'pending', 'description': 'Computing longitudinal health patterns and trends', 'icon': '📈', 'emoji': '📊'},
+        {'name': 'Predicting Heart Attack Risk', 'status': 'pending', 'description': 'Running advanced ML risk assessment algorithms', 'icon': '❤️', 'emoji': '🤖'},
+        {'name': 'Initializing Assistant', 'status': 'pending', 'description': 'Setting up AI medical assistant with full context', 'icon': '🤖', 'emoji': '💬'}
+    ]
+    st.session_state.current_step = 0
+
+def display_advanced_professional_workflow():
+    """Display the most advanced and professional workflow animation"""
+    
+    # Calculate comprehensive statistics
+    total_steps = len(st.session_state.workflow_steps)
+    completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
+    running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
+    error_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'error')
+    progress_percentage = (completed_steps / total_steps) * 100
+    
+    # Main advanced container
+    st.markdown('<div class="advanced-workflow-container">', unsafe_allow_html=True)
+    
+    # Header Section
+    st.markdown("""
+    <div class="workflow-header">
+        <div class="workflow-title">🔬 Deep Research Analysis</div>
+        <div class="workflow-subtitle">Advanced Healthcare Data Processing Pipeline</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Progress Dashboard
+    st.markdown('<div class="progress-dashboard">', unsafe_allow_html=True)
+    st.markdown('<div class="progress-title">Real-Time Analytics Dashboard</div>', unsafe_allow_html=True)
+    
+    # Advanced stats grid using Streamlit columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{total_steps}</div>
+            <div class="stat-label">Total Steps</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{completed_steps}</div>
+            <div class="stat-label">Completed</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{running_steps}</div>
+            <div class="stat-label">Processing</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="stat-card">
+            <div class="stat-number">{progress_percentage:.0f}%</div>
+            <div class="stat-label">Progress</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Advanced Progress Bar
+    st.markdown(f"""
+    <div class="advanced-progress-container">
+        <div class="progress-bar-wrapper">
+            <div class="progress-bar-fill" style="width: {progress_percentage}%;"></div>
+        </div>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Steps Section
+    st.markdown('<div class="steps-section">', unsafe_allow_html=True)
+    st.markdown('<div class="steps-title">Workflow Execution Pipeline</div>', unsafe_allow_html=True)
+    
+    # Display each step with advanced styling
+    for i, step in enumerate(st.session_state.workflow_steps):
+        step_number = i + 1
+        name = step['name']
+        status = step['status']
+        description = step['description']
+        icon = step['icon']
+        emoji = step['emoji']
+        
+        # Determine CSS classes and content based on status
+        if status == 'pending':
+            step_class = "step-pending"
+            icon_class = "step-icon-pending"
+            status_class = "status-pending"
+            icon_content = str(step_number)
+            status_text = "Waiting"
+        elif status == 'running':
+            step_class = "step-running"
+            icon_class = "step-icon-running"
+            status_class = "status-running"
+            icon_content = "●"
+            status_text = "Processing"
+        elif status == 'completed':
+            step_class = "step-completed"
+            icon_class = "step-icon-completed"
+            status_class = "status-completed"
+            icon_content = "✓"
+            status_text = "Complete"
+        elif status == 'error':
+            step_class = "step-error"
+            icon_class = "step-icon-error"
+            status_class = "status-error"
+            icon_content = "✗"
+            status_text = "Failed"
         else:
-            return data
- 
-    def deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Deidentify pharmacy data with comprehensive name masking"""
-        try:
-            if not pharmacy_data:
-               return {"error": "No pharmacy data to deidentify"}
- 
-            # Process the entire JSON structure properly
-            if 'body' in pharmacy_data:
-                raw_pharmacy_data = pharmacy_data['body']
-            else:
-                raw_pharmacy_data = pharmacy_data
- 
-            # Deep copy and process the entire JSON structure with name masking
-            deidentified_pharmacy_data = self._deep_deidentify_pharmacy_json(raw_pharmacy_data)
- 
-            result = {
-                "pharmacy_claims_data": deidentified_pharmacy_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "pharmacy_claims",
-                "name_fields_masked": ["src_mbr_first_nm", "scr_mbr_last_nm"]
-            }
- 
-            logger.info("✅ Successfully deidentified complete pharmacy claims JSON structure with name masking")
-            return result
- 
-        except Exception as e:
-            logger.error(f"Error in pharmacy deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
- 
-    def _deep_deidentify_pharmacy_json(self, data: Any) -> Any:
-        """Deep deidentification of pharmacy JSON structure with specific name field masking"""
-        try:
-            if isinstance(data, dict):
-                deidentified_dict = {}
-                for key, value in data.items():
-                    # Mask specific name fields in pharmacy data
-                    if key.lower() in ['src_mbr_first_nm', 'src_mbr_frst_nm', 'scr_mbr_last_nm', 'src_mbr_last_nm']:
-                        deidentified_dict[key] = "[MASKED_NAME]"
-                        logger.info(f"🔒 Masked pharmacy name field: {key}")
-                    elif isinstance(value, (dict, list)):
-                        deidentified_dict[key] = self._deep_deidentify_pharmacy_json(value)
-                    elif isinstance(value, str):
-                        deidentified_dict[key] = self._deidentify_string(value)
-                    else:
-                        deidentified_dict[key] = value
-                return deidentified_dict
- 
-            elif isinstance(data, list):
-                return [self._deep_deidentify_pharmacy_json(item) for item in data]
- 
-            elif isinstance(data, str):
-                return self._deidentify_string(data)
- 
-            else:
-                return data
- 
-        except Exception as e:
-            logger.warning(f"Error in deep pharmacy deidentification: {e}")
-            return data
- 
-    def deidentify_mcid_data(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Deidentify MCID data with complete JSON processing"""
-        try:
-            if not mcid_data:
-                return {"error": "No MCID data to deidentify"}
- 
-            # Process the entire JSON structure properly
-            if 'body' in mcid_data:
-                raw_mcid_data = mcid_data['body']
-            else:
-                raw_mcid_data = mcid_data
- 
-            # Deep copy and process the entire JSON structure
-            deidentified_mcid_data = self._deep_deidentify_json(raw_mcid_data)
- 
-            result = {
-                "mcid_claims_data": deidentified_mcid_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "mcid_claims"
-            }
- 
-            logger.info("✅ Successfully deidentified complete MCID claims JSON structure")
-            return result
- 
-        except Exception as e:
-            logger.error(f"Error in MCID deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
- 
-    def _deep_deidentify_json(self, data: Any) -> Any:
-        """Deep deidentification of entire JSON structure"""
-        try:
-            if isinstance(data, dict):
-                deidentified_dict = {}
-                for key, value in data.items():
-                    clean_key = self._deidentify_string(key) if isinstance(key, str) else key
-                    deidentified_dict[clean_key] = self._deep_deidentify_json(value)
-                return deidentified_dict
- 
-            elif isinstance(data, list):
-                return [self._deep_deidentify_json(item) for item in data]
- 
-            elif isinstance(data, str):
-                return self._deidentify_string(data)
- 
-            else:
-                return data
- 
-        except Exception as e:
-            logger.warning(f"Error in deep deidentification: {e}")
-            return data
- 
-    def _deidentify_string(self, data: str) -> str:
-        """Enhanced string deidentification"""
-        try:
-            if not isinstance(data, str) or not data.strip():
-                return data
- 
-            deidentified = str(data)
- 
-            # Remove common PII patterns
-            deidentified = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[SSN_MASKED]', deidentified)
-            deidentified = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[PHONE_MASKED]', deidentified)
-            deidentified = re.sub(r'\(\d{3}\)\s?\d{3}[-.]?\d{4}', '[PHONE_MASKED]', deidentified)
-            deidentified = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL_MASKED]', deidentified)
-            deidentified = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', '[NAME_MASKED]', deidentified)
-            deidentified = re.sub(r'\b\d+\s+[A-Za-z\s]+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd)\b', '[ADDRESS_MASKED]', deidentified, flags=re.IGNORECASE)
-            deidentified = re.sub(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b', '[CARD_MASKED]', deidentified)
-            deidentified = re.sub(r'\bDOB:?\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', 'DOB: [DATE_MASKED]', deidentified, flags=re.IGNORECASE)
- 
-            return deidentified
- 
-        except Exception as e:
-            logger.warning(f"Error deidentifying string: {e}")
-            return data
-
-    def extract_medical_fields(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced extraction with LLM-generated code meanings for medical fields"""
-        extraction_result = {
-            "hlth_srvc_records": [],
-            "extraction_summary": {
-                "total_hlth_srvc_records": 0,
-                "total_diagnosis_codes": 0,
-                "unique_service_codes": set(),
-                "unique_diagnosis_codes": set()
-            },
-            "code_meanings_added": False,
-            "llm_call_status": "pending"
-        }
- 
-        try:
-            logger.info("🔍 Starting enhanced medical field extraction with code meanings...")
- 
-            medical_data = deidentified_medical.get("medical_claims_data", {})
-            if not medical_data:
-                logger.warning("No medical claims data found in deidentified medical data")
-                return extraction_result
- 
-            # Step 1: Extract basic fields (same as before)
-            self._recursive_medical_extraction(medical_data, extraction_result)
- 
-            # Convert sets to lists for JSON serialization
-            extraction_result["extraction_summary"]["unique_service_codes"] = list(
-                extraction_result["extraction_summary"]["unique_service_codes"]
-            )
-            extraction_result["extraction_summary"]["unique_diagnosis_codes"] = list(
-                extraction_result["extraction_summary"]["unique_diagnosis_codes"]
-            )
- 
-            # Step 2: Get code meanings via LLM if API integrator is available
-            if self.api_integrator and extraction_result["hlth_srvc_records"]:
-                logger.info("🤖 Calling LLM to get medical code meanings...")
-                self._add_medical_code_meanings(extraction_result)
-                extraction_result["code_meanings_added"] = True
-                extraction_result["llm_call_status"] = "completed"
-            else:
-                extraction_result["llm_call_status"] = "skipped_no_api"
- 
-            logger.info(f"📋 Enhanced medical extraction completed: "
-                       f"{extraction_result['extraction_summary']['total_hlth_srvc_records']} health service records, "
-                       f"{extraction_result['extraction_summary']['total_diagnosis_codes']} diagnosis codes, "
-                       f"Code meanings: {extraction_result['code_meanings_added']}")
- 
-        except Exception as e:
-            logger.error(f"Error in enhanced medical field extraction: {e}")
-            extraction_result["error"] = f"Enhanced medical extraction failed: {str(e)}"
-            extraction_result["llm_call_status"] = "error"
- 
-        return extraction_result
-
-    def _add_medical_code_meanings(self, extraction_result: Dict[str, Any]):
-        """Add LLM-generated meanings for medical codes"""
-        try:
-            # Collect all unique codes
-            all_service_codes = set()
-            all_diagnosis_codes = set()
-            
-            for record in extraction_result["hlth_srvc_records"]:
-                if record.get("hlth_srvc_cd"):
-                    all_service_codes.add(record["hlth_srvc_cd"])
-                
-                for diag in record.get("diagnosis_codes", []):
-                    if diag.get("code"):
-                        all_diagnosis_codes.add(diag["code"])
-            
-            # Get meanings in batch from LLM
-            service_meanings = self._get_batch_code_meanings(list(all_service_codes), "medical_service")
-            diagnosis_meanings = self._get_batch_code_meanings(list(all_diagnosis_codes), "icd10_diagnosis")
-            
-            # Add meanings to records
-            for record in extraction_result["hlth_srvc_records"]:
-                # Add service code meaning
-                if record.get("hlth_srvc_cd") and record["hlth_srvc_cd"] in service_meanings:
-                    record["hlth_srvc_meaning"] = service_meanings[record["hlth_srvc_cd"]]
-                
-                # Add diagnosis code meanings
-                for diag in record.get("diagnosis_codes", []):
-                    if diag.get("code") and diag["code"] in diagnosis_meanings:
-                        diag["meaning"] = diagnosis_meanings[diag["code"]]
-            
-            # Store meanings in summary
-            extraction_result["code_meanings"] = {
-                "service_code_meanings": service_meanings,
-                "diagnosis_code_meanings": diagnosis_meanings,
-                "total_service_codes_explained": len(service_meanings),
-                "total_diagnosis_codes_explained": len(diagnosis_meanings)
-            }
-            
-            logger.info(f"✅ Added meanings for {len(service_meanings)} service codes and {len(diagnosis_meanings)} diagnosis codes")
-            
-        except Exception as e:
-            logger.error(f"Error adding medical code meanings: {e}")
-            extraction_result["code_meaning_error"] = str(e)
-
-    def extract_pharmacy_fields(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced extraction with LLM-generated meanings for pharmacy fields"""
-        extraction_result = {
-            "ndc_records": [],
-            "extraction_summary": {
-                "total_ndc_records": 0,
-                "unique_ndc_codes": set(),
-                "unique_label_names": set()
-            },
-            "code_meanings_added": False,
-            "llm_call_status": "pending"
-        }
- 
-        try:
-            logger.info("🔍 Starting enhanced pharmacy field extraction with medication meanings...")
- 
-            pharmacy_data = deidentified_pharmacy.get("pharmacy_claims_data", {})
-            if not pharmacy_data:
-                logger.warning("No pharmacy claims data found in deidentified pharmacy data")
-                return extraction_result
- 
-            # Step 1: Extract basic fields (same as before)
-            self._recursive_pharmacy_extraction(pharmacy_data, extraction_result)
- 
-            # Convert sets to lists for JSON serialization
-            extraction_result["extraction_summary"]["unique_ndc_codes"] = list(
-                extraction_result["extraction_summary"]["unique_ndc_codes"]
-            )
-            extraction_result["extraction_summary"]["unique_label_names"] = list(
-                extraction_result["extraction_summary"]["unique_label_names"]
-            )
- 
-            # Step 2: Get medication meanings via LLM if API integrator is available
-            if self.api_integrator and extraction_result["ndc_records"]:
-                logger.info("🤖 Calling LLM to get pharmacy/medication meanings...")
-                self._add_pharmacy_code_meanings(extraction_result)
-                extraction_result["code_meanings_added"] = True
-                extraction_result["llm_call_status"] = "completed"
-            else:
-                extraction_result["llm_call_status"] = "skipped_no_api"
- 
-            logger.info(f"💊 Enhanced pharmacy extraction completed: "
-                       f"{extraction_result['extraction_summary']['total_ndc_records']} NDC records, "
-                       f"Code meanings: {extraction_result['code_meanings_added']}")
- 
-        except Exception as e:
-            logger.error(f"Error in enhanced pharmacy field extraction: {e}")
-            extraction_result["error"] = f"Enhanced pharmacy extraction failed: {str(e)}"
-            extraction_result["llm_call_status"] = "error"
- 
-        return extraction_result
-
-    def _add_pharmacy_code_meanings(self, extraction_result: Dict[str, Any]):
-        """Add LLM-generated meanings for pharmacy codes and medications"""
-        try:
-            # Collect all unique codes and medications
-            all_ndc_codes = set()
-            all_medications = set()
-            
-            for record in extraction_result["ndc_records"]:
-                if record.get("ndc"):
-                    all_ndc_codes.add(record["ndc"])
-                if record.get("lbl_nm"):
-                    all_medications.add(record["lbl_nm"])
-            
-            # Get meanings in batch from LLM
-            ndc_meanings = self._get_batch_code_meanings(list(all_ndc_codes), "ndc_codes")
-            medication_meanings = self._get_batch_code_meanings(list(all_medications), "medications")
-            
-            # Add meanings to records
-            for record in extraction_result["ndc_records"]:
-                # Add NDC code meaning
-                if record.get("ndc") and record["ndc"] in ndc_meanings:
-                    record["ndc_meaning"] = ndc_meanings[record["ndc"]]
-                
-                # Add medication meaning
-                if record.get("lbl_nm") and record["lbl_nm"] in medication_meanings:
-                    record["medication_meaning"] = medication_meanings[record["lbl_nm"]]
-            
-            # Store meanings in summary
-            extraction_result["code_meanings"] = {
-                "ndc_code_meanings": ndc_meanings,
-                "medication_meanings": medication_meanings,
-                "total_ndc_codes_explained": len(ndc_meanings),
-                "total_medications_explained": len(medication_meanings)
-            }
-            
-            logger.info(f"✅ Added meanings for {len(ndc_meanings)} NDC codes and {len(medication_meanings)} medications")
-            
-        except Exception as e:
-            logger.error(f"Error adding pharmacy code meanings: {e}")
-            extraction_result["code_meaning_error"] = str(e)
-
-    def _get_batch_code_meanings(self, codes: List[str], code_type: str) -> Dict[str, str]:
-        """Get meanings for a batch of codes in a single LLM call"""
-        if not codes or not self.api_integrator:
-            return {}
+            step_class = "step-pending"
+            icon_class = "step-icon-pending"
+            status_class = "status-pending"
+            icon_content = str(step_number)
+            status_text = "Waiting"
         
+        # Create the step item
+        st.markdown(f"""
+        <div class="step-item {step_class}">
+            <div class="step-content">
+                <div class="step-icon {icon_class}">
+                    {icon_content}
+                </div>
+                <div class="step-details">
+                    <div class="step-name">{icon} {name} {emoji}</div>
+                    <div class="step-description">{description}</div>
+                </div>
+                <div class="step-status {status_class}">
+                    {status_text}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)  # Close steps-section
+    
+    # Advanced Footer with dynamic status
+    if running_steps > 0:
+        current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
+        status_message = f"🔄 Currently executing: {current_step_name}"
+    elif completed_steps == total_steps:
+        status_message = "🎉 All workflow steps completed successfully!"
+    elif error_steps > 0:
+        status_message = f"⚠️ {error_steps} step(s) encountered errors"
+    else:
+        status_message = "⏳ Comprehensive healthcare data analysis in progress..."
+    
+    st.markdown(f"""
+    <div class="workflow-footer">
+        <div class="footer-status">{status_message}</div>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """Safely get a value from a dictionary"""
+    try:
+        return data.get(key, default) if data else default
+    except:
+        return default
+
+def safe_str(value: Any) -> str:
+    """Safely convert any value to string"""
+    try:
+        return str(value) if value is not None else "unknown"
+    except:
+        return "unknown"
+
+def safe_json_dumps(data: Any, default: str = "{}") -> str:
+    """Safely convert data to JSON string"""
+    try:
+        return json.dumps(data, indent=2) if data else default
+    except Exception as e:
+        return f'{{"error": "JSON serialization failed: {str(e)}"}}'
+
+def calculate_age(birth_date):
+    """Calculate age from birth date"""
+    if not birth_date:
+        return None
+    
+    today = datetime.now().date()
+    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return age
+
+def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate patient data and return validation status and errors"""
+    errors = []
+    required_fields = {
+        'first_name': 'First Name',
+        'last_name': 'Last Name', 
+        'ssn': 'SSN',
+        'date_of_birth': 'Date of Birth',
+        'gender': 'Gender',
+        'zip_code': 'Zip Code'
+    }
+    
+    for field, display_name in required_fields.items():
+        if not data.get(field):
+            errors.append(f"{display_name} is required")
+        elif field == 'ssn' and len(str(data[field])) < 9:
+            errors.append("SSN must be at least 9 digits")
+        elif field == 'zip_code' and len(str(data[field])) < 5:
+            errors.append("Zip code must be at least 5 digits")
+    
+    if data.get('date_of_birth'):
         try:
-            # Limit batch size to avoid token limits
-            max_batch_size = 20
-            if len(codes) > max_batch_size:
-                codes = codes[:max_batch_size]
-                logger.info(f"Limiting batch to {max_batch_size} codes to avoid token limits")
+            birth_date = datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date()
+            age = calculate_age(birth_date)
             
-            # Create prompt based on code type
-            if code_type == "medical_service":
-                prompt = self._create_service_code_batch_prompt(codes)
-            elif code_type == "icd10_diagnosis":
-                prompt = self._create_diagnosis_code_batch_prompt(codes)
-            elif code_type == "ndc_codes":
-                prompt = self._create_ndc_batch_prompt(codes)
-            elif code_type == "medications":
-                prompt = self._create_medication_batch_prompt(codes)
-            else:
-                logger.error(f"Unknown code type: {code_type}")
-                return {}
-            
-            # Call LLM
-            response = self.api_integrator.call_llm(prompt)
-            
-            if response and not response.startswith("Error"):
-                # Parse response to extract meanings
-                return self._parse_batch_meanings_response(response, codes)
-            else:
-                logger.error(f"LLM call failed for {code_type}: {response}")
-                return {}
-                
-        except Exception as e:
-            logger.error(f"Error getting batch meanings for {code_type}: {e}")
-            return {}
+            if age and age > 150:
+                errors.append("Age cannot be greater than 150 years")
+            elif age and age < 0:
+                errors.append("Date of birth cannot be in the future")
+        except:
+            errors.append("Invalid date format")
+    
+    return len(errors) == 0, errors
 
-    def _create_service_code_batch_prompt(self, service_codes: List[str]) -> str:
-        """Create prompt for batch service code explanations"""
-        codes_list = ", ".join(service_codes)
-        return f"""You are a medical coding expert. Provide brief explanations for these healthcare service codes.
+def display_code_meanings_table(codes_with_meanings: Dict[str, str], title: str, code_column_name: str):
+    """Display code meanings in a table format"""
+    if not codes_with_meanings:
+        st.warning(f"No {title.lower()} available")
+        return
+    
+    st.markdown(f"**{title}**")
+    
+    # Create HTML table
+    table_html = f"""
+    <table class="code-table">
+        <thead>
+            <tr>
+                <th>{code_column_name}</th>
+                <th>Meaning</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    
+    for code, meaning in codes_with_meanings.items():
+        table_html += f"""
+            <tr>
+                <td class="code-column">{code}</td>
+                <td class="meaning-column">{meaning}</td>
+            </tr>
+        """
+    
+    table_html += """
+        </tbody>
+    </table>
+    """
+    
+    st.markdown(table_html, unsafe_allow_html=True)
 
-HEALTHCARE SERVICE CODES TO EXPLAIN:
-{codes_list}
-
-INSTRUCTIONS:
-- Provide 1-2 sentence explanations for each code
-- Focus on what medical service/procedure each code represents
-- Use clear, professional medical language
-- Format as: CODE: explanation
-
-RESPONSE FORMAT:
-99213: Office visit for established patient, moderate complexity
-80053: Comprehensive metabolic panel blood test
-[continue for each code]
-
-EXPLAIN THESE SERVICE CODES:
-{codes_list}"""
-
-    def _create_diagnosis_code_batch_prompt(self, diagnosis_codes: List[str]) -> str:
-        """Create prompt for batch diagnosis code explanations"""
-        codes_list = ", ".join(diagnosis_codes)
-        return f"""You are a medical coding expert specializing in ICD-10 diagnosis codes. Provide brief explanations for these diagnosis codes.
-
-ICD-10 DIAGNOSIS CODES TO EXPLAIN:
-{codes_list}
-
-INSTRUCTIONS:
-- Provide 1-2 sentence explanations for each ICD-10 code
-- Focus on what medical condition each code represents
-- Use clear, professional medical language
-- Include severity/specificity when relevant
-- Format as: CODE: explanation
-
-RESPONSE FORMAT:
-E11.9: Type 2 diabetes mellitus without complications
-I10: Essential hypertension (high blood pressure)
-[continue for each code]
-
-EXPLAIN THESE ICD-10 CODES:
-{codes_list}"""
-
-    def _create_ndc_batch_prompt(self, ndc_codes: List[str]) -> str:
-        """Create prompt for batch NDC code explanations"""
-        codes_list = ", ".join(ndc_codes)
-        return f"""You are a pharmacy expert specializing in NDC (National Drug Code) identification. Provide brief explanations for these NDC codes.
-
-NDC CODES TO EXPLAIN:
-{codes_list}
-
-INSTRUCTIONS:
-- Provide 1-2 sentence explanations for each NDC code
-- Focus on what medication/drug product each NDC represents
-- Include generic name, strength, and dosage form when possible
-- Use clear, professional pharmaceutical language
-- Format as: NDC: explanation
-
-RESPONSE FORMAT:
-0781-1506-10: Metformin HCl 500mg tablets, used for Type 2 diabetes management
-0173-0687-02: Amlodipine 5mg tablets, calcium channel blocker for hypertension
-[continue for each code]
-
-EXPLAIN THESE NDC CODES:
-{codes_list}"""
-
-    def _create_medication_batch_prompt(self, medications: List[str]) -> str:
-        """Create prompt for batch medication explanations"""
-        meds_list = ", ".join(medications)
-        return f"""You are a clinical pharmacist. Provide brief explanations for these medications focusing on their therapeutic use.
-
-MEDICATIONS TO EXPLAIN:
-{meds_list}
-
-INSTRUCTIONS:
-- Provide 1-2 sentence explanations for each medication
-- Focus on primary therapeutic use and mechanism of action
-- Include what conditions they treat
-- Use clear, professional language
-- Format as: MEDICATION: explanation
-
-RESPONSE FORMAT:
-METFORMIN HCL 500 MG: Oral antidiabetic medication that improves insulin sensitivity, first-line treatment for Type 2 diabetes
-AMLODIPINE 5 MG: Calcium channel blocker that relaxes blood vessels, used to treat hypertension and angina
-[continue for each medication]
-
-EXPLAIN THESE MEDICATIONS:
-{meds_list}"""
-
-    def _parse_batch_meanings_response(self, response: str, codes: List[str]) -> Dict[str, str]:
-        """Parse LLM response to extract code meanings"""
-        meanings = {}
+def display_enhanced_medical_extraction(structured_extractions):
+    """Display medical extraction with code meanings tables"""
+    medical_extraction = safe_get(structured_extractions, 'medical', {})
+    if medical_extraction and not medical_extraction.get('error'):
+        extraction_summary = safe_get(medical_extraction, 'extraction_summary', {})
         
-        try:
-            lines = response.strip().split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                if ':' in line:
-                    # Split on first colon
-                    parts = line.split(':', 1)
-                    if len(parts) == 2:
-                        code = parts[0].strip()
-                        meaning = parts[1].strip()
-                        
-                        # Match against input codes (case insensitive)
-                        for input_code in codes:
-                            if code.upper() == input_code.upper():
-                                meanings[input_code] = meaning
-                                break
-            
-            logger.info(f"Successfully parsed {len(meanings)} code meanings from LLM response")
-            return meanings
-            
-        except Exception as e:
-            logger.error(f"Error parsing batch meanings response: {e}")
-            return {}
-
-    def _recursive_medical_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
-        """Recursively search for medical fields in nested data structures"""
-        if isinstance(data, dict):
-            current_record = {}
- 
-            # Extract health service code
-            if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
-                current_record["hlth_srvc_cd"] = data["hlth_srvc_cd"]
-                result["extraction_summary"]["unique_service_codes"].add(str(data["hlth_srvc_cd"]))
- 
-            # Extract claim received date
-            if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
-                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
- 
-            diagnosis_codes = []
- 
-            # Handle comma-separated diagnosis codes in diag_1_50_cd field
-            if "diag_1_50_cd" in data and data["diag_1_50_cd"]:
-                diag_value = str(data["diag_1_50_cd"]).strip()
-                if diag_value and diag_value.lower() not in ['null', 'none', '']:
-                    # Split by comma and process each diagnosis code
-                    individual_codes = [code.strip() for code in diag_value.split(',') if code.strip()]
-                    for i, code in enumerate(individual_codes, 1):
-                        if code and code.lower() not in ['null', 'none', '']:
-                            diagnosis_codes.append({
-                                "code": code,
-                                "position": i,
-                                "source": "diag_1_50_cd (comma-separated)"
-                            })
-                            result["extraction_summary"]["unique_diagnosis_codes"].add(code)
- 
-            # Also handle individual diagnosis fields (diag_1_cd, diag_2_cd, etc.) for backwards compatibility
-            for i in range(1, 51):
-                diag_key = f"diag_{i}_cd"
-                if diag_key in data and data[diag_key]:
-                    diag_code = str(data[diag_key]).strip()
-                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
-                        diagnosis_codes.append({
-                            "code": diag_code,
-                            "position": i,
-                            "source": f"individual field ({diag_key})"
-                        })
-                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
- 
-            if diagnosis_codes:
-                current_record["diagnosis_codes"] = diagnosis_codes
-                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
- 
-            if current_record:
-                current_record["data_path"] = path
-                result["hlth_srvc_records"].append(current_record)
-                result["extraction_summary"]["total_hlth_srvc_records"] += 1
- 
-            # Continue recursive search
-            for key, value in data.items():
-                new_path = f"{path}.{key}" if path else key
-                self._recursive_medical_extraction(value, result, new_path)
- 
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                new_path = f"{path}[{i}]" if path else f"[{i}]"
-                self._recursive_medical_extraction(item, result, new_path)
-
-    def _recursive_pharmacy_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
-        """Recursively search for pharmacy fields in nested data structures"""
-        if isinstance(data, dict):
-            current_record = {}
- 
-            # Look for NDC fields with various naming conventions
-            ndc_found = False
-            for key in data:
-                if key.lower() in ['ndc', 'ndc_code', 'ndc_number', 'national_drug_code']:
-                    current_record["ndc"] = data[key]
-                    result["extraction_summary"]["unique_ndc_codes"].add(str(data[key]))
-                    ndc_found = True
-                    break
- 
-            # Look for label name fields with various naming conventions
-            label_found = False
-            for key in data:
-                if key.lower() in ['lbl_nm', 'label_name', 'drug_name', 'medication_name', 'product_name']:
-                    current_record["lbl_nm"] = data[key]
-                    result["extraction_summary"]["unique_label_names"].add(str(data[key]))
-                    label_found = True
-                    break
- 
-            # Extract prescription filled date
-            if "rx_filled_dt" in data and data["rx_filled_dt"]:
-                current_record["rx_filled_dt"] = data["rx_filled_dt"]
- 
-            if ndc_found or label_found or "rx_filled_dt" in current_record:
-                current_record["data_path"] = path
-                result["ndc_records"].append(current_record)
-                result["extraction_summary"]["total_ndc_records"] += 1
- 
-            # Continue recursive search
-            for key, value in data.items():
-                new_path = f"{path}.{key}" if path else key
-                self._recursive_pharmacy_extraction(value, result, new_path)
- 
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                new_path = f"{path}[{i}]" if path else f"[{i}]"
-                self._recursive_pharmacy_extraction(item, result, new_path)
-
-    def extract_health_entities_enhanced(self, pharmacy_data: Dict[str, Any],
-                                        pharmacy_extraction: Dict[str, Any],
-                                        medical_extraction: Dict[str, Any],
-                                        patient_data: Dict[str, Any] = None,
-                                        api_integrator = None) -> Dict[str, Any]:
-        """Enhanced health entity extraction using ONLY extracted data WITH CODE MEANINGS"""
-        entities = {
-            "diabetics": "no",
-            "age_group": "unknown",
-            "age": None,
-            "smoking": "no",
-            "alcohol": "no",
-            "blood_pressure": "unknown",
-            "analysis_details": [],
-            "medical_conditions": [],
-            "medications_identified": [],
-            "llm_analysis": "not_performed",
-            "enhanced_with_code_meanings": False,
-            "analysis_method": "code_meanings_only"
-        }
- 
-        try:
-            # 1. Calculate age from date of birth
-            if patient_data and patient_data.get('date_of_birth'):
-                age, age_group = self.calculate_age_from_dob(patient_data['date_of_birth'])
-                if age is not None:
-                    entities["age"] = age
-                    entities["age_group"] = age_group
-                    entities["analysis_details"].append(f"Age calculated from DOB: {age} years ({age_group})")
- 
-            # 2. Check if extracted data has code meanings
-            has_medical_meanings = medical_extraction.get("code_meanings_added", False)
-            has_pharmacy_meanings = pharmacy_extraction.get("code_meanings_added", False)
-            
-            if has_medical_meanings or has_pharmacy_meanings:
-                entities["enhanced_with_code_meanings"] = True
-                entities["analysis_details"].append("Using enhanced extracted data with code meanings")
-            else:
-                entities["analysis_details"].append("WARNING: No code meanings available - analysis may be less accurate")
-            
-            # 3. Use ONLY LLM for entity extraction with enhanced data (NO FALLBACK KEYWORD METHODS)
-            if api_integrator:
-                llm_entities = self._extract_entities_with_enhanced_data(
-                    pharmacy_data, pharmacy_extraction, medical_extraction,
-                    patient_data, api_integrator
-                )
- 
-                if llm_entities:
-                    entities.update(llm_entities)
-                    entities["llm_analysis"] = "completed_with_enhanced_data"
-                    entities["analysis_details"].append("LLM entity extraction completed using code meanings - NO keyword fallback used")
+        st.markdown("**📊 Medical Claims Extraction Summary:**")
+        st.markdown(f"""
+        <div class="metric-grid">
+            <div class="metric-card">
+                <h3>{extraction_summary.get('total_hlth_srvc_records', 0)}</h3>
+                <p>Health Service Records</p>
+            </div>
+            <div class="metric-card">
+                <h3>{extraction_summary.get('total_diagnosis_codes', 0)}</h3>
+                <p>Diagnosis Codes</p>
+            </div>
+            <div class="metric-card">
+                <h3>{len(extraction_summary.get('unique_service_codes', []))}</h3>
+                <p>Unique Service Codes</p>
+            </div>
+            <div class="metric-card">
+                <h3>{len(extraction_summary.get('unique_diagnosis_codes', []))}</h3>
+                <p>Unique Diagnosis Codes</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Code meanings from the extraction
+        code_meanings = safe_get(medical_extraction, 'code_meanings', {})
+        service_code_meanings = safe_get(code_meanings, 'service_code_meanings', {})
+        diagnosis_code_meanings = safe_get(code_meanings, 'diagnosis_code_meanings', {})
+        
+        # Buttons for viewing code meanings tables
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📋 View All Service Codes with Meanings", key="view_service_codes"):
+                if service_code_meanings:
+                    display_code_meanings_table(
+                        service_code_meanings, 
+                        "🏥 Health Service Codes with Meanings", 
+                        "Service Code"
+                    )
                 else:
-                    entities["analysis_details"].append("LLM entity extraction failed - NO fallback analysis performed")
-                    entities["llm_analysis"] = "failed"
-            else:
-                entities["analysis_details"].append("No LLM available - entity extraction cannot be performed without API integrator")
-                entities["llm_analysis"] = "no_api_available"
- 
-            # 4. Extract medications for reference (with meanings if available)
-            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
-                for record in pharmacy_extraction["ndc_records"]:
-                    med_info = {
-                        "ndc": record.get("ndc", ""),
-                        "label_name": record.get("lbl_nm", ""),
-                        "path": record.get("data_path", "")
-                    }
+                    st.warning("No service code meanings available. Run analysis first to generate meanings.")
+        
+        with col2:
+            if st.button("🩺 View All Diagnosis Codes with Meanings", key="view_diagnosis_codes"):
+                if diagnosis_code_meanings:
+                    display_code_meanings_table(
+                        diagnosis_code_meanings, 
+                        "🔬 ICD-10 Diagnosis Codes with Meanings", 
+                        "ICD-10 Code"
+                    )
+                else:
+                    st.warning("No diagnosis code meanings available. Run analysis first to generate meanings.")
+        
+        # Display individual records
+        hlth_srvc_records = safe_get(medical_extraction, 'hlth_srvc_records', [])
+        if hlth_srvc_records:
+            st.markdown("**📋 Individual Medical Records:**")
+            
+            for i, record in enumerate(hlth_srvc_records, 1):
+                service_code = record.get('hlth_srvc_cd', 'N/A')
+                
+                with st.expander(f"Medical Record {i} - Service Code: {service_code}"):
+                    # Display service code
+                    if service_code != 'N/A':
+                        service_meaning = service_code_meanings.get(service_code, "Meaning not available")
+                        st.markdown(f"""
+                        <div style="margin: 0.5rem 0;">
+                            <span class="code-container">Service Code: {service_code}</span>
+                            <div class="code-explanation">
+                                💡 <strong>Meaning:</strong> {service_meaning}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     
-                    # Add meanings if available
-                    if record.get("ndc_meaning"):
-                        med_info["ndc_meaning"] = record["ndc_meaning"]
-                    if record.get("medication_meaning"):
-                        med_info["medication_meaning"] = record["medication_meaning"]
+                    st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
                     
-                    entities["medications_identified"].append(med_info)
- 
-            entities["analysis_details"].append(f"Enhanced analysis sources: {len(pharmacy_extraction.get('ndc_records', []))} pharmacy records with meanings, {len(medical_extraction.get('hlth_srvc_records', []))} medical records with meanings")
- 
-        except Exception as e:
-            logger.error(f"Error in enhanced entity extraction with code meanings: {e}")
-            entities["analysis_details"].append(f"Error in entity extraction: {str(e)}")
- 
-        return entities
+                    # Display claim received date if available
+                    clm_rcvd_dt = record.get('clm_rcvd_dt')
+                    if clm_rcvd_dt:
+                        st.write(f"**Claim Received Date:** `{clm_rcvd_dt}`")
+                    
+                    # Display diagnosis codes
+                    diagnosis_codes = record.get('diagnosis_codes', [])
+                    if diagnosis_codes:
+                        st.write("**Diagnosis Codes:**")
+                        
+                        for idx, diag in enumerate(diagnosis_codes, 1):
+                            diag_code = diag.get('code', 'N/A')
+                            source_info = f" (from {diag.get('source', 'individual field')})" if diag.get('source') else ""
+                            diag_meaning = diagnosis_code_meanings.get(diag_code, "Meaning not available")
+                            
+                            st.write(f"**{idx}. Diagnosis Code {source_info}:**")
+                            st.markdown(f"""
+                            <div style="margin: 0.5rem 0;">
+                                <span class="code-container">ICD-10: {diag_code}</span>
+                                <div class="code-explanation">
+                                    💡 <strong>Meaning:</strong> {diag_meaning}
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+    else:
+        st.warning("No medical claims extraction data available")
 
-    def _extract_entities_with_enhanced_data(self, pharmacy_data: Dict[str, Any],
-                                           pharmacy_extraction: Dict[str, Any],
-                                           medical_extraction: Dict[str, Any],
-                                           patient_data: Dict[str, Any],
-                                           api_integrator) -> Dict[str, Any]:
-        """Use LLM to extract health entities from enhanced extracted data WITH CODE MEANINGS - NO KEYWORD MATCHING"""
-        try:
-            # Create enhanced prompt using ONLY extracted data with meanings
-            entity_prompt = f"""You are a medical AI expert analyzing patient claims data with comprehensive code meanings.
+def display_enhanced_pharmacy_extraction(structured_extractions):
+    """Display pharmacy extraction with code meanings tables"""
+    pharmacy_extraction = safe_get(structured_extractions, 'pharmacy', {})
+    if pharmacy_extraction and not pharmacy_extraction.get('error'):
+        extraction_summary = safe_get(pharmacy_extraction, 'extraction_summary', {})
+        
+        st.markdown("**📊 Pharmacy Claims Extraction Summary:**")
+        st.markdown(f"""
+        <div class="metric-grid">
+            <div class="metric-card">
+                <h3>{extraction_summary.get('total_ndc_records', 0)}</h3>
+                <p>NDC Records</p>
+            </div>
+            <div class="metric-card">
+                <h3>{len(extraction_summary.get('unique_ndc_codes', []))}</h3>
+                <p>Unique NDC Codes</p>
+            </div>
+            <div class="metric-card">
+                <h3>{len(extraction_summary.get('unique_label_names', []))}</h3>
+                <p>Unique Medications</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Code meanings from the extraction
+        code_meanings = safe_get(pharmacy_extraction, 'code_meanings', {})
+        ndc_code_meanings = safe_get(code_meanings, 'ndc_code_meanings', {})
+        medication_meanings = safe_get(code_meanings, 'medication_meanings', {})
+        
+        # Buttons for viewing code meanings tables
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("💊 View All NDC Codes with Meanings", key="view_ndc_codes"):
+                if ndc_code_meanings:
+                    display_code_meanings_table(
+                        ndc_code_meanings, 
+                        "💊 NDC Codes with Meanings", 
+                        "NDC Code"
+                    )
+                else:
+                    st.warning("No NDC code meanings available. Run analysis first to generate meanings.")
+        
+        with col2:
+            if st.button("💉 View All Medications with Meanings", key="view_medications"):
+                if medication_meanings:
+                    display_code_meanings_table(
+                        medication_meanings, 
+                        "💉 Medications with Meanings", 
+                        "Medication Name"
+                    )
+                else:
+                    st.warning("No medication meanings available. Run analysis first to generate meanings.")
+        
+        # Display individual records
+        ndc_records = safe_get(pharmacy_extraction, 'ndc_records', [])
+        if ndc_records:
+            st.markdown("**💊 Individual Pharmacy Records:**")
+            
+            for i, record in enumerate(ndc_records, 1):
+                medication_name = record.get('lbl_nm', 'N/A')
+                ndc_code = record.get('ndc', 'N/A')
+                
+                with st.expander(f"Pharmacy Record {i} - {medication_name}"):
+                    # Display NDC code
+                    if ndc_code != 'N/A':
+                        ndc_meaning = ndc_code_meanings.get(ndc_code, "Meaning not available")
+                        st.markdown(f"""
+                        <div style="margin: 0.5rem 0;">
+                            <span class="code-container">NDC Code: {ndc_code}</span>
+                            <div class="code-explanation">
+                                💡 <strong>Meaning:</strong> {ndc_meaning}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Display medication
+                    if medication_name != 'N/A':
+                        medication_meaning = medication_meanings.get(medication_name, "Meaning not available")
+                        st.markdown(f"""
+                        <div style="margin: 0.5rem 0;">
+                            <span class="code-container">Medication: {medication_name}</span>
+                            <div class="code-explanation">
+                                💡 <strong>Meaning:</strong> {medication_meaning}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    st.write(f"**Data Path:** `{record.get('data_path', 'N/A')}`")
+                    
+                    # Show prescription date if available
+                    rx_filled_dt = record.get('rx_filled_dt')
+                    if rx_filled_dt:
+                        st.write(f"**Prescription Filled Date:** `{rx_filled_dt}`")
+    else:
+        st.warning("No pharmacy claims extraction data available")
 
-ENHANCED EXTRACTED MEDICAL DATA WITH CODE MEANINGS:
-{json.dumps(medical_extraction, indent=2)}
+# Initialize session state
+initialize_session_state()
 
-ENHANCED EXTRACTED PHARMACY DATA WITH CODE MEANINGS:
-{json.dumps(pharmacy_extraction, indent=2)}
+# Main Title
+st.markdown('<h1 class="main-header">🔬 Deep Research Health Agent</h1>', unsafe_allow_html=True)
 
-PATIENT INFO:
-- Gender: {patient_data.get("gender", "unknown")}
-- Age: {patient_data.get("calculated_age", "unknown")}
+# Display import status
+if not AGENT_AVAILABLE:
+    st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
+    st.stop()
 
-ANALYSIS INSTRUCTIONS:
-You have access to extracted medical and pharmacy data that includes:
-1. Medical service codes (hlth_srvc_cd) WITH their professional meanings
-2. ICD-10 diagnosis codes WITH their clinical meanings  
-3. NDC medication codes WITH their pharmaceutical meanings
-4. Medication names WITH their therapeutic explanations
-
-CRITICAL: Use ONLY the provided code meanings and explanations to make determinations. 
-Do NOT rely on simple keyword matching. Analyze the full medical context provided by the code meanings.
-
-COMPREHENSIVE MEDICAL ANALYSIS:
-
-For each condition, analyze the complete medical picture from code meanings:
-
-diabetics: "yes" or "no"
-- Analyze diagnosis code meanings for any form of diabetes mellitus
-- Analyze medication meanings for diabetes management (insulin, oral hypoglycemics, etc.)
-- Consider diabetes complications mentioned in code meanings
-- Look for comprehensive diabetes care patterns
-
-smoking: "yes" or "no"  
-- Analyze diagnosis code meanings for tobacco use disorders
-- Analyze medication meanings for smoking cessation treatments
-- Consider tobacco-related health complications mentioned
-- Look for comprehensive smoking cessation care
-
-alcohol: "yes" or "no"
-- Analyze diagnosis code meanings for alcohol use disorders
-- Analyze medication meanings for alcohol dependency treatments
-- Consider alcohol-related health complications mentioned
-- Look for comprehensive substance abuse care
-
-blood_pressure: "unknown", "managed", or "diagnosed"
-- "diagnosed": ICD-10 code meanings indicate hypertension diagnosis
-- "managed": Medication meanings indicate antihypertensive treatments
-- Analyze for hypertensive complications or related cardiovascular conditions
-- Consider comprehensive cardiovascular care patterns
-
-medical_conditions: Extract ALL conditions from comprehensive analysis
-
-RESPONSE FORMAT (JSON ONLY):
-{{
-    "diabetics": "yes/no",
-    "smoking": "yes/no", 
-    "alcohol": "yes/no",
-    "blood_pressure": "unknown/managed/diagnosed",
-    "medical_conditions": ["condition1", "condition2"],
-    "llm_reasoning": "Comprehensive analysis summary using all available code meanings",
-    "evidence_from_meanings": {{
-        "diabetes_evidence": ["specific code meanings that indicate diabetes"],
-        "bp_evidence": ["specific code meanings that indicate blood pressure issues"],
-        "smoking_evidence": ["specific code meanings that indicate smoking"],
-        "alcohol_evidence": ["specific code meanings that indicate alcohol use"]
-    }},
-    "analysis_method": "comprehensive_code_meanings_analysis"
-}}
-
-Provide your comprehensive medical analysis based ONLY on the code meanings provided:"""
- 
-            logger.info("🤖 Calling LLM for comprehensive entity extraction using code meanings only...")
- 
-            response = api_integrator.call_llm(entity_prompt)
- 
-            if response and not response.startswith("Error"):
-                try:
-                    # Clean and parse JSON response
-                    json_start = response.find('{')
-                    json_end = response.rfind('}') + 1
- 
-                    if json_start != -1 and json_end != -1:
-                        json_str = response[json_start:json_end]
-                        llm_entities = json.loads(json_str)
- 
-                        # Validate and clean the entities
-                        cleaned_entities = {
-                            "diabetics": str(llm_entities.get("diabetics", "no")).lower(),
-                            "smoking": str(llm_entities.get("smoking", "no")).lower(),
-                            "alcohol": str(llm_entities.get("alcohol", "no")).lower(),
-                            "blood_pressure": str(llm_entities.get("blood_pressure", "unknown")).lower(),
-                            "medical_conditions": llm_entities.get("medical_conditions", []),
-                            "llm_reasoning": llm_entities.get("llm_reasoning", "Comprehensive LLM analysis using code meanings"),
-                            "evidence_from_meanings": llm_entities.get("evidence_from_meanings", {}),
-                            "analysis_method": "comprehensive_code_meanings_analysis"
-                        }
- 
-                        logger.info(f"✅ Comprehensive LLM entity extraction successful using code meanings: {cleaned_entities}")
-                        return cleaned_entities
- 
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse comprehensive LLM JSON response: {e}")
-                    return None
+# SIDEBAR CHATBOT
+with st.sidebar:
+    if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
+        st.title("💬 Medical Assistant")
+        st.markdown("---")
+        
+        # Chat history at top
+        chat_container = st.container()
+        with chat_container:
+            if st.session_state.chatbot_messages:
+                for message in st.session_state.chatbot_messages:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
             else:
-                logger.error(f"Comprehensive LLM call failed: {response}")
-                return None
- 
-        except Exception as e:
-            logger.error(f"Error in comprehensive LLM entity extraction: {e}")
-            return None
+                st.info("👋 Hello! I can answer questions about the claims data analysis. Ask me anything!")
+                st.info("💡 **Special Feature:** Ask about heart attack risk and I'll provide both ML model predictions and comprehensive LLM analysis for comparison!")
+        
+        # Chat input at bottom (always visible)
+        st.markdown("---")
+        user_question = st.chat_input("Ask about the claims data...")
+        
+        # Handle chat input
+        if user_question:
+            # Add user message
+            st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
+            
+            # Get bot response
+            try:
+                with st.spinner("Processing..."):
+                    chatbot_response = st.session_state.agent.chat_with_data(
+                        user_question, 
+                        st.session_state.chatbot_context, 
+                        st.session_state.chatbot_messages
+                    )
+                
+                # Add assistant response
+                st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+        
+        # Clear chat button at bottom
+        if st.button("🗑️ Clear Chat History", use_container_width=True):
+            st.session_state.chatbot_messages = []
+            st.rerun()
+    
+    else:
+        # Show placeholder when chatbot is not ready
+        st.title("💬 Medical Assistant")
+        st.info("💤 Chatbot will be available after running health analysis")
+        st.markdown("---")
+        st.markdown("**Features:**")
+        st.markdown("• Answer questions about claims data")
+        st.markdown("• Analyze diagnoses and medications") 
+        st.markdown("• Heart attack risk analysis (ML + LLM comparison)")
+        st.markdown("• Extract specific dates and codes")
+        st.markdown("• Provide detailed medical insights")
 
-    def calculate_age_from_dob(self, date_of_birth: str) -> tuple[int, str]:
-        """Calculate age and age group from date of birth"""
+# 1. PATIENT INFORMATION BOX
+st.markdown("""
+<div class="section-box">
+    <div class="section-title">👤 Patient Information</div>
+</div>
+""", unsafe_allow_html=True)
+
+with st.container():
+    with st.form("patient_input_form"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            first_name = st.text_input("First Name *", value="")
+            last_name = st.text_input("Last Name *", value="")
+        
+        with col2:
+            ssn = st.text_input("SSN *", value="")
+            date_of_birth = st.date_input(
+                "Date of Birth *", 
+                value=datetime.now().date(),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date()
+            )
+        
+        with col3:
+            gender = st.selectbox("Gender *", ["F", "M"])
+            zip_code = st.text_input("Zip Code *", value="")
+        
+        # Show calculated age
+        if date_of_birth:
+            calculated_age = calculate_age(date_of_birth)
+            if calculated_age is not None:
+                st.info(f"📅 **Calculated Age:** {calculated_age} years old")
+        
+        # 2. RUN DEEP RESEARCH ANALYSIS BUTTON (GREEN)
+        submitted = st.form_submit_button(
+            "🔬 Run Deep Research Analysis", 
+            use_container_width=True,
+            disabled=st.session_state.analysis_running,
+            type="primary"
+        )
+
+# Advanced Animation container
+animation_container = st.empty()
+
+# Show advanced professional animation when running
+if st.session_state.analysis_running and st.session_state.show_animation:
+    with animation_container.container():
+        display_advanced_professional_workflow()
+
+# Run Deep Research Analysis
+if submitted and not st.session_state.analysis_running:
+    # Prepare patient data
+    patient_data = {
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "ssn": ssn.strip(),
+        "date_of_birth": date_of_birth.strftime("%Y-%m-%d"),
+        "gender": gender,
+        "zip_code": zip_code.strip()
+    }
+    
+    # Validate patient data
+    is_valid, validation_errors = validate_patient_data(patient_data)
+    
+    if not is_valid:
+        st.error("❌ Please fix the following errors:")
+        for error in validation_errors:
+            st.error(f"• {error}")
+    else:
+        # Initialize Health Agent
+        if st.session_state.agent is None:
+            try:
+                config = st.session_state.config or Config()
+                st.session_state.agent = HealthAnalysisAgent(config)
+                st.success("✅ Deep Research Health Agent initialized successfully")
+                        
+            except Exception as e:
+                st.error(f"❌ Failed to initialize Deep Research Health Agent: {str(e)}")
+                st.error("💡 Please check that all required modules are installed and services are running")
+                st.stop()
+        
+        # Start analysis with advanced professional workflow
+        st.session_state.analysis_running = True
+        st.session_state.show_animation = True
+        
+        # Reset workflow
+        reset_workflow()
+        
+        st.info("🔬 Starting Advanced Deep Research Analysis - Experience the sophisticated workflow:")
+        
         try:
-            if not date_of_birth:
-                return None, "unknown"
- 
-            dob = datetime.strptime(date_of_birth, '%Y-%m-%d').date()
-            today = date.today()
-            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
- 
-            if age < 18:
-                age_group = "pediatric"
-            elif age < 35:
-                age_group = "young_adult"
-            elif age < 50:
-                age_group = "adult"
-            elif age < 65:
-                age_group = "middle_aged"
+            # ADVANCED PROFESSIONAL STEP-BY-STEP EXECUTION
+            for step_idx in range(len(st.session_state.workflow_steps)):
+                st.session_state.current_step = step_idx + 1
+                
+                # Set current step to running
+                st.session_state.workflow_steps[step_idx]['status'] = 'running'
+                
+                # Update display with advanced professional animation
+                with animation_container.container():
+                    display_advanced_professional_workflow()
+                
+                # Simulate processing time for visual effect
+                time.sleep(2.5)  # Extended time to appreciate the advanced animations
+                
+                # Mark step as completed
+                st.session_state.workflow_steps[step_idx]['status'] = 'completed'
+                
+                # Update display to show completion
+                with animation_container.container():
+                    display_advanced_professional_workflow()
+                
+                # Brief pause before next step
+                time.sleep(0.8)
+            
+            # Execute actual analysis after animation
+            with st.spinner("🔬 Executing advanced deep research analysis..."):
+                results = st.session_state.agent.run_analysis(patient_data)
+            
+            # Store results
+            st.session_state.analysis_results = results
+            st.session_state.chatbot_context = results.get("chatbot_context", {})
+            
+            # Clear animation
+            animation_container.empty()
+            st.session_state.show_animation = False
+            
+            # Show completion
+            if results.get("success", False):
+                st.success("🎉 All advanced workflow steps completed successfully!")
+                st.markdown('<div class="status-success">✅ Advanced deep research analysis completed successfully!</div>', unsafe_allow_html=True)
+                
+                if results.get("chatbot_ready", False):
+                    st.success("💬 Advanced Medical Assistant is now available in the sidebar!")
+                    st.info("🎯 You can ask detailed questions about the comprehensive analysis results!")
+                    
+                    # Force sidebar to expand
+                    time.sleep(1)
+                    st.rerun()
             else:
-                age_group = "senior"
- 
-            return age, age_group
- 
+                st.warning("⚠️ Analysis completed with some issues.")
+                
         except Exception as e:
-            logger.warning(f"Error calculating age from date of birth: {e}")
-            return None, "unknown"
+            # Mark current step as error
+            if st.session_state.current_step > 0:
+                current_idx = st.session_state.current_step - 1
+                st.session_state.workflow_steps[current_idx]['status'] = 'error'
+            
+            st.error(f"❌ Advanced analysis failed: {str(e)}")
+            st.session_state.analysis_results = {
+                "success": False,
+                "error": str(e),
+                "patient_data": patient_data,
+                "errors": [str(e)]
+            }
+            animation_container.empty()
+        
+        finally:
+            st.session_state.analysis_running = False
+            st.session_state.show_animation = False
 
+# RESULTS SECTION - Only show when analysis is complete and not running
+if st.session_state.analysis_results and not st.session_state.analysis_running:
+    results = st.session_state.analysis_results
+    
+    # Add separator
+    st.markdown("---")
+    st.markdown("## 📊 Analysis Results")
+    
+    # Show errors if any
+    errors = safe_get(results, 'errors', [])
+    if errors:
+        st.markdown('<div class="status-error">❌ Analysis errors occurred</div>', unsafe_allow_html=True)
+        with st.expander("🐛 Debug Information"):
+            st.write("**Errors:**")
+            for error in errors:
+                st.write(f"• {error}")
 
+    # 3. CLAIMS DATA BUTTON (NOW INCLUDING MCID)
+    if st.button("📊 Claims Data", use_container_width=True, key="claims_data_btn"):
+        st.session_state.show_claims_data = not st.session_state.show_claims_data
+    
+    if st.session_state.show_claims_data:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📊 Deidentified Claims Data</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        deidentified_data = safe_get(results, 'deidentified_data', {})
+        api_outputs = safe_get(results, 'api_outputs', {})
+        
+        if deidentified_data or api_outputs:
+            # Updated tabs to include MCID
+            tab1, tab2, tab3 = st.tabs(["🏥 Medical Claims", "💊 Pharmacy Claims", "🆔 MCID Claims"])
+            
+            with tab1:
+                medical_data = safe_get(deidentified_data, 'medical', {})
+                if medical_data:
+                    st.markdown("**🏥 Deidentified Medical Claims Data:**")
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(medical_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.warning("No medical claims data available")
+            
+            with tab2:
+                pharmacy_data = safe_get(deidentified_data, 'pharmacy', {})
+                if pharmacy_data:
+                    st.markdown("**💊 Deidentified Pharmacy Claims Data:**")
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(pharmacy_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.warning("No pharmacy claims data available")
+            
+            with tab3:
+                # MCID data from API outputs
+                mcid_data = safe_get(api_outputs, 'mcid', {})
+                if mcid_data:
+                    st.markdown("**🆔 MCID (Member Consumer ID) Claims Data:**")
+                    st.markdown('<div class="json-container">', unsafe_allow_html=True)
+                    st.json(mcid_data)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Show MCID summary if available
+                    if mcid_data.get('status_code') == 200 and mcid_data.get('body'):
+                        mcid_body = mcid_data.get('body', {})
+                        st.markdown("**📋 MCID Search Summary:**")
+                        
+                        # Extract consumer information if available
+                        consumers = mcid_body.get('consumer', [])
+                        if consumers and len(consumers) > 0:
+                            consumer = consumers[0]
+                            st.write(f"**Consumer ID:** {consumer.get('consumerId', 'N/A')}")
+                            st.write(f"**Match Score:** {consumer.get('score', 'N/A')}")
+                            st.write(f"**Status:** {consumer.get('status', 'N/A')}")
+                        else:
+                            st.info("No consumer matches found in MCID search")
+                else:
+                    st.warning("No MCID claims data available")
 
-    # Keep existing isolated LLM methods for individual code explanations
-    def get_service_code_explanation_isolated(self, service_code: str) -> str:
-        """Get LLM explanation for health service code (1-2 lines) - ISOLATED"""
-        if not self.api_integrator or not service_code:
-            return "Explanation not available"
- 
-        try:
-            prompt = f"Explain healthcare service code '{service_code}' in 1-2 lines. What medical service or procedure does this code represent?"
- 
-            response = self.api_integrator.call_llm_isolated(
-                prompt,
-                "You are a medical coding expert. Provide brief, accurate explanations for healthcare codes in 1-2 lines."
-            )
- 
-            if response == "Explanation unavailable":
-                return "Explanation unavailable"
- 
-            lines = response.strip().split('\n')
-            return ' '.join(lines[:2]) if len(lines) > 1 else lines[0]
- 
-        except Exception as e:
-            logger.warning(f"Error getting isolated service code explanation: {e}")
-            return "Explanation unavailable"
+    # 4. CLAIMS DATA EXTRACTION BUTTON WITH CODE MEANINGS TABLES
+    if st.button("🔍 Claims Data Extraction", use_container_width=True, key="claims_extraction_btn"):
+        st.session_state.show_claims_extraction = not st.session_state.show_claims_extraction
+    
+    if st.session_state.show_claims_extraction:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🔍 Claims Data Extraction with Code Meanings</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        structured_extractions = safe_get(results, 'structured_extractions', {})
+        
+        if structured_extractions:
+            tab1, tab2 = st.tabs(["🏥 Medical Claims Extraction", "💊 Pharmacy Claims Extraction"])
+            
+            with tab1:
+                display_enhanced_medical_extraction(structured_extractions)
+            
+            with tab2:
+                display_enhanced_pharmacy_extraction(structured_extractions)
 
-    def get_diagnosis_code_explanation_isolated(self, diagnosis_code: str) -> str:
-        """Get LLM explanation for diagnosis code (1-2 lines) - ISOLATED"""
-        if not self.api_integrator or not diagnosis_code:
-            return "Explanation not available"
- 
-        try:
-            prompt = f"Explain ICD-10 diagnosis code '{diagnosis_code}' in 1-2 lines. What medical condition does this code represent?"
- 
-            response = self.api_integrator.call_llm_isolated(
-                prompt,
-                "You are a medical coding expert. Provide brief, accurate explanations for ICD-10 diagnosis codes in 1-2 lines."
-            )
- 
-            if response == "Explanation unavailable":
-                return "Explanation unavailable"
- 
-            lines = response.strip().split('\n')
-            return ' '.join(lines[:2]) if len(lines) > 1 else lines[0]
- 
-        except Exception as e:
-            logger.warning(f"Error getting isolated diagnosis code explanation: {e}")
-            return "Explanation unavailable"
+    # 5. ENHANCED ENTITY EXTRACTION BUTTON
+    if st.button("🎯 Enhanced Entity Extraction", use_container_width=True, key="entity_extraction_btn"):
+        st.session_state.show_entity_extraction = not st.session_state.show_entity_extraction
+    
+    if st.session_state.show_entity_extraction:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">🎯 Enhanced Entity Extraction</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        entity_extraction = safe_get(results, 'entity_extraction', {})
+        if entity_extraction:
+            # Entity cards
+            st.markdown(f"""
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <h3>🩺</h3>
+                    <p><strong>Diabetes</strong></p>
+                    <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>👥</h3>
+                    <p><strong>Age Group</strong></p>
+                    <h4>{entity_extraction.get('age_group', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🚬</h3>
+                    <p><strong>Smoking</strong></p>
+                    <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>🍷</h3>
+                    <p><strong>Alcohol</strong></p>
+                    <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
+                </div>
+                <div class="metric-card">
+                    <h3>💓</h3>
+                    <p><strong>Blood Pressure</strong></p>
+                    <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    def get_ndc_code_explanation_isolated(self, ndc_code: str) -> str:
-        """Get LLM explanation for NDC code (1-2 lines) - ISOLATED"""
-        if not self.api_integrator or not ndc_code:
-            return "Explanation not available"
- 
-        try:
-            prompt = f"Explain NDC code '{ndc_code}' in 1-2 lines. What medication or drug product does this NDC number represent?"
- 
-            response = self.api_integrator.call_llm_isolated(
-                prompt,
-                "You are a pharmacy expert. Provide brief, accurate explanations for NDC (National Drug Code) numbers in 1-2 lines."
-            )
- 
-            if response == "Explanation unavailable":
-                return "Explanation unavailable"
- 
-            lines = response.strip().split('\n')
-            return ' '.join(lines[:2]) if len(lines) > 1 else lines[0]
- 
-        except Exception as e:
-            logger.warning(f"Error getting isolated NDC code explanation: {e}")
-            return "Explanation unavailable"
+    # 6. HEALTH TRAJECTORY BUTTON
+    if st.button("📈 Health Trajectory", use_container_width=True, key="health_trajectory_btn"):
+        st.session_state.show_health_trajectory = not st.session_state.show_health_trajectory
+    
+    if st.session_state.show_health_trajectory:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">📈 Health Trajectory Analysis</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        health_trajectory = safe_get(results, 'health_trajectory', '')
+        if health_trajectory:
+            st.markdown(health_trajectory)
+        else:
+            st.warning("Health trajectory analysis not available")
 
-    def get_medication_explanation_isolated(self, medication_name: str) -> str:
-        """Get LLM explanation for medication/label name (1-2 lines) - ISOLATED"""
-        if not self.api_integrator or not medication_name:
-            return "Explanation not available"
- 
-        try:
-            prompt = f"Explain the medication '{medication_name}' in 1-2 lines. What is this drug used for and how does it work?"
- 
-            response = self.api_integrator.call_llm_isolated(
-                prompt,
-                "You are a pharmacist. Provide brief, accurate explanations for medications in 1-2 lines focusing on primary use and mechanism."
-            )
- 
-            if response == "Explanation unavailable":
-                return "Explanation unavailable"
- 
-            lines = response.strip().split('\n')
-            return ' '.join(lines[:2]) if len(lines) > 1 else lines[0]
- 
-        except Exception as e:
-            logger.warning(f"Error getting isolated medication explanation: {e}")
-            return "Explanation unavailable"
-
-    def prepare_chunked_context(self, chat_context: Dict[str, Any]) -> str:
-        """Prepare comprehensive context in chunks to avoid payload issues"""
-        try:
-            context_sections = []
- 
-            # 1. Patient Overview (small)
-            patient_overview = chat_context.get("patient_overview", {})
-            if patient_overview:
-                context_sections.append(f"PATIENT OVERVIEW:\n{json.dumps(patient_overview, indent=2)}")
- 
-            # 2. Deidentified Claims Data (chunked)
-            deidentified_medical = chat_context.get("deidentified_medical", {})
-            if deidentified_medical:
-                medical_summary = {
-                    "patient_info": {
-                        "name": f"{deidentified_medical.get('src_mbr_first_nm', 'N/A')} {deidentified_medical.get('src_mbr_last_nm', 'N/A')}",
-                        "age": deidentified_medical.get('src_mbr_age', 'N/A'),
-                        "zip": deidentified_medical.get('src_mbr_zip_cd', 'N/A')  # Real zip code now
-                    },
-                    "complete_medical_claims_data": deidentified_medical.get('medical_claims_data', {})
-                }
-                context_sections.append(f"DEIDENTIFIED MEDICAL CLAIMS DATA:\n{json.dumps(medical_summary, indent=2)}")
- 
-            # 3. Deidentified Pharmacy Claims Data
-            deidentified_pharmacy = chat_context.get("deidentified_pharmacy", {})
-            if deidentified_pharmacy:
-                pharmacy_summary = {
-                    "complete_pharmacy_claims_data": deidentified_pharmacy.get('pharmacy_claims_data', {})
-                }
-                context_sections.append(f"DEIDENTIFIED PHARMACY CLAIMS DATA:\n{json.dumps(pharmacy_summary, indent=2)}")
- 
-            # 4. Deidentified MCID Claims Data
-            deidentified_mcid = chat_context.get("deidentified_mcid", {})
-            if deidentified_mcid:
-                mcid_summary = {
-                    "complete_mcid_claims_data": deidentified_mcid.get('mcid_claims_data', {})
-                }
-                context_sections.append(f"DEIDENTIFIED MCID CLAIMS DATA:\n{json.dumps(mcid_summary, indent=2)}")
- 
-            # 5. Enhanced Medical Extractions (with meanings)
-            medical_extraction = chat_context.get("medical_extraction", {})
-            if medical_extraction and not medical_extraction.get('error'):
-                context_sections.append(f"ENHANCED MEDICAL EXTRACTIONS WITH CODE MEANINGS:\n{json.dumps(medical_extraction, indent=2)}")
- 
-            # 6. Enhanced Pharmacy Extractions (with meanings)
-            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
-            if pharmacy_extraction and not pharmacy_extraction.get('error'):
-                context_sections.append(f"ENHANCED PHARMACY EXTRACTIONS WITH CODE MEANINGS:\n{json.dumps(pharmacy_extraction, indent=2)}")
- 
-            # 7. Entity Extraction (small)
-            entity_extraction = chat_context.get("entity_extraction", {})
-            if entity_extraction:
-                context_sections.append(f"HEALTH ENTITIES:\n{json.dumps(entity_extraction, indent=2)}")
- 
-            # 8. Heart Attack Prediction (small)
-            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
-            if heart_attack_prediction:
-                context_sections.append(f"HEART ATTACK PREDICTION:\n{json.dumps(heart_attack_prediction, indent=2)}")
- 
-            return "\n\n" + "\n\n".join(context_sections)
- 
-        except Exception as e:
-            logger.error(f"Error preparing enhanced chunked context: {e}")
-            return "Enhanced patient claims data with code meanings available for analysis."
+    # 7. HEART ATTACK RISK PREDICTION BUTTON
+    if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True, key="heart_attack_btn"):
+        st.session_state.show_heart_attack = not st.session_state.show_heart_attack
+    
+    if st.session_state.show_heart_attack:
+        st.markdown("""
+        <div class="section-box">
+            <div class="section-title">❤️ Heart Attack Risk Assessment</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+        if heart_attack_prediction and not heart_attack_prediction.get('error'):
+            # Display simplified format
+            combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
+            
+            st.markdown(f"""
+            <div style="background: #f8f9fa; padding: 2rem; border-radius: 10px; border: 1px solid #dee2e6; margin: 1rem 0; text-align: center;">
+                <h3 style="color: #2c3e50; margin-bottom: 1rem;">Heart Attack Risk Prediction</h3>
+                <h4 style="color: #495057; font-weight: 600;">{combined_display}</h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        else:
+            error_msg = heart_attack_prediction.get('error', 'Heart attack prediction not available')
+            st.error(f"❌ Server Error: {error_msg}")
+            
+            # Show connection info for debugging
+            st.info(f"💡 Expected Server: {st.session_state.config.heart_attack_api_url if st.session_state.config else 'http://localhost:8080'}")
+            st.info("💡 Make sure server is running: `python app.py`")
