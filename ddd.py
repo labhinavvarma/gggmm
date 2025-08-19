@@ -535,57 +535,52 @@ class HealthDataProcessor:
                                    medical_extraction: Dict[str, Any],
                                    patient_data: Dict[str, Any],
                                    api_integrator) -> Dict[str, Any]:
-        """Use LLM to extract health entities from claims data with robust error handling"""
+        """Use LLM to extract health entities from claims data with dynamic meaning analysis"""
         try:
-            # Prepare SUMMARIZED context for LLM to avoid truncation
-            context_summary = self._prepare_summarized_context(
-                pharmacy_data, pharmacy_extraction, medical_extraction, patient_data
+            logger.info("🤖 Starting LLM entity extraction with dynamic meaning analysis...")
+            
+            # Step 1: Get meanings for all unique codes and medications
+            meanings = self._get_all_meanings(pharmacy_extraction, medical_extraction, api_integrator)
+            
+            # Step 2: Prepare context with meanings instead of raw codes
+            context_with_meanings = self._prepare_context_with_meanings(
+                pharmacy_data, pharmacy_extraction, medical_extraction, patient_data, meanings
             )
 
-            # Create concise prompt for entity extraction
+            # Step 3: Create entity extraction prompt using meanings
             entity_prompt = f"""
-You are a medical AI expert analyzing patient claims data. 
+You are a medical AI expert analyzing patient claims data with medication and code meanings.
 
-PATIENT CLAIMS SUMMARY:
-{context_summary}
+PATIENT CLAIMS WITH MEANINGS:
+{context_with_meanings}
 
 ANALYSIS TASK:
-Carefully analyze the MEDICATION_NAMES and MEDICATIONS_DETAILED along with ICD-10 codes to determine patient conditions:
+Based on the MEDICATION_MEANINGS and CODE_MEANINGS provided, determine:
 
-1. **MEDICATION ANALYSIS** - Look at each medication name and determine what it treats:
-   - Diabetes medications: metformin, insulin, glipizide, jardiance, ozempic, trulicity, lantus, humalog, etc.
-   - Blood pressure medications: amlodipine, lisinopril, losartan, metoprolol, hydrochlorothiazide, etc.
-   - Smoking cessation: varenicline, bupropion, nicotine replacement
-   - Alcohol treatment: naltrexone, disulfiram, acamprosate
+1. **diabetics**: "yes" if any medication treats diabetes OR any diagnosis indicates diabetes
+2. **smoking**: "yes" if any medication is for smoking cessation OR any diagnosis indicates tobacco use
+3. **alcohol**: "yes" if any medication treats alcohol disorders OR any diagnosis indicates alcohol problems  
+4. **blood_pressure**: 
+   - "managed" if any medication treats hypertension/blood pressure
+   - "diagnosed" if any diagnosis indicates hypertension
+   - "unknown" if neither
+5. **medical_conditions**: list all medical conditions identified from the meanings
 
-2. **ICD-10 CODE ANALYSIS** - Analyze diagnosis codes:
-   - Diabetes: E10.x (Type 1), E11.x (Type 2), E12.x, E13.x, E14.x
-   - Hypertension: I10, I11.x, I12.x, I13.x, I15.x
-   - Smoking: F17.x (tobacco dependence), Z72.0 (tobacco use)
-   - Alcohol: F10.x (alcohol disorders), Z72.1 (alcohol use)
-
-3. **ENTITY DETERMINATION**:
-   - diabetics: "yes" if diabetes medications OR diabetes ICD codes found
-   - smoking: "yes" if smoking cessation medications OR tobacco ICD codes found
-   - alcohol: "yes" if alcohol treatment medications OR alcohol ICD codes found
-   - blood_pressure: "managed" if BP medications found, "diagnosed" if hypertension ICD codes found, "unknown" if neither
-   - medical_conditions: list all conditions identified from medications and codes
-
-**CRITICAL**: Analyze the actual medication names in MEDICATION_NAMES list - use your medical knowledge to understand what each medication treats.
+**CRITICAL**: Use the PROVIDED MEANINGS to understand what each medication treats and what each code represents. Don't guess - use the analysis provided.
 
 RESPONSE FORMAT (JSON ONLY, NO MARKDOWN):
 {{
-    "diabetics": "yes",
-    "smoking": "no", 
-    "alcohol": "no",
-    "blood_pressure": "managed",
-    "medical_conditions": ["diabetes", "hypertension", "asthma"],
-    "llm_reasoning": "Found metformin and lantus (diabetes meds), amlodipine (BP med), and E11.9 (diabetes code)"
+    "diabetics": "yes/no",
+    "smoking": "yes/no", 
+    "alcohol": "yes/no",
+    "blood_pressure": "unknown/managed/diagnosed",
+    "medical_conditions": ["condition1", "condition2"],
+    "llm_reasoning": "Based on meanings: [specific medication/code] treats [condition]"
 }}
 """
 
-            logger.info("🤖 Calling LLM for entity extraction with summarized context...")
-            logger.info(f"📊 Context summary length: {len(context_summary)} characters")
+            logger.info("🤖 Calling LLM for entity extraction with meanings...")
+            logger.info(f"📊 Context with meanings length: {len(context_with_meanings)} characters")
 
             # Call LLM with entity extraction prompt
             llm_response = api_integrator.call_llm(entity_prompt)
@@ -595,7 +590,11 @@ RESPONSE FORMAT (JSON ONLY, NO MARKDOWN):
                 logger.info(f"📄 LLM response: {llm_response}")
                 
                 # Parse JSON with multiple fallback strategies
-                return self._parse_llm_response_robust(llm_response)
+                result = self._parse_llm_response_robust(llm_response)
+                if result:
+                    # Add the meanings to the result for reference
+                    result["code_meanings_used"] = meanings
+                return result
             else:
                 logger.error(f"❌ LLM call failed: {llm_response}")
                 return None
@@ -603,6 +602,205 @@ RESPONSE FORMAT (JSON ONLY, NO MARKDOWN):
         except Exception as e:
             logger.error(f"❌ Error in LLM entity extraction: {e}")
             return None
+
+    def _get_all_meanings(self, pharmacy_extraction: Dict[str, Any], 
+                         medical_extraction: Dict[str, Any], 
+                         api_integrator) -> Dict[str, Any]:
+        """Get meanings for all unique medications, NDC codes, diagnosis codes, and service codes"""
+        try:
+            logger.info("🔍 Getting meanings for all unique codes and medications...")
+            
+            meanings = {
+                "medication_meanings": {},
+                "ndc_meanings": {},
+                "diagnosis_meanings": {},
+                "service_meanings": {}
+            }
+            
+            # Get unique medication names
+            unique_medications = set()
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                for record in pharmacy_extraction["ndc_records"]:
+                    if record.get("lbl_nm"):
+                        unique_medications.add(record.get("lbl_nm"))
+            
+            # Get unique NDC codes  
+            unique_ndcs = set()
+            if pharmacy_extraction and pharmacy_extraction.get("extraction_summary", {}).get("unique_ndc_codes"):
+                unique_ndcs.update(pharmacy_extraction["extraction_summary"]["unique_ndc_codes"])
+            
+            # Get unique diagnosis codes
+            unique_diagnosis = set()
+            if medical_extraction and medical_extraction.get("extraction_summary", {}).get("unique_diagnosis_codes"):
+                unique_diagnosis.update(medical_extraction["extraction_summary"]["unique_diagnosis_codes"])
+            
+            # Get unique service codes
+            unique_services = set()
+            if medical_extraction and medical_extraction.get("extraction_summary", {}).get("unique_service_codes"):
+                unique_services.update(medical_extraction["extraction_summary"]["unique_service_codes"])
+            
+            # Get meanings for medications (limit to top 15 to avoid API limits)
+            logger.info(f"🔍 Getting meanings for {len(unique_medications)} unique medications...")
+            for medication in list(unique_medications)[:15]:
+                if medication and medication.strip():
+                    meaning = self._get_medication_meaning_batch(medication, api_integrator)
+                    meanings["medication_meanings"][medication] = meaning
+            
+            # Get meanings for NDC codes (limit to top 10)
+            logger.info(f"🔍 Getting meanings for {len(unique_ndcs)} unique NDC codes...")
+            for ndc in list(unique_ndcs)[:10]:
+                if ndc and str(ndc).strip():
+                    meaning = self._get_ndc_meaning_batch(str(ndc), api_integrator)
+                    meanings["ndc_meanings"][str(ndc)] = meaning
+            
+            # Get meanings for diagnosis codes (limit to top 20)
+            logger.info(f"🔍 Getting meanings for {len(unique_diagnosis)} unique diagnosis codes...")
+            for diag in list(unique_diagnosis)[:20]:
+                if diag and str(diag).strip():
+                    meaning = self._get_diagnosis_meaning_batch(str(diag), api_integrator)
+                    meanings["diagnosis_meanings"][str(diag)] = meaning
+            
+            # Get meanings for service codes (limit to top 15)
+            logger.info(f"🔍 Getting meanings for {len(unique_services)} unique service codes...")
+            for service in list(unique_services)[:15]:
+                if service and str(service).strip():
+                    meaning = self._get_service_meaning_batch(str(service), api_integrator)
+                    meanings["service_meanings"][str(service)] = meaning
+            
+            logger.info("✅ Completed getting all meanings")
+            return meanings
+            
+        except Exception as e:
+            logger.error(f"Error getting meanings: {e}")
+            return {
+                "medication_meanings": {},
+                "ndc_meanings": {},
+                "diagnosis_meanings": {},
+                "service_meanings": {}
+            }
+
+    def _get_medication_meaning_batch(self, medication_name: str, api_integrator) -> str:
+        """Get meaning for a medication name"""
+        try:
+            prompt = f"What medical condition does the medication '{medication_name}' treat? Answer in 1-2 sentences focusing on primary indication."
+            
+            response = api_integrator.call_llm(prompt)
+            
+            if response and not response.startswith("Error"):
+                return response.strip()[:200]  # Limit length
+            else:
+                return "Unknown medication indication"
+                
+        except Exception as e:
+            logger.warning(f"Error getting medication meaning for {medication_name}: {e}")
+            return "Unknown medication indication"
+
+    def _get_ndc_meaning_batch(self, ndc_code: str, api_integrator) -> str:
+        """Get meaning for an NDC code"""
+        try:
+            prompt = f"What medication does NDC code '{ndc_code}' represent? Answer in 1-2 sentences with medication name and primary use."
+            
+            response = api_integrator.call_llm(prompt)
+            
+            if response and not response.startswith("Error"):
+                return response.strip()[:200]  # Limit length
+            else:
+                return "Unknown NDC code"
+                
+        except Exception as e:
+            logger.warning(f"Error getting NDC meaning for {ndc_code}: {e}")
+            return "Unknown NDC code"
+
+    def _get_diagnosis_meaning_batch(self, diagnosis_code: str, api_integrator) -> str:
+        """Get meaning for a diagnosis code"""
+        try:
+            prompt = f"What medical condition does ICD-10 diagnosis code '{diagnosis_code}' represent? Answer in 1-2 sentences."
+            
+            response = api_integrator.call_llm(prompt)
+            
+            if response and not response.startswith("Error"):
+                return response.strip()[:200]  # Limit length
+            else:
+                return "Unknown diagnosis code"
+                
+        except Exception as e:
+            logger.warning(f"Error getting diagnosis meaning for {diagnosis_code}: {e}")
+            return "Unknown diagnosis code"
+
+    def _get_service_meaning_batch(self, service_code: str, api_integrator) -> str:
+        """Get meaning for a service code"""
+        try:
+            prompt = f"What medical service or procedure does healthcare service code '{service_code}' represent? Answer in 1-2 sentences."
+            
+            response = api_integrator.call_llm(prompt)
+            
+            if response and not response.startswith("Error"):
+                return response.strip()[:200]  # Limit length
+            else:
+                return "Unknown service code"
+                
+        except Exception as e:
+            logger.warning(f"Error getting service meaning for {service_code}: {e}")
+            return "Unknown service code"
+
+    def _prepare_context_with_meanings(self, pharmacy_data: Dict[str, Any],
+                                      pharmacy_extraction: Dict[str, Any],
+                                      medical_extraction: Dict[str, Any],
+                                      patient_data: Dict[str, Any],
+                                      meanings: Dict[str, Any]) -> str:
+        """Prepare context using meanings instead of raw codes"""
+        try:
+            context_parts = []
+            
+            # 1. Patient Info
+            patient_info = {
+                "age": patient_data.get("calculated_age", patient_data.get("age", "unknown")) if patient_data else "unknown",
+                "gender": patient_data.get("gender", "unknown") if patient_data else "unknown"
+            }
+            context_parts.append(f"PATIENT: {patient_info}")
+            
+            # 2. Medication Meanings
+            if meanings["medication_meanings"]:
+                med_meanings = []
+                for med_name, meaning in meanings["medication_meanings"].items():
+                    med_meanings.append(f"'{med_name}' → {meaning}")
+                context_parts.append(f"MEDICATION_MEANINGS: {med_meanings}")
+            
+            # 3. NDC Code Meanings
+            if meanings["ndc_meanings"]:
+                ndc_meanings = []
+                for ndc, meaning in meanings["ndc_meanings"].items():
+                    ndc_meanings.append(f"NDC {ndc} → {meaning}")
+                context_parts.append(f"NDC_MEANINGS: {ndc_meanings}")
+            
+            # 4. Diagnosis Code Meanings  
+            if meanings["diagnosis_meanings"]:
+                diag_meanings = []
+                for code, meaning in meanings["diagnosis_meanings"].items():
+                    diag_meanings.append(f"ICD-10 {code} → {meaning}")
+                context_parts.append(f"DIAGNOSIS_MEANINGS: {diag_meanings}")
+            
+            # 5. Service Code Meanings
+            if meanings["service_meanings"]:
+                service_meanings = []
+                for code, meaning in meanings["service_meanings"].items():
+                    service_meanings.append(f"Service {code} → {meaning}")
+                context_parts.append(f"SERVICE_MEANINGS: {service_meanings}")
+            
+            # 6. Summary Stats
+            stats = {
+                "medications_analyzed": len(meanings["medication_meanings"]),
+                "ndc_codes_analyzed": len(meanings["ndc_meanings"]),
+                "diagnosis_codes_analyzed": len(meanings["diagnosis_meanings"]),
+                "service_codes_analyzed": len(meanings["service_meanings"])
+            }
+            context_parts.append(f"ANALYSIS_SUMMARY: {stats}")
+            
+            return "\n\n".join(context_parts)
+            
+        except Exception as e:
+            logger.error(f"Error preparing context with meanings: {e}")
+            return "Patient claims data with meanings available for analysis."
 
     def _prepare_summarized_context(self, pharmacy_data: Dict[str, Any],
                                    pharmacy_extraction: Dict[str, Any],
