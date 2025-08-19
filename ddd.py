@@ -41,14 +41,14 @@ sys.path.append(current_dir)
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Import the Enhanced health analysis agent
+# Import the health analysis agent (using your original structure)
 AGENT_AVAILABLE = False
 import_error = None
-EnhancedHealthAnalysisAgent = None
-EnhancedConfig = None
+HealthAnalysisAgent = None
+Config = None
 
 try:
-    from health_agent_core_enhanced import EnhancedHealthAnalysisAgent, EnhancedConfig
+    from health_agent_core import HealthAnalysisAgent, Config
     AGENT_AVAILABLE = True
 except ImportError as e:
     AGENT_AVAILABLE = False
@@ -365,7 +365,106 @@ def initialize_session_state():
     if 'show_animation' not in st.session_state:
         st.session_state.show_animation = False
 
-def safe_get(data: Dict[str, Any], key: str, default: Any = None) -> Any:
+def reset_workflow():
+    """Reset workflow to initial state"""
+    st.session_state.workflow_steps = [
+        {'name': 'FAST API Fetch', 'status': 'pending', 'description': 'Fetching claims data with enhanced timeout', 'icon': '⚡'},
+        {'name': 'ENHANCED Deidentification', 'status': 'pending', 'description': 'Advanced PII removal with structure preservation', 'icon': '🔒'},
+        {'name': 'BATCH Code Processing', 'status': 'pending', 'description': 'Processing codes in batches (93% fewer API calls)', 'icon': '🚀'},
+        {'name': 'DETAILED Entity Extraction', 'status': 'pending', 'description': 'Advanced health entity identification', 'icon': '🎯'},
+        {'name': 'ENHANCED Health Trajectory', 'status': 'pending', 'description': 'Detailed predictive analysis with specific evaluation questions', 'icon': '📈'},
+        {'name': 'IMPROVED Heart Risk Prediction', 'status': 'pending', 'description': 'Enhanced ML-based risk assessment', 'icon': '❤️'},
+        {'name': 'STABLE Graph Chatbot', 'status': 'pending', 'description': 'AI assistant with enhanced graph stability', 'icon': '📊'}
+    ]
+    st.session_state.current_step = 0
+
+def display_advanced_professional_workflow():
+    """Display the advanced professional workflow animation"""
+    
+    # Calculate statistics
+    total_steps = len(st.session_state.workflow_steps)
+    completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
+    running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
+    error_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'error')
+    progress_percentage = (completed_steps / total_steps) * 100
+    
+    # Main container
+    st.markdown('<div class="advanced-workflow-container">', unsafe_allow_html=True)
+    
+    # Header
+    st.markdown("""
+    <div style="text-align: center; margin-bottom: 2rem;">
+        <h2 style="color: #2c3e50; font-weight: 700;">🔬 LangGraph Healthcare Analysis Pipeline</h2>
+        <p style="color: #34495e; font-size: 1.1rem;">Advanced multi-step processing workflow</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Progress metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Steps", total_steps)
+    with col2:
+        st.metric("Completed", completed_steps)
+    with col3:
+        st.metric("Processing", running_steps)
+    with col4:
+        st.metric("Progress", f"{progress_percentage:.0f}%")
+    
+    # Progress bar
+    st.progress(progress_percentage / 100)
+    
+    # Display each step
+    for i, step in enumerate(st.session_state.workflow_steps):
+        status = step['status']
+        name = step['name']
+        description = step['description']
+        icon = step['icon']
+        
+        # Determine styling based on status
+        if status == 'completed':
+            step_class = "workflow-step completed"
+            status_emoji = "✅"
+        elif status == 'running':
+            step_class = "workflow-step running"
+            status_emoji = "🔄"
+        elif status == 'error':
+            step_class = "workflow-step error"
+            status_emoji = "❌"
+        else:
+            step_class = "workflow-step"
+            status_emoji = "⏳"
+        
+        st.markdown(f"""
+        <div class="{step_class}">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <div style="font-size: 1.5rem;">{icon}</div>
+                <div style="flex: 1;">
+                    <h4 style="margin: 0; color: #2c3e50;">{name}</h4>
+                    <p style="margin: 0; color: #666; font-size: 0.9rem;">{description}</p>
+                </div>
+                <div style="font-size: 1.2rem;">{status_emoji}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Status message
+    if running_steps > 0:
+        current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
+        status_message = f"🔄 Currently executing: {current_step_name}"
+    elif completed_steps == total_steps:
+        status_message = "🎉 All LangGraph workflow steps completed successfully!"
+    elif error_steps > 0:
+        status_message = f"⚠️ {error_steps} step(s) encountered errors"
+    else:
+        status_message = "⏳ LangGraph healthcare analysis pipeline in progress..."
+    
+    st.markdown(f"""
+    <div style="text-align: center; margin-top: 2rem; padding: 1rem; background: rgba(255,255,255,0.8); border-radius: 10px;">
+        <p style="margin: 0; font-weight: 600; color: #2c3e50;">{status_message}</p>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
     """Safely get a value from a dictionary"""
     try:
         return data.get(key, default) if data else default
@@ -650,23 +749,14 @@ def display_enhanced_quick_prompts():
                         
                         # Get enhanced response
                         try:
-                            with st.spinner("🤖 Processing your enhanced healthcare analysis request..."):
-                                if any(keyword in prompt.lower() for keyword in ['chart', 'graph', 'visualiz', 'show', 'create', 'generate']):
-                                    # Enhanced graph request
-                                    response, code, figure = st.session_state.agent.chat_with_enhanced_graphs(
-                                        prompt, 
-                                        st.session_state.chatbot_context, 
-                                        st.session_state.chatbot_messages
-                                    )
-                                    st.session_state.chatbot_messages.append({"role": "assistant", "content": response, "code": code})
-                                else:
-                                    # Enhanced regular request
-                                    response, _, _ = st.session_state.agent.chat_with_enhanced_graphs(
-                                        prompt, 
-                                        st.session_state.chatbot_context, 
-                                        st.session_state.chatbot_messages
-                                    )
-                                    st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
+                            with st.spinner("🤖 Processing your healthcare analysis request..."):
+                                # Use the standard chat_with_data method from your agent
+                                response = st.session_state.agent.chat_with_data(
+                                    prompt, 
+                                    st.session_state.chatbot_context, 
+                                    st.session_state.chatbot_messages
+                                )
+                                st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
                             
                             st.rerun()
                             
@@ -801,7 +891,7 @@ def execute_matplotlib_code_enhanced_stability(code: str):
 initialize_session_state()
 
 # Enhanced Main Title
-st.markdown('<h1 class="main-header">🚀 Enhanced Health Analysis Agent</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🔬 Deep Research Health Agent</h1>', unsafe_allow_html=True)
 
 # Enhanced optimization badges
 st.markdown("""
@@ -817,7 +907,7 @@ st.markdown("""
 
 # Display import status
 if not AGENT_AVAILABLE:
-    st.markdown(f'<div class="status-error">❌ Failed to import Enhanced Health Agent: {import_error}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
     st.stop()
 
 # ENHANCED SIDEBAR CHATBOT WITH STABLE GRAPHS
@@ -841,22 +931,10 @@ with st.sidebar:
                 for i, message in enumerate(st.session_state.chatbot_messages):
                     with st.chat_message(message["role"]):
                         st.write(message["content"])
-                        
-                        # Enhanced code display and execution
-                        if message.get("code"):
-                            with st.expander("📊 View Enhanced Matplotlib Code"):
-                                st.code(message["code"], language="python")
-                            
-                            # Execute matplotlib code with enhanced stability
-                            img_buffer = execute_matplotlib_code_enhanced_stability(message["code"])
-                            if img_buffer:
-                                st.image(img_buffer, use_column_width=True, caption="Enhanced Healthcare Visualization")
-                            else:
-                                st.warning("Enhanced graph generation encountered an issue. Please try a different visualization request.")
             else:
-                st.info("👋 Hello! I'm your Enhanced Healthcare AI Assistant!")
-                st.info("💡 **New Features:** Advanced analytics, detailed health insights, and stable graph generation!")
-                st.info("🎯 **Specialized:** Ask specific healthcare questions or request detailed visualizations!")
+                st.info("👋 Hello! I'm your AI Healthcare Assistant!")
+                st.info("💡 **Features:** Advanced analytics, detailed health insights, and comprehensive analysis!")
+                st.info("🎯 **Specialized:** Ask specific healthcare questions about your claims data!")
         
         # Enhanced chat input
         st.markdown("---")
@@ -867,35 +945,20 @@ with st.sidebar:
             st.session_state.chatbot_messages.append({"role": "user", "content": user_question})
             
             try:
-                with st.spinner("🤖 Processing with enhanced healthcare AI capabilities..."):
-                    # Enhanced graph detection
-                    graph_keywords = ['graph', 'chart', 'plot', 'visualize', 'visualization', 'show', 'display', 'draw', 'create', 'generate']
-                    is_graph_request = any(keyword in user_question.lower() for keyword in graph_keywords)
-                    
-                    if is_graph_request:
-                        response, code, figure = st.session_state.agent.chat_with_enhanced_graphs(
-                            user_question, 
-                            st.session_state.chatbot_context, 
-                            st.session_state.chatbot_messages
-                        )
-                        st.session_state.chatbot_messages.append({
-                            "role": "assistant", 
-                            "content": response, 
-                            "code": code
-                        })
-                    else:
-                        response, _, _ = st.session_state.agent.chat_with_enhanced_graphs(
-                            user_question, 
-                            st.session_state.chatbot_context, 
-                            st.session_state.chatbot_messages
-                        )
-                        st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
+                with st.spinner("🤖 Processing your healthcare question..."):
+                    # Use the standard chat_with_data method from your LangGraph agent
+                    response = st.session_state.agent.chat_with_data(
+                        user_question, 
+                        st.session_state.chatbot_context, 
+                        st.session_state.chatbot_messages
+                    )
+                    st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
                 
                 st.rerun()
                 
             except Exception as e:
                 st.error(f"Error: {str(e)}")
-                st.info("💡 Please try rephrasing your question or request a different type of analysis.")
+                st.info("💡 Please try rephrasing your question or check if the analysis completed successfully.")
         
         # Enhanced clear chat button
         if st.button("🗑️ Clear Chat History", use_container_width=True):
@@ -903,16 +966,26 @@ with st.sidebar:
             st.rerun()
     
     else:
-        st.title("💬 Enhanced AI Healthcare Assistant")
+        st.title("💬 AI Healthcare Assistant")
         st.info("💤 Assistant available after analysis completion")
         st.markdown("---")
+        
+        # Debug information for troubleshooting
+        if st.session_state.analysis_results:
+            st.info("🔍 **Debug Info:** Analysis completed, but chatbot not ready")
+            chatbot_ready = st.session_state.analysis_results.get("chatbot_ready", False)
+            has_context = bool(st.session_state.chatbot_context)
+            st.write(f"• Chatbot Ready: {chatbot_ready}")
+            st.write(f"• Has Context: {has_context}")
+            if not chatbot_ready:
+                st.warning("⚠️ LangGraph workflow may not have completed successfully")
         
         # Show loading graphs while chatbot is being prepared
         if st.session_state.analysis_running or (st.session_state.analysis_results and not st.session_state.analysis_results.get("chatbot_ready", False)):
             st.markdown("""
             <div class="chatbot-loading-container">
                 <div class="loading-spinner"></div>
-                <h4>🤖 Preparing Enhanced AI Assistant...</h4>
+                <h4>🤖 Preparing AI Assistant...</h4>
                 <p>Loading healthcare analysis capabilities</p>
             </div>
             """, unsafe_allow_html=True)
@@ -924,13 +997,13 @@ with st.sidebar:
             except Exception as e:
                 st.info("📊 Health analytics dashboard loading...")
         
-        st.markdown("**🚀 Enhanced Features:**")
-        st.markdown("• 📊 **Stable Graph Generation** - Reliable chart creation")
-        st.markdown("• 🎯 **Specialized Healthcare Analysis** - Domain-specific insights") 
-        st.markdown("• ❤️ **Advanced Risk Assessment** - Comprehensive health modeling")
-        st.markdown("• 💡 **Smart Healthcare Prompts** - Pre-built clinical questions")
-        st.markdown("• 🔤 **Detailed Code Meanings** - Medical terminology explanations")
-        st.markdown("• 🗂️ **Complete Data Access** - All claims with enhanced viewing")
+        st.markdown("**🚀 Features:**")
+        st.markdown("• 📊 **Graph Generation** - Chart creation capabilities")
+        st.markdown("• 🎯 **Healthcare Analysis** - Domain-specific insights") 
+        st.markdown("• ❤️ **Risk Assessment** - Health modeling")
+        st.markdown("• 💡 **Smart Prompts** - Pre-built questions")
+        st.markdown("• 🔤 **Code Meanings** - Medical terminology explanations")
+        st.markdown("• 🗂️ **Complete Data Access** - All claims data")
 
 # 1. PATIENT INFORMATION (Same as before)
 st.markdown("""
@@ -982,7 +1055,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
     results = st.session_state.analysis_results
     
     st.markdown("---")
-    st.markdown("## 📊 Enhanced Healthcare Analysis Results")
+    st.markdown("## 📊 Healthcare Analysis Results")
     
     # Show errors if any
     errors = safe_get(results, 'errors', [])
@@ -1120,11 +1193,11 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; margin: 2rem 0;">
-    🚀 Enhanced Health Analysis Agent v3.0 | 
-    <span class="enhanced-badge" style="margin: 0;">⚡ 93% Fewer API Calls</span>
-    <span class="enhanced-badge" style="margin: 0;">🚀 90% Faster</span>
-    <span class="enhanced-badge" style="margin: 0;">📊 Enhanced Graph Stability</span>
+    🔬 Deep Research Health Agent v2.0 | 
+    <span class="enhanced-badge" style="margin: 0;">⚡ LangGraph Powered</span>
+    <span class="enhanced-badge" style="margin: 0;">🚀 Fast Processing</span>
+    <span class="enhanced-badge" style="margin: 0;">📊 Interactive Graphs</span>
     <span class="enhanced-badge" style="margin: 0;">🗂️ Complete Claims Viewer</span>
-    <span class="enhanced-badge" style="margin: 0;">🎯 Detailed Healthcare Analysis</span>
+    <span class="enhanced-badge" style="margin: 0;">🎯 Healthcare Analysis</span>
 </div>
 """, unsafe_allow_html=True)
