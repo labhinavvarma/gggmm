@@ -325,6 +325,14 @@ def initialize_session_state():
         st.session_state.show_all_claims_data = False
     if 'show_batch_codes' not in st.session_state:
         st.session_state.show_batch_codes = False
+    if 'show_health_trajectory' not in st.session_state:
+        st.session_state.show_health_trajectory = False
+    if 'show_entity_extraction' not in st.session_state:
+        st.session_state.show_entity_extraction = False
+    if 'show_heart_attack' not in st.session_state:
+        st.session_state.show_heart_attack = False
+    if 'show_combined_summary' not in st.session_state:
+        st.session_state.show_combined_summary = False
     
     # Enhanced workflow steps
     if 'workflow_steps' not in st.session_state:
