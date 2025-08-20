@@ -1,6 +1,8 @@
 # Configure Streamlit page FIRST
 import streamlit as st
 
+from langgrmaphagnetmillimanui import safe_get
+
 # Determine sidebar state based on chatbot readiness
 if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
     sidebar_state = "expanded"
