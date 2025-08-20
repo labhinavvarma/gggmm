@@ -1,8 +1,6 @@
 # Configure Streamlit page FIRST
 import streamlit as st
 
-from langgrmaphagnetmillimanui import safe_get
-
 # Determine sidebar state based on chatbot readiness
 if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
     sidebar_state = "expanded"
@@ -42,6 +40,54 @@ sys.path.append(current_dir)
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# SAFE_GET FUNCTION - CRITICAL MISSING FUNCTION
+def safe_get(data, key_path, default=None):
+    """
+    Safely get a value from nested dictionary/object structure.
+    
+    Args:
+        data: The data structure to search in (dict, object, etc.)
+        key_path: String key or list of keys for nested access
+        default: Default value to return if key not found
+        
+    Returns:
+        The value if found, otherwise the default value
+    """
+    try:
+        if data is None:
+            return default
+            
+        # Handle string key path
+        if isinstance(key_path, str):
+            if hasattr(data, key_path):
+                return getattr(data, key_path, default)
+            elif isinstance(data, dict):
+                return data.get(key_path, default)
+            else:
+                return default
+                
+        # Handle list of keys for nested access
+        elif isinstance(key_path, (list, tuple)):
+            current = data
+            for key in key_path:
+                if current is None:
+                    return default
+                    
+                if hasattr(current, key):
+                    current = getattr(current, key, None)
+                elif isinstance(current, dict):
+                    current = current.get(key, None)
+                else:
+                    return default
+                    
+            return current if current is not None else default
+            
+        else:
+            return default
+            
+    except (AttributeError, KeyError, TypeError, IndexError):
+        return default
 
 # Import the health analysis agent
 AGENT_AVAILABLE = False
@@ -353,6 +399,15 @@ st.markdown("""
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
+
+.status-error {
+    background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+    color: #c62828;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid #ef5350;
+    margin: 1rem 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -535,7 +590,7 @@ def display_enhanced_mcid_data(mcid_data):
             try:
                 formatted_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
                 st.metric("Query Time", formatted_time)
-            except:
+            except Exception:
                 st.metric("Query Time", "Recent")
         else:
             st.metric("Query Time", "Unknown")
@@ -636,7 +691,7 @@ def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
                 errors.append("Age cannot be greater than 150 years")
             elif age and age < 0:
                 errors.append("Date of birth cannot be in the future")
-        except:
+        except Exception:
             errors.append("Invalid date format")
     
     return len(errors) == 0, errors
@@ -867,7 +922,7 @@ def execute_matplotlib_code_enhanced_stability(code: str):
             plt.close('all')
             
             return error_buffer
-        except:
+        except Exception:
             st.error(f"Enhanced graph generation failed: {error_msg}")
             return None
 
@@ -1240,21 +1295,24 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        medical_records = len(safe_get(results, 'structured_extractions', {}).get('medical', {}).get('hlth_srvc_records', []))
+        structured_extractions = safe_get(results, 'structured_extractions', {})
+        medical_data = structured_extractions.get('medical', {}) if structured_extractions else {}
+        medical_records = len(medical_data.get('hlth_srvc_records', []) if medical_data else [])
         st.metric("Medical Records", medical_records)
     
     with col2:
-        pharmacy_records = len(safe_get(results, 'structured_extractions', {}).get('pharmacy', {}).get('ndc_records', []))
+        pharmacy_data = structured_extractions.get('pharmacy', {}) if structured_extractions else {}
+        pharmacy_records = len(pharmacy_data.get('ndc_records', []) if pharmacy_data else [])
         st.metric("Pharmacy Records", pharmacy_records)
     
     with col3:
         entities = safe_get(results, 'entity_extraction', {})
-        conditions_count = len(entities.get('medical_conditions', []))
+        conditions_count = len(entities.get('medical_conditions', []) if entities else [])
         st.metric("Conditions Identified", conditions_count)
     
     with col4:
         heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
-        risk_display = heart_attack_prediction.get('risk_display', 'Not available')
+        risk_display = heart_attack_prediction.get('risk_display', 'Not available') if heart_attack_prediction else 'Not available'
         if 'Error' not in risk_display:
             st.metric("Heart Attack Risk", risk_display.split(':')[1].strip() if ':' in risk_display else risk_display)
         else:
@@ -1305,7 +1363,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                             try:
                                 formatted_time = datetime.fromisoformat(deident_time.replace('Z', '+00:00')).strftime('%m/%d/%Y %H:%M')
                                 st.metric("Processed", formatted_time)
-                            except:
+                            except Exception:
                                 st.metric("Processed", "Recently")
                         else:
                             st.metric("Processed", "Unknown")
@@ -1332,13 +1390,13 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                             try:
                                 formatted_time = datetime.fromisoformat(deident_time.replace('Z', '+00:00')).strftime('%m/%d/%Y %H:%M')
                                 st.metric("Processed", formatted_time)
-                            except:
+                            except Exception:
                                 st.metric("Processed", "Recently")
                         else:
                             st.metric("Processed", "Unknown")
                     with col3:
                         masked_fields = pharmacy_data.get('name_fields_masked', [])
-                        st.metric("Fields Masked", len(masked_fields))
+                        st.metric("Fields Masked", len(masked_fields) if masked_fields else 0)
                     
                     pharmacy_claims_data = pharmacy_data.get('pharmacy_claims_data', {})
                     if pharmacy_claims_data:
@@ -1410,7 +1468,8 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
             
             with col3:
                 st.markdown("#### 🔬 Clinical Insights")
-                st.write(f"**Medical Conditions:** {len(entities.get('medical_conditions', []))}")
+                medical_conditions = entities.get('medical_conditions', [])
+                st.write(f"**Medical Conditions:** {len(medical_conditions) if medical_conditions else 0}")
                 st.write(f"**Clinical Complexity:** {entities.get('clinical_complexity_score', 0)}")
                 st.write(f"**Enhanced Analysis:** {entities.get('enhanced_clinical_analysis', False)}")
             
@@ -1446,14 +1505,17 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 st.write(f"**{confidence_display}**")
                 
                 risk_score = safe_get(results, 'heart_attack_risk_score', 0)
-                st.progress(float(risk_score))
+                try:
+                    st.progress(float(risk_score))
+                except (ValueError, TypeError):
+                    st.progress(0.0)
                 
                 method = heart_prediction.get('prediction_method', 'Unknown')
                 st.write(f"**Prediction Method:** {method}")
             
             with col2:
                 st.markdown("#### 🎯 Risk Factors Analysis")
-                feature_interp = heart_features.get('feature_interpretation', {})
+                feature_interp = heart_features.get('feature_interpretation', {}) if heart_features else {}
                 if feature_interp:
                     for factor, value in feature_interp.items():
                         st.write(f"**{factor}:** {value}")
@@ -1480,28 +1542,30 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
     """, unsafe_allow_html=True)
     
     # Health trajectory
-    if results.get("health_trajectory"):
+    health_trajectory = results.get("health_trajectory")
+    if health_trajectory:
         st.markdown("### 📈 Comprehensive Health Trajectory Analysis")
         with st.container():
-            st.markdown(results["health_trajectory"])
+            st.markdown(health_trajectory)
     
     # Final summary
-    if results.get("final_summary"):
+    final_summary = results.get("final_summary")
+    if final_summary:
         st.markdown("### 📋 Executive Health Summary")
         with st.container():
-            st.markdown(results["final_summary"])
+            st.markdown(final_summary)
     
     # If both are available, show combined view
-    if results.get("health_trajectory") and results.get("final_summary"):
+    if health_trajectory and final_summary:
         with st.expander("📊 Complete Analysis Data"):
             tab1, tab2 = st.tabs(["Health Trajectory Data", "Summary Data"])
             with tab1:
-                st.text_area("Health Trajectory", results["health_trajectory"], height=300)
+                st.text_area("Health Trajectory", health_trajectory, height=300)
             with tab2:
-                st.text_area("Final Summary", results["final_summary"], height=300)
+                st.text_area("Final Summary", final_summary, height=300)
     
     # Show message if no detailed analysis available
-    if not results.get("health_trajectory") and not results.get("final_summary"):
+    if not health_trajectory and not final_summary:
         st.info("📋 Comprehensive health analysis and trajectory will be displayed here after successful processing.")
 
 # Enhanced Footer
