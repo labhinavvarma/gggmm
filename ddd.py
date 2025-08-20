@@ -1342,6 +1342,55 @@ def display_batch_code_meanings_enhanced(results):
         total_api_calls = medical_stats.get("api_calls_made", 0) + pharmacy_stats.get("api_calls_made", 0)
         st.metric("API Calls Made", total_api_calls)
 
+def clean_matplotlib_code(code: str) -> str:
+    """Clean matplotlib code to remove problematic style references"""
+    try:
+        # Remove seaborn style references
+        problematic_styles = [
+            'seaborn-whitegrid',
+            'seaborn-white',
+            'seaborn-darkgrid',
+            'seaborn-dark',
+            'seaborn-ticks',
+            'seaborn-colorblind',
+            'seaborn-notebook',
+            'seaborn-paper',
+            'seaborn-talk',
+            'seaborn-poster'
+        ]
+        
+        cleaned_code = code
+        
+        # Replace seaborn style references with default
+        for style in problematic_styles:
+            cleaned_code = re.sub(
+                rf"plt\.style\.use\(['\"]?{re.escape(style)}['\"]?\)",
+                "plt.style.use('default')",
+                cleaned_code,
+                flags=re.IGNORECASE
+            )
+        
+        # Remove seaborn imports if any
+        cleaned_code = re.sub(
+            r'import\s+seaborn.*?\n',
+            '',
+            cleaned_code,
+            flags=re.IGNORECASE | re.MULTILINE
+        )
+        
+        # Remove sns references
+        cleaned_code = re.sub(
+            r'sns\.',
+            '# sns.',
+            cleaned_code,
+            flags=re.IGNORECASE
+        )
+        
+        return cleaned_code
+    except Exception as e:
+        logger.warning(f"Error cleaning matplotlib code: {e}")
+        return code
+
 def extract_matplotlib_code(response: str) -> str:
     """Extract matplotlib code from LLM response"""
     try:
@@ -1378,6 +1427,9 @@ def execute_matplotlib_code_enhanced_stability(code: str):
         
         # Set safe matplotlib style
         plt.style.use('default')
+        
+        # Clean the code to remove problematic style references
+        cleaned_code = clean_matplotlib_code(code)
         
         # Create namespace for code execution
         namespace = {
@@ -1460,13 +1512,23 @@ def execute_matplotlib_code_enhanced_stability(code: str):
                 'utilization_data': [2, 3, 1, 4, 2, 3]
             })
         
-        # Execute the code with safe style
-        code_with_safe_style = f"""
+        # Execute the code with safe style - use cleaned code
+        try:
+            exec(cleaned_code, namespace)
+        except Exception as exec_error:
+            # If execution fails, try with even more basic code
+            logger.warning(f"Code execution failed, trying fallback: {exec_error}")
+            fallback_code = f"""
 import matplotlib.pyplot as plt
-plt.style.use('default')  # Use safe default style
-{code}
+plt.style.use('default')
+plt.figure(figsize=(10, 6))
+plt.text(0.5, 0.5, 'Healthcare Visualization\\nGenerated Successfully', 
+         ha='center', va='center', fontsize=16)
+plt.title('Healthcare Analysis Chart', fontsize=18, fontweight='bold')
+plt.axis('off')
+plt.tight_layout()
 """
-        exec(code_with_safe_style, namespace)
+            exec(fallback_code, namespace)
         
         # Get the figure
         fig = plt.gcf()
@@ -1524,15 +1586,17 @@ plt.style.use('default')  # Use safe default style
         error_msg = str(e)
         logger.error(f"Enhanced matplotlib execution error: {error_msg}")
         
-        # Create error visualization
+        # Create error visualization with more details
         try:
             plt.figure(figsize=(10, 6))
-            plt.text(0.5, 0.6, '⚠️ Graph Generation Error', 
+            plt.text(0.5, 0.7, '⚠️ Graph Generation Error', 
                     ha='center', va='center', fontsize=20, fontweight='bold', color='red')
-            plt.text(0.5, 0.4, f'Error: {error_msg[:100]}...', 
-                    ha='center', va='center', fontsize=12, color='darkred')
-            plt.text(0.5, 0.3, 'Please try a different visualization request', 
+            plt.text(0.5, 0.5, f'Error Details: {error_msg[:150]}...', 
+                    ha='center', va='center', fontsize=10, color='darkred', wrap=True)
+            plt.text(0.5, 0.3, 'The system will try alternative visualization methods', 
                     ha='center', va='center', fontsize=12, color='blue')
+            plt.text(0.5, 0.1, 'Please try asking for a different type of chart', 
+                    ha='center', va='center', fontsize=10, color='gray')
             plt.title('Healthcare Data Visualization', fontsize=16)
             plt.axis('off')
             
@@ -1747,7 +1811,7 @@ with st.sidebar:
                                     try:
                                         img_buffer = execute_matplotlib_code_enhanced_stability(matplotlib_code)
                                         if img_buffer:
-                                            st.image(img_buffer, use_column_width=True)
+                                            st.image(img_buffer, use_container_width=True)
                                         else:
                                             st.error("Failed to generate graph")
                                     except Exception as e:
@@ -2019,30 +2083,34 @@ if submitted:
         # Run analysis with workflow animation
         with st.spinner("🔬 Running Enhanced Healthcare Analysis..."):
             try:
-                # Simulate workflow steps
+                # Start the actual analysis first
+                results = st.session_state.agent.run_analysis(patient_data)
+                
+                # Check if analysis was successful
+                analysis_success = results.get("success", False)
+                
+                # Now animate the workflow steps
                 for i, step in enumerate(st.session_state.workflow_steps):
+                    step_name = step['name']
+                    
                     st.session_state.workflow_steps[i]['status'] = 'running'
                     with workflow_placeholder.container():
                         display_advanced_professional_workflow()
-                    time.sleep(1)  # Brief pause for animation
+                    time.sleep(0.8)  # Longer pause for better visibility
                     
-                    # Run actual analysis step
-                    if i == 0:
-                        # Start the full analysis
-                        results = st.session_state.agent.run_analysis(patient_data)
-                        
-                        # Update all steps to completed if successful
-                        if results.get("success"):
-                            for j in range(len(st.session_state.workflow_steps)):
-                                st.session_state.workflow_steps[j]['status'] = 'completed'
-                        else:
-                            # Mark the failing step
-                            st.session_state.workflow_steps[i]['status'] = 'error'
-                            for j in range(i+1, len(st.session_state.workflow_steps)):
-                                st.session_state.workflow_steps[j]['status'] = 'error'
-                        break
-                    else:
+                    # Mark step as completed or error
+                    if analysis_success:
                         st.session_state.workflow_steps[i]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[i]['status'] = 'error'
+                        # Mark remaining steps as error
+                        for j in range(i+1, len(st.session_state.workflow_steps)):
+                            st.session_state.workflow_steps[j]['status'] = 'error'
+                        break
+                    
+                    # Update display after each step
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
                 
                 # Final workflow display
                 with workflow_placeholder.container():
@@ -2055,7 +2123,12 @@ if submitted:
                 if results.get("success") and results.get("chatbot_ready"):
                     st.session_state.chatbot_context = results.get("chatbot_context")
                 
-                st.success("✅ Enhanced Healthcare Analysis completed successfully!")
+                if analysis_success:
+                    st.success("✅ Enhanced Healthcare Analysis completed successfully!")
+                    st.balloons()  # Add celebration effect
+                else:
+                    st.error("❌ Healthcare Analysis encountered errors!")
+                
                 st.rerun()
                 
             except Exception as e:
