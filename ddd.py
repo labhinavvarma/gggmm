@@ -685,60 +685,78 @@ plt.show()
             total_codes = len(unique_service_codes) + len(unique_diagnosis_codes)
             stable_extraction_result["batch_stats"]["codes_processed"] = total_codes
 
-            # Step 2: Stable BATCH PROCESSING
+            # Step 2: ENHANCED BATCH PROCESSING WITH DEBUGGING
+            logger.info(f"🔍 DEBUG: API integrator available: {self.api_integrator is not None}")
+            if self.api_integrator:
+                logger.info(f"🔍 DEBUG: Has isolated method: {hasattr(self.api_integrator, 'call_llm_isolated_enhanced')}")
+            
+            logger.info(f"🔍 DEBUG: Service codes found: {len(unique_service_codes)}")
+            logger.info(f"🔍 DEBUG: Diagnosis codes found: {len(unique_diagnosis_codes)}")
+            
             if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
                 if unique_service_codes or unique_diagnosis_codes:
-                    logger.info(f"🔬 Step 2: Stable BATCH processing {total_codes} codes...")
+                    logger.info(f"🔬 Step 2: ENHANCED BATCH processing {total_codes} codes...")
                     stable_extraction_result["llm_call_status"] = "in_progress"
                     
                     try:
                         api_calls_made = 0
                         
-                        # Stable BATCH 1: Service Codes
+                        # ENHANCED BATCH 1: Service Codes
                         if unique_service_codes:
-                            logger.info(f"🏥 Stable service codes batch: {len(unique_service_codes)} codes...")
+                            logger.info(f"🏥 Processing service codes batch: {unique_service_codes}")
                             service_meanings = self._stable_batch_service_codes(unique_service_codes)
+                            logger.info(f"🔍 DEBUG: Service meanings result: {service_meanings}")
                             stable_extraction_result["code_meanings"]["service_code_meanings"] = service_meanings
                             api_calls_made += 1
                             logger.info(f"✅ Service codes batch: {len(service_meanings)} meanings generated")
                         
-                        # Stable BATCH 2: Diagnosis Codes
+                        # ENHANCED BATCH 2: Diagnosis Codes  
                         if unique_diagnosis_codes:
-                            logger.info(f"🩺 Stable diagnosis codes batch: {len(unique_diagnosis_codes)} codes...")
+                            logger.info(f"🩺 Processing diagnosis codes batch: {unique_diagnosis_codes}")
                             diagnosis_meanings = self._stable_batch_diagnosis_codes(unique_diagnosis_codes)
+                            logger.info(f"🔍 DEBUG: Diagnosis meanings result: {diagnosis_meanings}")
                             stable_extraction_result["code_meanings"]["diagnosis_code_meanings"] = diagnosis_meanings
                             api_calls_made += 1
                             logger.info(f"✅ Diagnosis codes batch: {len(diagnosis_meanings)} meanings generated")
                         
-                        # Calculate stable savings
+                        # Calculate savings
                         individual_calls_would_be = len(unique_service_codes) + len(unique_diagnosis_codes)
                         calls_saved = individual_calls_would_be - api_calls_made
                         
                         stable_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
                         stable_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
                         
-                        # Final stable status
+                        # Final status
                         total_meanings = len(stable_extraction_result["code_meanings"]["service_code_meanings"]) + len(stable_extraction_result["code_meanings"]["diagnosis_code_meanings"])
+                        logger.info(f"🔍 DEBUG: Total meanings generated: {total_meanings}")
                         
                         if total_meanings > 0:
                             stable_extraction_result["code_meanings_added"] = True
                             stable_extraction_result["stable_analysis"] = True
                             stable_extraction_result["llm_call_status"] = "completed"
-                            logger.info(f"🔬 Stable BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
+                            logger.info(f"🔬 ENHANCED BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
                         else:
                             stable_extraction_result["llm_call_status"] = "completed_no_meanings"
-                            logger.warning("⚠️ Stable batch completed but no meanings generated")
+                            logger.warning("⚠️ Batch completed but no meanings generated")
                         
                     except Exception as e:
-                        logger.error(f"❌ Stable batch processing error: {e}")
+                        logger.error(f"❌ Enhanced batch processing error: {e}")
+                        logger.error(f"❌ Error details: {type(e).__name__}: {str(e)}")
+                        import traceback
+                        logger.error(f"❌ Traceback: {traceback.format_exc()}")
                         stable_extraction_result["code_meaning_error"] = str(e)
                         stable_extraction_result["llm_call_status"] = "failed"
                 else:
                     stable_extraction_result["llm_call_status"] = "skipped_no_codes"
-                    logger.warning("⚠️ No codes found for stable batch processing")
+                    logger.warning("⚠️ No codes found for batch processing")
+                    logger.info(f"🔍 DEBUG: Service codes empty: {len(unique_service_codes) == 0}")
+                    logger.info(f"🔍 DEBUG: Diagnosis codes empty: {len(unique_diagnosis_codes) == 0}")
             else:
                 stable_extraction_result["llm_call_status"] = "skipped_no_api"
-                logger.warning("❌ No stable API integrator for batch processing")
+                if not self.api_integrator:
+                    logger.error("❌ No API integrator available for batch processing")
+                else:
+                    logger.error("❌ API integrator missing call_llm_isolated_enhanced method")
 
             # Stable performance stats
             processing_time = time.time() - start_time
@@ -803,60 +821,78 @@ plt.show()
             total_codes = len(unique_ndc_codes) + len(unique_label_names)
             stable_extraction_result["batch_stats"]["codes_processed"] = total_codes
 
-            # Step 2: Stable BATCH PROCESSING
+            # Step 2: ENHANCED BATCH PROCESSING WITH DEBUGGING
+            logger.info(f"🔍 DEBUG: API integrator available: {self.api_integrator is not None}")
+            if self.api_integrator:
+                logger.info(f"🔍 DEBUG: Has isolated method: {hasattr(self.api_integrator, 'call_llm_isolated_enhanced')}")
+            
+            logger.info(f"🔍 DEBUG: NDC codes found: {len(unique_ndc_codes)}")
+            logger.info(f"🔍 DEBUG: Label names found: {len(unique_label_names)}")
+            
             if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
                 if unique_ndc_codes or unique_label_names:
-                    logger.info(f"🔬 Step 2: Stable BATCH processing {total_codes} pharmacy codes...")
+                    logger.info(f"🔬 Step 2: ENHANCED BATCH processing {total_codes} pharmacy codes...")
                     stable_extraction_result["llm_call_status"] = "in_progress"
                     
                     try:
                         api_calls_made = 0
                         
-                        # Stable BATCH 1: NDC Codes
+                        # ENHANCED BATCH 1: NDC Codes
                         if unique_ndc_codes:
-                            logger.info(f"💊 Stable NDC codes batch: {len(unique_ndc_codes)} codes...")
+                            logger.info(f"💊 Processing NDC codes batch: {unique_ndc_codes}")
                             ndc_meanings = self._stable_batch_ndc_codes(unique_ndc_codes)
+                            logger.info(f"🔍 DEBUG: NDC meanings result: {ndc_meanings}")
                             stable_extraction_result["code_meanings"]["ndc_code_meanings"] = ndc_meanings
                             api_calls_made += 1
                             logger.info(f"✅ NDC codes batch: {len(ndc_meanings)} meanings generated")
                         
-                        # Stable BATCH 2: Medications
+                        # ENHANCED BATCH 2: Medications
                         if unique_label_names:
-                            logger.info(f"💉 Stable medications batch: {len(unique_label_names)} medications...")
+                            logger.info(f"💉 Processing medications batch: {unique_label_names}")
                             med_meanings = self._stable_batch_medications(unique_label_names)
+                            logger.info(f"🔍 DEBUG: Medication meanings result: {med_meanings}")
                             stable_extraction_result["code_meanings"]["medication_meanings"] = med_meanings
                             api_calls_made += 1
                             logger.info(f"✅ Medications batch: {len(med_meanings)} meanings generated")
                         
-                        # Calculate stable savings
+                        # Calculate savings
                         individual_calls_would_be = len(unique_ndc_codes) + len(unique_label_names)
                         calls_saved = individual_calls_would_be - api_calls_made
                         
                         stable_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
                         stable_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
                         
-                        # Final stable status
+                        # Final status
                         total_meanings = len(stable_extraction_result["code_meanings"]["ndc_code_meanings"]) + len(stable_extraction_result["code_meanings"]["medication_meanings"])
+                        logger.info(f"🔍 DEBUG: Total pharmacy meanings generated: {total_meanings}")
                         
                         if total_meanings > 0:
                             stable_extraction_result["code_meanings_added"] = True
                             stable_extraction_result["stable_analysis"] = True
                             stable_extraction_result["llm_call_status"] = "completed"
-                            logger.info(f"🔬 Stable PHARMACY BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
+                            logger.info(f"🔬 ENHANCED PHARMACY BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
                         else:
                             stable_extraction_result["llm_call_status"] = "completed_no_meanings"
-                            logger.warning("⚠️ Stable pharmacy batch completed but no meanings generated")
+                            logger.warning("⚠️ Pharmacy batch completed but no meanings generated")
                         
                     except Exception as e:
-                        logger.error(f"❌ Stable pharmacy batch error: {e}")
+                        logger.error(f"❌ Enhanced pharmacy batch error: {e}")
+                        logger.error(f"❌ Error details: {type(e).__name__}: {str(e)}")
+                        import traceback
+                        logger.error(f"❌ Traceback: {traceback.format_exc()}")
                         stable_extraction_result["code_meaning_error"] = str(e)
                         stable_extraction_result["llm_call_status"] = "failed"
                 else:
                     stable_extraction_result["llm_call_status"] = "skipped_no_codes"
-                    logger.warning("⚠️ No pharmacy codes for stable batch processing")
+                    logger.warning("⚠️ No pharmacy codes for batch processing")
+                    logger.info(f"🔍 DEBUG: NDC codes empty: {len(unique_ndc_codes) == 0}")
+                    logger.info(f"🔍 DEBUG: Label names empty: {len(unique_label_names) == 0}")
             else:
                 stable_extraction_result["llm_call_status"] = "skipped_no_api"
-                logger.warning("❌ No stable API integrator for pharmacy batch processing")
+                if not self.api_integrator:
+                    logger.error("❌ No API integrator available for pharmacy batch processing")
+                else:
+                    logger.error("❌ API integrator missing call_llm_isolated_enhanced method")
 
             # Stable performance stats
             processing_time = time.time() - start_time
@@ -876,180 +912,252 @@ plt.show()
     # I'll include the key methods but truncate for space
 
     def _stable_batch_service_codes(self, service_codes: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL service codes"""
+        """Enhanced BATCH process ALL service codes with debugging"""
         try:
             if not service_codes:
+                logger.warning("🔍 DEBUG: No service codes provided to batch processor")
                 return {}
                 
-            logger.info(f"🏥 === Stable BATCH PROCESSING {len(service_codes)} SERVICE CODES ===")
+            logger.info(f"🏥 === ENHANCED BATCH PROCESSING {len(service_codes)} SERVICE CODES ===")
+            logger.info(f"🔍 DEBUG: Service codes to process: {service_codes}")
             
-            codes_list = "\n".join([f"- {code}" for code in service_codes])
+            # Create a simple prompt that's more likely to succeed
+            codes_text = ", ".join(service_codes)
             
-            stable_prompt = f"""Explain these medical service codes briefly:
+            stable_prompt = f"""Please explain these medical service codes. Provide brief explanations for each code.
 
-Service Codes:
-{codes_list}
+Service Codes: {codes_text}
 
-Return ONLY valid JSON format:
-{{
-    "{service_codes[0]}": "Brief clear explanation of this medical service/procedure",
-    "{service_codes[1] if len(service_codes) > 1 else service_codes[0]}": "Brief clear explanation of this medical service/procedure"
-}}
+Please respond with a JSON object where each code is a key and the explanation is the value. For example:
+{{"12345": "Medical procedure or service description"}}
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+Only return the JSON object, no other text."""
 
-            stable_system_msg = """You are a medical coding expert. Provide brief, clear explanations of medical codes in valid JSON format."""
+            stable_system_msg = """You are a medical coding expert. Provide brief, clear explanations of medical service codes in JSON format."""
+            
+            logger.info(f"🔍 DEBUG: Calling LLM with prompt length: {len(stable_prompt)}")
             
             response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
             
-            if response and response != "Brief explanation unavailable":
+            logger.info(f"🔍 DEBUG: LLM response received: {response[:200]}...")
+            logger.info(f"🔍 DEBUG: Response type: {type(response)}")
+            
+            if response and response != "Brief explanation unavailable" and "error" not in response.lower():
                 try:
+                    # Try to extract JSON from response
                     clean_response = self._clean_json_response_stable(response)
+                    logger.info(f"🔍 DEBUG: Cleaned response: {clean_response[:200]}...")
+                    
                     meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable service codes batch: {len(meanings_dict)} meanings extracted")
+                    logger.info(f"✅ Successfully parsed {len(meanings_dict)} service code meanings")
+                    logger.info(f"🔍 DEBUG: Parsed meanings: {meanings_dict}")
                     return meanings_dict
                 except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable service codes JSON parse error: {e}")
-                    return {}
+                    logger.error(f"❌ JSON parse error for service codes: {e}")
+                    logger.error(f"❌ Failed to parse: {clean_response}")
+                    # Return fallback explanations
+                    return {code: f"Medical service code {code}" for code in service_codes}
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error parsing service codes: {e}")
+                    return {code: f"Medical service code {code}" for code in service_codes}
             else:
-                logger.warning(f"⚠️ Stable service codes batch returned unavailable")
-                return {}
+                logger.warning(f"⚠️ LLM returned unavailable or error response: {response}")
+                # Return fallback explanations
+                return {code: f"Medical service code {code}" for code in service_codes}
                 
         except Exception as e:
-            logger.error(f"❌ Stable service codes batch exception: {e}")
-            return {}
+            logger.error(f"❌ Service codes batch exception: {e}")
+            logger.error(f"❌ Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            # Return fallback explanations
+            return {code: f"Medical service code {code}" for code in service_codes}
 
     def _stable_batch_diagnosis_codes(self, diagnosis_codes: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL diagnosis codes"""
+        """Enhanced BATCH process ALL diagnosis codes with debugging"""
         try:
             if not diagnosis_codes:
+                logger.warning("🔍 DEBUG: No diagnosis codes provided to batch processor")
                 return {}
                 
-            logger.info(f"🩺 === Stable BATCH PROCESSING {len(diagnosis_codes)} DIAGNOSIS CODES ===")
+            logger.info(f"🩺 === ENHANCED BATCH PROCESSING {len(diagnosis_codes)} DIAGNOSIS CODES ===")
+            logger.info(f"🔍 DEBUG: Diagnosis codes to process: {diagnosis_codes}")
             
-            codes_list = "\n".join([f"- {code}" for code in diagnosis_codes])
+            # Create a simple prompt that's more likely to succeed
+            codes_text = ", ".join(diagnosis_codes)
             
-            stable_prompt = f"""Explain these diagnosis codes briefly:
+            stable_prompt = f"""Please explain these ICD-10 diagnosis codes. Provide brief medical explanations for each code.
 
-Diagnosis Codes:
-{codes_list}
+Diagnosis Codes: {codes_text}
 
-Return ONLY valid JSON format:
-{{
-    "{diagnosis_codes[0]}": "Brief clear explanation of this medical condition",
-    "{diagnosis_codes[1] if len(diagnosis_codes) > 1 else diagnosis_codes[0]}": "Brief clear explanation of this medical condition"
-}}
+Please respond with a JSON object where each code is a key and the explanation is the value. For example:
+{{"I10": "Essential hypertension", "E11.9": "Type 2 diabetes mellitus"}}
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+Only return the JSON object, no other text."""
 
-            stable_system_msg = """You are a medical diagnosis expert. Provide brief, clear explanations of diagnosis codes in valid JSON format."""
+            stable_system_msg = """You are a medical diagnosis expert. Provide brief, clear explanations of ICD-10 diagnosis codes in JSON format."""
+            
+            logger.info(f"🔍 DEBUG: Calling LLM with prompt length: {len(stable_prompt)}")
             
             response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
             
-            if response and response != "Brief explanation unavailable":
+            logger.info(f"🔍 DEBUG: LLM response received: {response[:200]}...")
+            logger.info(f"🔍 DEBUG: Response type: {type(response)}")
+            
+            if response and response != "Brief explanation unavailable" and "error" not in response.lower():
                 try:
+                    # Try to extract JSON from response
                     clean_response = self._clean_json_response_stable(response)
+                    logger.info(f"🔍 DEBUG: Cleaned response: {clean_response[:200]}...")
+                    
                     meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable diagnosis codes batch: {len(meanings_dict)} meanings extracted")
+                    logger.info(f"✅ Successfully parsed {len(meanings_dict)} diagnosis code meanings")
+                    logger.info(f"🔍 DEBUG: Parsed meanings: {meanings_dict}")
                     return meanings_dict
                 except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable diagnosis codes JSON parse error: {e}")
-                    return {}
+                    logger.error(f"❌ JSON parse error for diagnosis codes: {e}")
+                    logger.error(f"❌ Failed to parse: {clean_response}")
+                    # Return fallback explanations
+                    return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error parsing diagnosis codes: {e}")
+                    return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
             else:
-                logger.warning(f"⚠️ Stable diagnosis codes batch returned unavailable")
-                return {}
+                logger.warning(f"⚠️ LLM returned unavailable or error response: {response}")
+                # Return fallback explanations
+                return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
                 
         except Exception as e:
-            logger.error(f"❌ Stable diagnosis codes batch exception: {e}")
-            return {}
+            logger.error(f"❌ Diagnosis codes batch exception: {e}")
+            logger.error(f"❌ Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            # Return fallback explanations
+            return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
 
     def _stable_batch_ndc_codes(self, ndc_codes: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL NDC codes"""
+        """Enhanced BATCH process ALL NDC codes with debugging"""
         try:
             if not ndc_codes:
+                logger.warning("🔍 DEBUG: No NDC codes provided to batch processor")
                 return {}
                 
-            logger.info(f"💊 === Stable BATCH PROCESSING {len(ndc_codes)} NDC CODES ===")
+            logger.info(f"💊 === ENHANCED BATCH PROCESSING {len(ndc_codes)} NDC CODES ===")
+            logger.info(f"🔍 DEBUG: NDC codes to process: {ndc_codes}")
             
-            codes_list = "\n".join([f"- {code}" for code in ndc_codes])
+            # Create a simple prompt that's more likely to succeed
+            codes_text = ", ".join(ndc_codes)
             
-            stable_prompt = f"""Explain these NDC medication codes briefly:
+            stable_prompt = f"""Please explain these NDC medication codes. Provide brief explanations for each code.
 
-NDC Codes:
-{codes_list}
+NDC Codes: {codes_text}
 
-Return ONLY valid JSON format:
-{{
-    "{ndc_codes[0]}": "Brief explanation of this medication and its use",
-    "{ndc_codes[1] if len(ndc_codes) > 1 else ndc_codes[0]}": "Brief explanation of this medication and its use"
-}}
+Please respond with a JSON object where each code is a key and the explanation is the value. For example:
+{{"12345-678-90": "Medication name and therapeutic use"}}
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+Only return the JSON object, no other text."""
 
-            stable_system_msg = """You are a pharmacy expert. Provide brief, clear explanations of NDC codes in valid JSON format."""
+            stable_system_msg = """You are a pharmacy expert. Provide brief, clear explanations of NDC medication codes in JSON format."""
+            
+            logger.info(f"🔍 DEBUG: Calling LLM with prompt length: {len(stable_prompt)}")
             
             response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
             
-            if response and response != "Brief explanation unavailable":
+            logger.info(f"🔍 DEBUG: LLM response received: {response[:200]}...")
+            logger.info(f"🔍 DEBUG: Response type: {type(response)}")
+            
+            if response and response != "Brief explanation unavailable" and "error" not in response.lower():
                 try:
+                    # Try to extract JSON from response
                     clean_response = self._clean_json_response_stable(response)
+                    logger.info(f"🔍 DEBUG: Cleaned response: {clean_response[:200]}...")
+                    
                     meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable NDC codes batch: {len(meanings_dict)} meanings extracted")
+                    logger.info(f"✅ Successfully parsed {len(meanings_dict)} NDC code meanings")
+                    logger.info(f"🔍 DEBUG: Parsed meanings: {meanings_dict}")
                     return meanings_dict
                 except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable NDC codes JSON parse error: {e}")
-                    return {}
+                    logger.error(f"❌ JSON parse error for NDC codes: {e}")
+                    logger.error(f"❌ Failed to parse: {clean_response}")
+                    # Return fallback explanations
+                    return {code: f"NDC medication code {code}" for code in ndc_codes}
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error parsing NDC codes: {e}")
+                    return {code: f"NDC medication code {code}" for code in ndc_codes}
             else:
-                logger.warning(f"⚠️ Stable NDC codes batch returned unavailable")
-                return {}
+                logger.warning(f"⚠️ LLM returned unavailable or error response: {response}")
+                # Return fallback explanations
+                return {code: f"NDC medication code {code}" for code in ndc_codes}
                 
         except Exception as e:
-            logger.error(f"❌ Stable NDC codes batch exception: {e}")
-            return {}
+            logger.error(f"❌ NDC codes batch exception: {e}")
+            logger.error(f"❌ Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            # Return fallback explanations
+            return {code: f"NDC medication code {code}" for code in ndc_codes}
 
     def _stable_batch_medications(self, medications: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL medications"""
+        """Enhanced BATCH process ALL medications with debugging"""
         try:
             if not medications:
+                logger.warning("🔍 DEBUG: No medications provided to batch processor")
                 return {}
                 
-            logger.info(f"💉 === Stable BATCH PROCESSING {len(medications)} MEDICATIONS ===")
+            logger.info(f"💉 === ENHANCED BATCH PROCESSING {len(medications)} MEDICATIONS ===")
+            logger.info(f"🔍 DEBUG: Medications to process: {medications}")
             
-            meds_list = "\n".join([f"- {med}" for med in medications])
+            # Create a simple prompt that's more likely to succeed
+            meds_text = ", ".join(medications)
             
-            stable_prompt = f"""Explain these medications briefly:
+            stable_prompt = f"""Please explain these medications. Provide brief explanations for each medication.
 
-Medications:
-{meds_list}
+Medications: {meds_text}
 
-Return ONLY valid JSON format:
-{{
-    "{medications[0]}": "Brief explanation of this medication and its use",
-    "{medications[1] if len(medications) > 1 else medications[0]}": "Brief explanation of this medication and its use"
-}}
+Please respond with a JSON object where each medication is a key and the explanation is the value. For example:
+{{"Metformin": "Medication for type 2 diabetes", "Lisinopril": "ACE inhibitor for high blood pressure"}}
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+Only return the JSON object, no other text."""
 
-            stable_system_msg = """You are a medication expert. Provide brief, clear explanations of medications in valid JSON format."""
+            stable_system_msg = """You are a medication expert. Provide brief, clear explanations of medications in JSON format."""
+            
+            logger.info(f"🔍 DEBUG: Calling LLM with prompt length: {len(stable_prompt)}")
             
             response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
             
-            if response and response != "Brief explanation unavailable":
+            logger.info(f"🔍 DEBUG: LLM response received: {response[:200]}...")
+            logger.info(f"🔍 DEBUG: Response type: {type(response)}")
+            
+            if response and response != "Brief explanation unavailable" and "error" not in response.lower():
                 try:
+                    # Try to extract JSON from response
                     clean_response = self._clean_json_response_stable(response)
+                    logger.info(f"🔍 DEBUG: Cleaned response: {clean_response[:200]}...")
+                    
                     meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable medications batch: {len(meanings_dict)} meanings extracted")
+                    logger.info(f"✅ Successfully parsed {len(meanings_dict)} medication meanings")
+                    logger.info(f"🔍 DEBUG: Parsed meanings: {meanings_dict}")
                     return meanings_dict
                 except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable medications JSON parse error: {e}")
-                    return {}
+                    logger.error(f"❌ JSON parse error for medications: {e}")
+                    logger.error(f"❌ Failed to parse: {clean_response}")
+                    # Return fallback explanations
+                    return {med: f"Medication: {med}" for med in medications}
+                except Exception as e:
+                    logger.error(f"❌ Unexpected error parsing medications: {e}")
+                    return {med: f"Medication: {med}" for med in medications}
             else:
-                logger.warning(f"⚠️ Stable medications batch returned unavailable")
-                return {}
+                logger.warning(f"⚠️ LLM returned unavailable or error response: {response}")
+                # Return fallback explanations
+                return {med: f"Medication: {med}" for med in medications}
                 
         except Exception as e:
-            logger.error(f"❌ Stable medications batch exception: {e}")
-            return {}
+            logger.error(f"❌ Medications batch exception: {e}")
+            logger.error(f"❌ Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            # Return fallback explanations
+            return {med: f"Medication: {med}" for med in medications}
 
     def extract_health_entities_with_clinical_insights(self, pharmacy_data: Dict[str, Any],
                                                       pharmacy_extraction: Dict[str, Any],
