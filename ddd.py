@@ -765,8 +765,6 @@ def initialize_session_state():
         st.session_state.show_heart_attack = False
     if 'show_health_trajectory' not in st.session_state:
         st.session_state.show_health_trajectory = False
-    if 'show_final_summary' not in st.session_state:
-        st.session_state.show_final_summary = False
     
     # Enhanced workflow steps
     if 'workflow_steps' not in st.session_state:
@@ -1080,12 +1078,7 @@ def display_batch_code_meanings_enhanced(results):
                     
                     # Download button for the data
                     csv = df_diagnosis_sorted.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download ICD-10 Data as CSV",
-                        data=csv,
-                        file_name="icd10_diagnosis_codes_with_meanings.csv",
-                        mime="text/csv"
-                    )
+                    st.info("📊 ICD-10 diagnosis data processed successfully")
                     
                     # Show code frequency analysis
                     with st.expander("📈 ICD-10 Code Frequency Analysis"):
@@ -1144,14 +1137,8 @@ def display_batch_code_meanings_enhanced(results):
                         }
                     )
                     
-                    # Download button for the data
-                    csv = df_service_sorted.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download Service Codes as CSV",
-                        data=csv,
-                        file_name="medical_service_codes_with_meanings.csv",
-                        mime="text/csv"
-                    )
+                    # Show service codes data
+                    st.info("📊 Medical service codes processed successfully")
                     
                     # Show code frequency analysis
                     with st.expander("📈 Service Code Frequency Analysis"):
@@ -1205,7 +1192,7 @@ def display_batch_code_meanings_enhanced(results):
             st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
             st.markdown("#### 💊 NDC Codes with Fill Dates and Meanings")
             
-            if ndc_meanings and pharmacy_records:
+            if pharmacy_records:
                 # Prepare data for enhanced table display
                 ndc_data = []
                 for record in pharmacy_records:
@@ -1214,10 +1201,11 @@ def display_batch_code_meanings_enhanced(results):
                     label_name = record.get("lbl_nm", "")
                     record_path = record.get("data_path", "")
                     
-                    if ndc_code and ndc_code in ndc_meanings:
+                    if ndc_code:  # Just check if NDC code exists
+                        ndc_meaning = ndc_meanings.get(ndc_code, f"NDC code {ndc_code}")  # Use fallback if no meaning
                         ndc_data.append({
                             "NDC Code": ndc_code,
-                            "NDC Meaning": ndc_meanings[ndc_code],
+                            "NDC Meaning": ndc_meaning,
                             "Medication Name": label_name,
                             "Fill Date": fill_date,
                             "Record Path": record_path
@@ -1247,14 +1235,8 @@ def display_batch_code_meanings_enhanced(results):
                         }
                     )
                     
-                    # Download button for the data
-                    csv = df_ndc_sorted.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download NDC Codes as CSV",
-                        data=csv,
-                        file_name="ndc_codes_with_meanings.csv",
-                        mime="text/csv"
-                    )
+                    # Show NDC codes data
+                    st.info("📊 NDC codes data processed successfully")
                     
                     # Show code frequency analysis
                     with st.expander("📈 NDC Code Frequency Analysis"):
@@ -1262,19 +1244,19 @@ def display_batch_code_meanings_enhanced(results):
                         st.bar_chart(code_counts)
                         st.write("**Most Frequent NDC Codes:**")
                         for code, count in code_counts.head(5).items():
-                            meaning = ndc_meanings.get(code, "Unknown")
+                            meaning = ndc_meanings.get(code, f"NDC code {code}")
                             st.write(f"• **{code}** ({count}x): {meaning}")
                 else:
                     st.info("No NDC codes found in pharmacy records")
             else:
-                st.warning("No NDC code meanings available")
+                st.warning("No pharmacy records available for NDC analysis")
             st.markdown('</div>', unsafe_allow_html=True)
         
         with pharm_tab2:
             st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
             st.markdown("#### 💉 Medication Names with Fill Dates and Meanings")
             
-            if med_meanings and pharmacy_records:
+            if pharmacy_records:
                 # Prepare data for enhanced table display
                 medication_data = []
                 for record in pharmacy_records:
@@ -1283,10 +1265,11 @@ def display_batch_code_meanings_enhanced(results):
                     ndc_code = record.get("ndc", "")
                     record_path = record.get("data_path", "")
                     
-                    if med_name and med_name in med_meanings:
+                    if med_name:  # Just check if medication name exists
+                        med_meaning = med_meanings.get(med_name, f"Medication: {med_name}")  # Use fallback if no meaning
                         medication_data.append({
                             "Medication Name": med_name,
-                            "Medication Meaning": med_meanings[med_name],
+                            "Medication Meaning": med_meaning,
                             "NDC Code": ndc_code,
                             "Fill Date": fill_date,
                             "Record Path": record_path
@@ -1316,14 +1299,8 @@ def display_batch_code_meanings_enhanced(results):
                         }
                     )
                     
-                    # Download button for the data
-                    csv = df_medication_sorted.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download Medications as CSV",
-                        data=csv,
-                        file_name="medications_with_meanings.csv",
-                        mime="text/csv"
-                    )
+                    # Show medications data
+                    st.info("📊 Medication data processed successfully")
                     
                     # Show medication frequency analysis
                     with st.expander("📈 Medication Frequency Analysis"):
@@ -1331,12 +1308,12 @@ def display_batch_code_meanings_enhanced(results):
                         st.bar_chart(med_counts)
                         st.write("**Most Frequent Medications:**")
                         for med, count in med_counts.head(5).items():
-                            meaning = med_meanings.get(med, "Unknown")
+                            meaning = med_meanings.get(med, f"Medication: {med}")
                             st.write(f"• **{med}** ({count}x): {meaning}")
                 else:
                     st.info("No medication names found in pharmacy records")
             else:
-                st.warning("No medication meanings available")
+                st.warning("No pharmacy records available for medication analysis")
             st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1398,6 +1375,9 @@ def execute_matplotlib_code_enhanced_stability(code: str):
         plt.clf()
         plt.close('all')
         plt.ioff()
+        
+        # Set safe matplotlib style
+        plt.style.use('default')
         
         # Create namespace for code execution
         namespace = {
@@ -1480,8 +1460,13 @@ def execute_matplotlib_code_enhanced_stability(code: str):
                 'utilization_data': [2, 3, 1, 4, 2, 3]
             })
         
-        # Execute the code
-        exec(code, namespace)
+        # Execute the code with safe style
+        code_with_safe_style = f"""
+import matplotlib.pyplot as plt
+plt.style.use('default')  # Use safe default style
+{code}
+"""
+        exec(code_with_safe_style, namespace)
         
         # Get the figure
         fig = plt.gcf()
@@ -2531,15 +2516,6 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 st.metric("🎯 Conditions", entity_count)
             
             st.markdown("</div>", unsafe_allow_html=True)
-            
-            # Add download option
-            if st.button("📥 Download Health Trajectory Report", key="download_trajectory"):
-                st.download_button(
-                    label="📄 Download as Text File",
-                    data=health_trajectory,
-                    file_name=f"health_trajectory_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain"
-                )
         else:
             st.warning("⚠️ Health trajectory analysis not available. Please run the analysis first.")
 
@@ -2721,32 +2697,6 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     st.write(f"• {endpoint}")
             
             st.info("💡 **Note:** Make sure the heart attack prediction ML server is running and accessible.")
-
-    # 6. FINAL SUMMARY SECTION
-    if st.button("📋 Final Summary", use_container_width=True, key="final_summary_btn"):
-        st.session_state.show_final_summary = not st.session_state.show_final_summary
-    
-    if st.session_state.show_final_summary:
-        st.markdown("""
-        <div class="section-box">
-            <div class="section-title">📋 Executive Healthcare Summary</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        final_summary = safe_get(results, 'final_summary', '')
-        if final_summary:
-            st.markdown(final_summary)
-            
-            # Add download option
-            if st.button("📥 Download Executive Summary", key="download_summary"):
-                st.download_button(
-                    label="📄 Download as Text File",
-                    data=final_summary,
-                    file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain"
-                )
-        else:
-            st.warning("Executive summary not available")
 
     # Enhanced Analysis Summary
     st.markdown("---")
