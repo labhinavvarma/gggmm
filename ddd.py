@@ -1,1021 +1,741 @@
-# Stable Health Data Processor with reliable healthcare analysis and graph generation
+# Enhanced Health API Integrator with reliable connectivity and graph generation support
 import json
-import re
-import time
-from datetime import datetime, date
-from typing import Dict, Any, List
+import requests
+import urllib3
+import uuid
+import asyncio
+import aiohttp
+from datetime import datetime
+from typing import Dict, Any, Optional
 import logging
- 
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
- 
-class EnhancedHealthDataProcessor:
-    """Stable data processor with reliable healthcare analysis and graph generation"""
 
-    def __init__(self, api_integrator=None):
-        self.api_integrator = api_integrator
-        logger.info("🔬 Stable HealthDataProcessor initialized with graph generation")
-        
-        # Stable API integrator validation
-        if self.api_integrator:
-            logger.info("✅ Stable API integrator provided")
-            if hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-                logger.info("✅ Stable batch processing enabled")
+class EnhancedHealthAPIIntegrator:
+    """Enhanced API integrator with reliable healthcare connectivity and graph generation support"""
+
+    def __init__(self, config):
+        self.config = config
+        logger.info("🔬 Enhanced HealthAPIIntegrator initialized with graph generation support")
+        logger.info(f"⚡ Enhanced timeout: {self.config.timeout}s")
+        logger.info(f"🌐 Snowflake API: {self.config.api_url}")
+        logger.info(f"📡 Backend API: {self.config.fastapi_url}")
+        logger.info(f"❤️ Heart Attack ML API: {self.config.heart_attack_api_url}")
+        logger.info(f"📊 Graph generation: Ready for matplotlib code generation")
+
+    def call_llm_enhanced(self, user_message: str, system_message: Optional[str] = None) -> str:
+        """Enhanced Snowflake Cortex API call with robust error handling"""
+        try:
+            session_id = str(uuid.uuid4()) + "_enhanced_healthcare"
+            sys_msg = system_message or self.config.sys_msg
+
+            logger.info(f"🔬 Enhanced Healthcare LLM call - {len(user_message)} chars")
+
+            payload = {
+                "query": {
+                    "aplctn_cd": self.config.aplctn_cd,
+                    "app_id": self.config.app_id,
+                    "api_key": self.config.api_key,
+                    "method": "cortex",
+                    "model": self.config.model,
+                    "sys_msg": sys_msg,
+                    "limit_convs": "0",
+                    "prompt": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": user_message
+                            }
+                        ]
+                    },
+                    "app_lvl_prefix": "enhanced_healthcare",
+                    "user_id": "healthcare_enhanced",
+                    "session_id": session_id
+                }
+            }
+
+            headers = {
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json",
+                "Authorization": f'Snowflake Token="{self.config.api_key}"',
+                "X-Healthcare-Analysis": "enhanced",
+                "X-Clinical-Context": "comprehensive",
+                "X-Graph-Generation": "enabled"
+            }
+
+            response = requests.post(
+                self.config.api_url,
+                headers=headers,
+                json=payload,
+                verify=False,
+                timeout=self.config.timeout
+            )
+
+            if response.status_code == 200:
+                try:
+                    raw = response.text
+                    if "end_of_stream" in raw:
+                        answer, _, _ = raw.partition("end_of_stream")
+                        bot_reply = answer.strip()
+                    else:
+                        bot_reply = raw.strip()
+
+                    logger.info("✅ Enhanced Healthcare LLM call successful")
+                    return bot_reply
+
+                except Exception as e:
+                    error_msg = f"Enhanced Healthcare LLM parse error: {e}"
+                    logger.error(error_msg)
+                    return f"I apologize, but I encountered a processing error while analyzing your healthcare data. Please try rephrasing your question."
             else:
-                logger.warning("⚠️ Isolated LLM method missing - batch processing limited")
-        else:
-            logger.warning("⚠️ No API integrator - batch processing disabled")
+                error_msg = f"Enhanced Healthcare LLM API error {response.status_code}"
+                logger.error(error_msg)
+                return f"I'm experiencing connectivity issues with the healthcare analysis service. Please try again in a moment."
 
-    def detect_graph_request(self, user_query: str) -> Dict[str, Any]:
-        """Detect if user is requesting a graph/chart"""
-        query_lower = user_query.lower()
-        
-        graph_keywords = [
-            'chart', 'graph', 'plot', 'visualize', 'visualization', 'show me',
-            'create a', 'generate', 'display', 'timeline', 'pie chart', 
-            'bar chart', 'histogram', 'scatter plot', 'dashboard'
-        ]
-        
-        medical_data_keywords = [
-            'medication', 'diagnosis', 'risk', 'condition', 'health', 
-            'medical', 'pharmacy', 'claims', 'timeline', 'trend'
-        ]
-        
-        has_graph_keyword = any(keyword in query_lower for keyword in graph_keywords)
-        has_medical_keyword = any(keyword in query_lower for keyword in medical_data_keywords)
-        
-        is_graph_request = has_graph_keyword and has_medical_keyword
-        
-        # Determine graph type
-        graph_type = "general"
-        if "medication" in query_lower and ("timeline" in query_lower or "time" in query_lower):
-            graph_type = "medication_timeline"
-        elif "diagnosis" in query_lower and ("timeline" in query_lower or "time" in query_lower):
-            graph_type = "diagnosis_timeline"
-        elif "pie" in query_lower or "distribution" in query_lower:
-            graph_type = "pie_chart"
-        elif "risk" in query_lower and ("dashboard" in query_lower or "assessment" in query_lower):
-            graph_type = "risk_dashboard"
-        elif "bar" in query_lower or "count" in query_lower:
-            graph_type = "bar_chart"
-        
+        except requests.exceptions.Timeout:
+            error_msg = f"Enhanced Healthcare LLM timeout after {self.config.timeout}s"
+            logger.error(error_msg)
+            return "The healthcare analysis request is taking longer than expected. Please try again with a simpler question."
+        except requests.exceptions.ConnectionError:
+            error_msg = f"Enhanced Healthcare LLM connection failed"
+            logger.error(error_msg)
+            return "I'm having trouble connecting to the healthcare analysis service. Please check your connection and try again."
+        except Exception as e:
+            error_msg = f"Enhanced Healthcare LLM unexpected error: {str(e)}"
+            logger.error(error_msg)
+            return "I encountered an unexpected error during healthcare analysis. Please try rephrasing your question or contact support if the issue persists."
+
+    def call_llm_isolated_enhanced(self, user_message: str, system_message: Optional[str] = None) -> str:
+        """Enhanced isolated LLM call for reliable code explanations and graph generation"""
+        try:
+            session_id = str(uuid.uuid4()) + "_enhanced_batch"
+            sys_msg = system_message or """You are Dr. CodeAI, a medical coding and visualization expert. Provide clear, concise explanations of medical codes and healthcare terminology. Support graph generation requests with matplotlib code. Keep responses brief but informative."""
+
+            logger.info(f"🔬 Enhanced batch healthcare call: {user_message[:100]}...")
+
+            payload = {
+                "query": {
+                    "aplctn_cd": self.config.aplctn_cd,
+                    "app_id": self.config.app_id,
+                    "api_key": self.config.api_key,
+                    "method": "cortex",
+                    "model": self.config.model,
+                    "sys_msg": sys_msg,
+                    "limit_convs": "0",
+                    "prompt": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": user_message
+                            }
+                        ]
+                    },
+                    "app_lvl_prefix": "enhanced_batch",
+                    "user_id": "batch_enhanced",
+                    "session_id": session_id
+                }
+            }
+
+            headers = {
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json",
+                "Authorization": f'Snowflake Token="{self.config.api_key}"',
+                "X-Healthcare-Batch": "enhanced",
+                "X-Medical-Coding": "comprehensive",
+                "X-Graph-Generation": "matplotlib"
+            }
+
+            response = requests.post(
+                self.config.api_url,
+                headers=headers,
+                json=payload,
+                verify=False,
+                timeout=30  # Longer timeout for batch processing
+            )
+
+            if response.status_code == 200:
+                try:
+                    raw = response.text
+                    if "end_of_stream" in raw:
+                        answer, _, _ = raw.partition("end_of_stream")
+                        bot_reply = answer.strip()
+                    else:
+                        bot_reply = raw.strip()
+
+                    logger.info(f"✅ Enhanced batch healthcare SUCCESS: {len(bot_reply)} chars returned")
+                    return bot_reply
+
+                except Exception as e:
+                    logger.warning(f"Enhanced batch parse error: {e}")
+                    return "Brief explanation unavailable"
+            else:
+                logger.warning(f"❌ Enhanced batch API error {response.status_code}")
+                return "Brief explanation unavailable"
+
+        except Exception as e:
+            logger.warning(f"❌ Enhanced batch call failed: {str(e)}")
+            return "Brief explanation unavailable"
+
+    def call_llm_for_graph_generation(self, user_message: str, chat_context: Dict[str, Any]) -> str:
+        """Specialized LLM call for graph generation with matplotlib code"""
+        try:
+            session_id = str(uuid.uuid4()) + "_graph_generation"
+            
+            graph_system_msg = """You are Dr. GraphAI, a healthcare data visualization expert specializing in matplotlib code generation. 
+
+CAPABILITIES:
+- Generate working matplotlib code for healthcare data visualizations
+- Create medical timeline charts, risk dashboards, medication distributions
+- Use actual patient data when available from the provided context
+- Provide complete, executable Python code with proper imports
+
+RESPONSE FORMAT:
+Always respond with:
+1. Brief explanation of the visualization
+2. Complete matplotlib code block
+3. Any data insights or observations
+
+IMPORTANT: Generate only working matplotlib code that can be executed directly."""
+
+            # Prepare context summary for graph generation
+            context_summary = self._prepare_graph_context_summary(chat_context)
+            
+            enhanced_prompt = f"""Healthcare Data Visualization Request:
+
+USER REQUEST: {user_message}
+
+AVAILABLE PATIENT DATA CONTEXT:
+{context_summary}
+
+Generate appropriate matplotlib code for this healthcare visualization request. Use the available patient data when possible, or create representative sample data if specific data is not available.
+
+Provide:
+1. Brief description of what the visualization shows
+2. Complete executable matplotlib code
+3. Any relevant healthcare insights"""
+
+            logger.info(f"📊 Enhanced graph generation LLM call: {user_message[:50]}...")
+
+            payload = {
+                "query": {
+                    "aplctn_cd": self.config.aplctn_cd,
+                    "app_id": self.config.app_id,
+                    "api_key": self.config.api_key,
+                    "method": "cortex",
+                    "model": self.config.model,
+                    "sys_msg": graph_system_msg,
+                    "limit_convs": "0",
+                    "prompt": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": enhanced_prompt
+                            }
+                        ]
+                    },
+                    "app_lvl_prefix": "enhanced_graph",
+                    "user_id": "graph_enhanced",
+                    "session_id": session_id
+                }
+            }
+
+            headers = {
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json",
+                "Authorization": f'Snowflake Token="{self.config.api_key}"',
+                "X-Healthcare-Graph": "matplotlib",
+                "X-Visualization": "enhanced"
+            }
+
+            response = requests.post(
+                self.config.api_url,
+                headers=headers,
+                json=payload,
+                verify=False,
+                timeout=45  # Longer timeout for graph generation
+            )
+
+            if response.status_code == 200:
+                try:
+                    raw = response.text
+                    if "end_of_stream" in raw:
+                        answer, _, _ = raw.partition("end_of_stream")
+                        bot_reply = answer.strip()
+                    else:
+                        bot_reply = raw.strip()
+
+                    logger.info(f"✅ Enhanced graph generation SUCCESS: {len(bot_reply)} chars returned")
+                    return bot_reply
+
+                except Exception as e:
+                    logger.error(f"Enhanced graph generation parse error: {e}")
+                    return "Graph generation failed during response parsing. Please try a simpler visualization request."
+            else:
+                logger.error(f"❌ Enhanced graph generation API error {response.status_code}")
+                return "Graph generation service temporarily unavailable. Please try again or request a different visualization."
+
+        except Exception as e:
+            logger.error(f"❌ Enhanced graph generation call failed: {str(e)}")
+            return f"Graph generation encountered an error: {str(e)}. Please try a simpler visualization request."
+
+    def _prepare_graph_context_summary(self, chat_context: Dict[str, Any]) -> str:
+        """Prepare a summary of available data for graph generation"""
+        try:
+            summary_parts = []
+            
+            # Patient overview
+            patient_overview = chat_context.get("patient_overview", {})
+            if patient_overview:
+                age = patient_overview.get("age", "unknown")
+                risk_level = patient_overview.get("heart_attack_risk_level", "unknown")
+                summary_parts.append(f"Patient: Age {age}, Risk Level: {risk_level}")
+            
+            # Medical data summary
+            medical_extraction = chat_context.get("medical_extraction", {})
+            if medical_extraction and medical_extraction.get("hlth_srvc_records"):
+                medical_records = len(medical_extraction["hlth_srvc_records"])
+                diagnosis_codes = medical_extraction.get("extraction_summary", {}).get("total_diagnosis_codes", 0)
+                summary_parts.append(f"Medical: {medical_records} service records, {diagnosis_codes} diagnosis codes")
+                
+                # Add sample codes for visualization
+                if medical_extraction.get("code_meanings", {}).get("diagnosis_code_meanings"):
+                    sample_diagnoses = list(medical_extraction["code_meanings"]["diagnosis_code_meanings"].keys())[:3]
+                    summary_parts.append(f"Sample diagnoses: {', '.join(sample_diagnoses)}")
+            
+            # Pharmacy data summary
+            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                pharmacy_records = len(pharmacy_extraction["ndc_records"])
+                summary_parts.append(f"Pharmacy: {pharmacy_records} medication records")
+                
+                # Add sample medications for visualization
+                if pharmacy_extraction.get("code_meanings", {}).get("medication_meanings"):
+                    sample_meds = list(pharmacy_extraction["code_meanings"]["medication_meanings"].keys())[:3]
+                    summary_parts.append(f"Sample medications: {', '.join(sample_meds)}")
+            
+            # Risk assessment data
+            entity_extraction = chat_context.get("entity_extraction", {})
+            if entity_extraction:
+                diabetes = entity_extraction.get("diabetics", "unknown")
+                bp = entity_extraction.get("blood_pressure", "unknown")
+                smoking = entity_extraction.get("smoking", "unknown")
+                summary_parts.append(f"Health factors: Diabetes={diabetes}, BP={bp}, Smoking={smoking}")
+            
+            # Heart attack prediction
+            heart_prediction = chat_context.get("heart_attack_prediction", {})
+            if heart_prediction and not heart_prediction.get("error"):
+                risk_score = chat_context.get("heart_attack_risk_score", 0)
+                summary_parts.append(f"Heart attack risk: {risk_score:.2f}")
+            
+            return "\n".join(summary_parts) if summary_parts else "Limited patient data available for visualization"
+            
+        except Exception as e:
+            logger.warning(f"Error preparing graph context: {e}")
+            return "Patient healthcare data available for visualization"
+
+    def fetch_backend_data_enhanced(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced backend data fetch with comprehensive validation"""
+        try:
+            logger.info(f"🔬 Enhanced Healthcare Backend API call: {self.config.fastapi_url}/all")
+
+            # Enhanced validation
+            required_fields = {
+                "first_name": "Patient identification",
+                "last_name": "Patient identification", 
+                "ssn": "Unique patient identifier",
+                "date_of_birth": "Age verification",
+                "gender": "Risk assessment",
+                "zip_code": "Geographic analysis"
+            }
+            
+            missing_fields = []
+            validation_errors = []
+            
+            for field, purpose in required_fields.items():
+                if not patient_data.get(field):
+                    missing_fields.append(f"{field}: {purpose}")
+                else:
+                    # Basic validation
+                    if field == "ssn" and len(str(patient_data[field]).replace("-", "")) != 9:
+                        validation_errors.append(f"SSN format invalid")
+                    elif field == "zip_code" and len(str(patient_data[field])) < 5:
+                        validation_errors.append(f"ZIP code incomplete")
+            
+            if missing_fields or validation_errors:
+                all_errors = missing_fields + validation_errors
+                return {"error": f"Validation failed: {'; '.join(all_errors)}"}
+
+            # Enhanced API call
+            headers = {
+                "Content-Type": "application/json",
+                "X-Healthcare-Request": "enhanced",
+                "X-Clinical-Analysis": "comprehensive",
+                "X-Graph-Generation": "supported"
+            }
+
+            response = requests.post(
+                f"{self.config.fastapi_url}/all",
+                json=patient_data,
+                headers=headers,
+                timeout=self.config.timeout
+            )
+
+            if response.status_code == 200:
+                api_data = response.json()
+
+                # Enhanced result mapping
+                result = {
+                    "mcid_output": self._enhanced_process_response(api_data.get('mcid_search', {}), 'mcid'),
+                    "medical_output": self._enhanced_process_response(api_data.get('medical_submit', {}), 'medical'),
+                    "pharmacy_output": self._enhanced_process_response(api_data.get('pharmacy_submit', {}), 'pharmacy'),
+                    "token_output": self._enhanced_process_response(api_data.get('get_token', {}), 'token')
+                }
+
+                logger.info("✅ Enhanced healthcare backend API successful")
+                logger.info(f"🔬 Medical data: {'Available' if result['medical_output'].get('status_code') == 200 else 'Limited'}")
+                logger.info(f"💊 Pharmacy data: {'Available' if result['pharmacy_output'].get('status_code') == 200 else 'Limited'}")
+                logger.info(f"🆔 MCID data: {'Available' if result['mcid_output'].get('status_code') == 200 else 'Limited'}")
+                logger.info(f"📊 Graph generation: Ready for healthcare visualizations")
+                
+                return result
+
+            else:
+                error_msg = f"Backend API failed {response.status_code}: {response.text[:200]}"
+                logger.error(error_msg)
+                return {"error": error_msg}
+
+        except Exception as e:
+            error_msg = f"Backend fetch error: {str(e)}"
+            logger.error(error_msg)
+            return {"error": error_msg}
+
+    def _enhanced_process_response(self, response_data: Dict[str, Any], service_name: str) -> Dict[str, Any]:
+        """Enhanced API response processing with graph generation support"""
+        if not response_data:
+            return {
+                "error": f"No {service_name} data available", 
+                "service": service_name,
+                "status": "unavailable",
+                "graph_ready": False
+            }
+
+        # Enhanced error handling
+        if "error" in response_data:
+            return {
+                "error": response_data["error"],
+                "service": service_name,
+                "status_code": response_data.get("status_code", 500),
+                "status": "error",
+                "graph_ready": False
+            }
+
+        # Enhanced successful response handling
+        if response_data.get("status_code") == 200 and "body" in response_data:
+            return {
+                "status_code": 200,
+                "body": response_data["body"],
+                "service": service_name,
+                "timestamp": response_data.get("timestamp", datetime.now().isoformat()),
+                "status": "success",
+                "graph_ready": True,
+                "visualization_supported": True
+            }
+
+        # Enhanced other format handling
         return {
-            "is_graph_request": is_graph_request,
-            "graph_type": graph_type,
-            "confidence": 0.8 if is_graph_request else 0.1
+            "status_code": response_data.get("status_code", 200),
+            "body": response_data,
+            "service": service_name,
+            "timestamp": datetime.now().isoformat(),
+            "status": "partial",
+            "graph_ready": False
         }
 
-    def generate_matplotlib_code(self, graph_type: str, chat_context: Dict[str, Any]) -> str:
-        """Generate matplotlib code based on graph type and available data"""
+    def test_healthcare_llm_connection(self) -> Dict[str, Any]:
+        """Test enhanced healthcare LLM connection with graph generation support"""
         try:
-            if graph_type == "medication_timeline":
-                return self._generate_medication_timeline_code(chat_context)
-            elif graph_type == "diagnosis_timeline":
-                return self._generate_diagnosis_timeline_code(chat_context)
-            elif graph_type == "pie_chart":
-                return self._generate_medication_pie_code(chat_context)
-            elif graph_type == "risk_dashboard":
-                return self._generate_risk_dashboard_code(chat_context)
-            elif graph_type == "bar_chart":
-                return self._generate_condition_bar_code(chat_context)
+            logger.info("🔬 Testing enhanced healthcare LLM connection...")
+            
+            test_prompt = """You are performing a healthcare system test with graph generation capabilities.
+
+Please respond with: "Enhanced Healthcare LLM connection ready for clinical analysis and matplotlib graph generation."
+
+This tests basic connectivity, response formatting, and visualization capabilities."""
+
+            test_response = self.call_llm_enhanced(test_prompt, self.config.sys_msg)
+
+            # Enhanced validation
+            if test_response and not test_response.startswith("Error") and not test_response.startswith("I apologize"):
+                return {
+                    "success": True,
+                    "response": test_response[:200] + "...",
+                    "endpoint": self.config.api_url,
+                    "model": self.config.model,
+                    "healthcare_ready": True,
+                    "graph_generation_ready": True,
+                    "enhanced_connection": True
+                }
             else:
-                return self._generate_general_health_overview_code(chat_context)
+                return {
+                    "success": False,
+                    "error": test_response,
+                    "endpoint": self.config.api_url,
+                    "healthcare_ready": False,
+                    "graph_generation_ready": False,
+                    "enhanced_connection": False
+                }
         except Exception as e:
-            logger.error(f"Error generating matplotlib code: {e}")
-            return self._generate_error_chart_code(str(e))
-
-    def _generate_medication_timeline_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medication timeline matplotlib code"""
-        pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
-        ndc_records = pharmacy_extraction.get("ndc_records", [])
-        
-        if not ndc_records:
-            return self._generate_no_data_chart_code("No medication data available")
-        
-        return '''
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from datetime import datetime
-import numpy as np
-
-# Extract medication data
-medications = []
-dates = []
-med_names = []
-
-# Sample data if no real data
-if not locals().get('ndc_records'):
-    # Fallback sample data
-    sample_medications = ['Metformin', 'Lisinopril', 'Atorvastatin', 'Amlodipine']
-    sample_dates = ['2023-01-15', '2023-02-20', '2023-03-10', '2023-04-05']
-    
-    for i, (med, date_str) in enumerate(zip(sample_medications, sample_dates)):
-        medications.append(med)
-        dates.append(datetime.strptime(date_str, '%Y-%m-%d'))
-        med_names.append(f"Medication {i+1}")
-
-# Create figure
-plt.figure(figsize=(12, 8))
-
-# Create timeline plot
-if medications and dates:
-    # Sort by date
-    sorted_data = sorted(zip(dates, medications), key=lambda x: x[0])
-    sorted_dates, sorted_meds = zip(*sorted_data)
-    
-    # Create scatter plot
-    y_positions = range(len(sorted_meds))
-    plt.scatter(sorted_dates, y_positions, s=100, c='steelblue', alpha=0.7)
-    
-    # Add medication labels
-    for i, (date, med) in enumerate(zip(sorted_dates, sorted_meds)):
-        plt.annotate(med, (date, i), xytext=(10, 0), 
-                    textcoords='offset points', va='center',
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
-    
-    plt.yticks(y_positions, [f"Rx {i+1}" for i in range(len(sorted_meds))])
-    plt.xlabel('Date')
-    plt.ylabel('Medications')
-    plt.title('Patient Medication Timeline', fontsize=16, fontweight='bold')
-    
-    # Format x-axis
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    plt.gca().xaxis.set_major_locator(mdates.MonthLocator())
-    plt.xticks(rotation=45)
-else:
-    plt.text(0.5, 0.5, 'No medication timeline data available', 
-             ha='center', va='center', transform=plt.gca().transAxes,
-             fontsize=14, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_diagnosis_timeline_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate diagnosis timeline matplotlib code"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-from datetime import datetime, timedelta
-
-# Sample diagnosis data
-diagnoses = ['Hypertension', 'Type 2 Diabetes', 'Hyperlipidemia']
-diagnosis_dates = ['2022-06-15', '2022-12-20', '2023-03-10']
-icd_codes = ['I10', 'E11.9', 'E78.5']
-
-# Create figure
-plt.figure(figsize=(12, 6))
-
-# Convert dates
-dates = [datetime.strptime(d, '%Y-%m-%d') for d in diagnosis_dates]
-
-# Create timeline
-for i, (date, diagnosis, code) in enumerate(zip(dates, diagnoses, icd_codes)):
-    plt.barh(i, 1, left=date.toordinal(), height=0.6, 
-             color=plt.cm.Set3(i), alpha=0.7, label=f"{diagnosis} ({code})")
-    
-    # Add text annotation
-    plt.text(date.toordinal() + 15, i, f"{diagnosis}\\n{code}", 
-             va='center', ha='left', fontweight='bold')
-
-plt.yticks(range(len(diagnoses)), [f"Condition {i+1}" for i in range(len(diagnoses))])
-plt.xlabel('Timeline')
-plt.ylabel('Medical Conditions')
-plt.title('Patient Diagnosis Timeline', fontsize=16, fontweight='bold')
-
-# Format x-axis to show dates
-ax = plt.gca()
-ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: datetime.fromordinal(int(x)).strftime('%Y-%m')))
-plt.xticks(rotation=45)
-
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.show()
-'''
-
-    def _generate_medication_pie_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medication distribution pie chart code"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Sample medication data
-medications = ['Metformin', 'Lisinopril', 'Atorvastatin', 'Amlodipine', 'Aspirin']
-frequencies = [30, 25, 20, 15, 10]  # Days supplied or frequency
-colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99', '#ff99cc']
-
-# Create figure
-plt.figure(figsize=(10, 8))
-
-# Create pie chart
-wedges, texts, autotexts = plt.pie(frequencies, labels=medications, autopct='%1.1f%%',
-                                  colors=colors, startangle=90, explode=(0.1, 0, 0, 0, 0))
-
-# Enhance appearance
-for autotext in autotexts:
-    autotext.set_color('white')
-    autotext.set_fontweight('bold')
-
-plt.title('Patient Medication Distribution', fontsize=16, fontweight='bold', pad=20)
-
-# Add legend with additional info
-legend_labels = [f"{med} - {freq} days" for med, freq in zip(medications, frequencies)]
-plt.legend(wedges, legend_labels, title="Medications", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
-
-plt.axis('equal')
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_risk_dashboard_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate risk assessment dashboard code"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Risk assessment data
-risk_categories = ['Cardiovascular', 'Diabetes', 'Hypertension', 'Medication Adherence']
-risk_scores = [0.65, 0.45, 0.75, 0.30]  # Risk scores 0-1
-risk_levels = ['High', 'Medium', 'High', 'Low']
-
-# Create figure with subplots
-fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-
-# 1. Risk Scores Bar Chart
-colors = ['red' if score > 0.6 else 'orange' if score > 0.4 else 'green' for score in risk_scores]
-bars = ax1.bar(risk_categories, risk_scores, color=colors, alpha=0.7)
-ax1.set_title('Risk Assessment Scores', fontweight='bold')
-ax1.set_ylabel('Risk Score (0-1)')
-ax1.set_ylim(0, 1)
-
-# Add value labels on bars
-for bar, score in zip(bars, risk_scores):
-    height = bar.get_height()
-    ax1.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-             f'{score:.2f}', ha='center', va='bottom', fontweight='bold')
-
-ax1.tick_params(axis='x', rotation=45)
-
-# 2. Risk Level Distribution
-risk_counts = {'Low': 1, 'Medium': 1, 'High': 2}
-ax2.pie(risk_counts.values(), labels=risk_counts.keys(), autopct='%1.0f%%',
-        colors=['green', 'orange', 'red'], startangle=90)
-ax2.set_title('Risk Level Distribution', fontweight='bold')
-
-# 3. Monthly Risk Trend
-months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-risk_trend = [0.3, 0.35, 0.45, 0.5, 0.6, 0.65]
-ax3.plot(months, risk_trend, marker='o', linewidth=2, markersize=8, color='darkred')
-ax3.fill_between(months, risk_trend, alpha=0.3, color='red')
-ax3.set_title('Cardiovascular Risk Trend', fontweight='bold')
-ax3.set_ylabel('Risk Score')
-ax3.grid(True, alpha=0.3)
-
-# 4. Health Metrics Radar
-metrics = ['Blood Pressure', 'Cholesterol', 'Blood Sugar', 'Weight', 'Exercise']
-values = [0.7, 0.6, 0.8, 0.5, 0.3]
-
-# Radar chart
-angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
-values += values[:1]  # Complete the circle
-angles += angles[:1]
-
-ax4.plot(angles, values, 'o-', linewidth=2, color='blue')
-ax4.fill(angles, values, alpha=0.25, color='blue')
-ax4.set_xticks(angles[:-1])
-ax4.set_xticklabels(metrics)
-ax4.set_ylim(0, 1)
-ax4.set_title('Health Metrics Overview', fontweight='bold')
-ax4.grid(True)
-
-plt.suptitle('Comprehensive Patient Risk Dashboard', fontsize=16, fontweight='bold', y=0.98)
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_condition_bar_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medical conditions bar chart code"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Medical conditions data
-conditions = ['Hypertension', 'Type 2 Diabetes', 'Hyperlipidemia', 'Obesity', 'Depression']
-severity_scores = [7, 6, 5, 4, 3]  # Severity on scale 1-10
-colors = ['#d62728', '#ff7f0e', '#2ca02c', '#1f77b4', '#9467bd']
-
-# Create figure
-plt.figure(figsize=(12, 8))
-
-# Create horizontal bar chart
-bars = plt.barh(conditions, severity_scores, color=colors, alpha=0.8)
-
-# Add value labels
-for i, (bar, score) in enumerate(zip(bars, severity_scores)):
-    plt.text(score + 0.1, i, f'{score}/10', va='center', fontweight='bold')
-
-plt.xlabel('Severity Score (1-10)')
-plt.title('Patient Medical Conditions - Severity Assessment', fontsize=16, fontweight='bold')
-plt.xlim(0, 10)
-
-# Add grid
-plt.grid(axis='x', alpha=0.3)
-
-# Color-code severity levels
-for i, score in enumerate(severity_scores):
-    if score >= 7:
-        severity_label = "High"
-        color_intensity = 0.9
-    elif score >= 4:
-        severity_label = "Medium"
-        color_intensity = 0.6
-    else:
-        severity_label = "Low"
-        color_intensity = 0.3
-    
-    plt.text(0.2, i, severity_label, va='center', ha='left', 
-             fontweight='bold', color='white', 
-             bbox=dict(boxstyle='round', facecolor='black', alpha=color_intensity))
-
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_general_health_overview_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate general health overview code"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Health overview data
-plt.figure(figsize=(15, 10))
-
-# Create 2x2 subplot layout
-gs = plt.GridSpec(2, 2, hspace=0.3, wspace=0.3)
-
-# 1. Health Score Gauge (top left)
-ax1 = plt.subplot(gs[0, 0])
-health_score = 72  # Out of 100
-theta = np.linspace(0, np.pi, 100)
-r = np.ones_like(theta)
-ax1.plot(theta, r, 'k-', linewidth=8)
-score_theta = np.pi * (1 - health_score/100)
-ax1.plot([score_theta, score_theta], [0, 1], 'r-', linewidth=6)
-ax1.fill_between(theta[theta <= score_theta], 0, 1, alpha=0.3, color='green')
-ax1.fill_between(theta[theta > score_theta], 0, 1, alpha=0.3, color='red')
-ax1.set_ylim(0, 1.2)
-ax1.set_xlim(0, np.pi)
-ax1.text(np.pi/2, 0.5, f'{health_score}', ha='center', va='center', fontsize=24, fontweight='bold')
-ax1.text(np.pi/2, 0.3, 'Health Score', ha='center', va='center', fontsize=12)
-ax1.set_title('Overall Health Score', fontweight='bold')
-ax1.axis('off')
-
-# 2. Risk Factors (top right)
-ax2 = plt.subplot(gs[0, 1])
-risk_factors = ['Age', 'Diabetes', 'Hypertension', 'Smoking', 'Family History']
-risk_values = [0.6, 0.8, 0.7, 0.2, 0.5]
-colors = ['red' if v > 0.6 else 'orange' if v > 0.4 else 'green' for v in risk_values]
-bars = ax2.barh(risk_factors, risk_values, color=colors, alpha=0.7)
-ax2.set_xlim(0, 1)
-ax2.set_xlabel('Risk Level')
-ax2.set_title('Risk Factors Assessment', fontweight='bold')
-
-# 3. Medication Adherence (bottom left)
-ax3 = plt.subplot(gs[1, 0])
-months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-adherence = [0.95, 0.88, 0.92, 0.85, 0.90, 0.87]
-ax3.plot(months, adherence, marker='o', linewidth=3, markersize=8, color='blue')
-ax3.fill_between(months, adherence, alpha=0.3, color='blue')
-ax3.set_ylim(0.7, 1.0)
-ax3.set_ylabel('Adherence Rate')
-ax3.set_title('Medication Adherence Trend', fontweight='bold')
-ax3.grid(True, alpha=0.3)
-
-# 4. Health Categories (bottom right)
-ax4 = plt.subplot(gs[1, 1])
-categories = ['Physical', 'Mental', 'Social', 'Preventive']
-scores = [75, 68, 82, 60]
-colors_cat = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-bars_cat = ax4.bar(categories, scores, color=colors_cat, alpha=0.7)
-ax4.set_ylim(0, 100)
-ax4.set_ylabel('Score (0-100)')
-ax4.set_title('Health Categories', fontweight='bold')
-
-# Add value labels
-for bar, score in zip(bars_cat, scores):
-    height = bar.get_height()
-    ax4.text(bar.get_x() + bar.get_width()/2., height + 1,
-             f'{score}', ha='center', va='bottom', fontweight='bold')
-
-plt.suptitle('Comprehensive Patient Health Overview', fontsize=16, fontweight='bold')
-plt.show()
-'''
-
-    def _generate_no_data_chart_code(self, message: str) -> str:
-        """Generate chart for no data scenarios"""
-        return f'''
-import matplotlib.pyplot as plt
-
-plt.figure(figsize=(10, 6))
-plt.text(0.5, 0.5, '{message}\\n\\nPlease ensure patient data is loaded\\nfor visualization generation', 
-         ha='center', va='center', fontsize=16,
-         bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.8))
-plt.title('Healthcare Data Visualization', fontsize=18, fontweight='bold')
-plt.axis('off')
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_error_chart_code(self, error_message: str) -> str:
-        """Generate chart for error scenarios"""
-        return f'''
-import matplotlib.pyplot as plt
-
-plt.figure(figsize=(10, 6))
-plt.text(0.5, 0.6, '⚠️ Visualization Error', 
-         ha='center', va='center', fontsize=20, fontweight='bold', color='red')
-plt.text(0.5, 0.4, 'Error: {error_message[:100]}...', 
-         ha='center', va='center', fontsize=12, color='darkred')
-plt.text(0.5, 0.3, 'Please try a different visualization request', 
-         ha='center', va='center', fontsize=12, color='blue')
-plt.title('Healthcare Data Visualization', fontsize=16)
-plt.axis('off')
-plt.tight_layout()
-plt.show()
-'''
-
-    # [Include all the existing deidentification and extraction methods from the original file]
-    def deidentify_medical_data_enhanced(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Stable medical data deidentification"""
-        try:
-            if not medical_data:
-                return {"error": "No medical data available for deidentification"}
- 
-            # Stable age calculation
-            age = self._calculate_age_stable(patient_data.get('date_of_birth', ''))
- 
-            # Stable JSON processing
-            raw_medical_data = medical_data.get('body', medical_data)
-            deidentified_medical_data = self._stable_deidentify_json(raw_medical_data)
-            deidentified_medical_data = self._mask_medical_fields_stable(deidentified_medical_data)
- 
-            stable_deidentified = {
-                "src_mbr_first_nm": "[MASKED_NAME]",
-                "src_mbr_last_nm": "[MASKED_NAME]",
-                "src_mbr_mid_init_nm": None,
-                "src_mbr_age": age,
-                "src_mbr_zip_cd": patient_data.get('zip_code', '12345'),
-                "medical_claims_data": deidentified_medical_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "stable_medical_claims",
-                "processing_method": "stable"
+            return {
+                "success": False,
+                "error": f"Enhanced Healthcare LLM test failed: {str(e)}",
+                "endpoint": self.config.api_url,
+                "healthcare_ready": False,
+                "graph_generation_ready": False,
+                "enhanced_connection": False
             }
- 
-            logger.info("✅ Stable medical deidentification completed")
+
+    def test_graph_generation_capability(self) -> Dict[str, Any]:
+        """Test graph generation capability"""
+        try:
+            logger.info("📊 Testing enhanced graph generation capability...")
             
-            return stable_deidentified
- 
-        except Exception as e:
-            logger.error(f"Error in stable medical deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
-
-    def deidentify_pharmacy_data_enhanced(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Stable pharmacy data deidentification"""
-        try:
-            if not pharmacy_data:
-                return {"error": "No pharmacy data available for deidentification"}
-
-            raw_pharmacy_data = pharmacy_data.get('body', pharmacy_data)
-            deidentified_pharmacy_data = self._stable_deidentify_pharmacy_json(raw_pharmacy_data)
-
-            stable_result = {
-                "pharmacy_claims_data": deidentified_pharmacy_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "stable_pharmacy_claims",
-                "processing_method": "stable",
-                "name_fields_masked": ["src_mbr_first_nm", "scr_mbr_last_nm"]
+            sample_context = {
+                "patient_overview": {"age": "45", "heart_attack_risk_level": "medium"},
+                "medical_extraction": {"hlth_srvc_records": [{"diagnosis_codes": [{"code": "I10"}]}]},
+                "pharmacy_extraction": {"ndc_records": [{"lbl_nm": "Metformin"}]}
             }
-
-            logger.info("✅ Stable pharmacy deidentification completed")
             
-            return stable_result
-
+            test_request = "Create a simple bar chart showing patient risk factors"
+            
+            test_response = self.call_llm_for_graph_generation(test_request, sample_context)
+            
+            if test_response and "matplotlib" in test_response.lower() and not test_response.startswith("Graph generation failed"):
+                return {
+                    "success": True,
+                    "response": test_response[:300] + "...",
+                    "graph_generation_ready": True,
+                    "matplotlib_supported": True
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": test_response,
+                    "graph_generation_ready": False,
+                    "matplotlib_supported": False
+                }
         except Exception as e:
-            logger.error(f"Error in stable pharmacy deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
+            return {
+                "success": False,
+                "error": f"Graph generation test failed: {str(e)}",
+                "graph_generation_ready": False,
+                "matplotlib_supported": False
+            }
 
-    def deidentify_mcid_data_enhanced(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Stable MCID data deidentification"""
+    def test_backend_connection_enhanced(self) -> Dict[str, Any]:
+        """Test enhanced backend server connection"""
         try:
-            if not mcid_data:
-                return {"error": "No MCID data available for deidentification"}
+            logger.info("🔬 Testing enhanced healthcare backend...")
 
-            raw_mcid_data = mcid_data.get('body', mcid_data)
-            deidentified_mcid_data = self._stable_deidentify_json(raw_mcid_data)
-
-            stable_result = {
-                "mcid_claims_data": deidentified_mcid_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "stable_mcid_claims",
-                "processing_method": "stable"
+            health_url = f"{self.config.fastapi_url}/health"
+            
+            headers = {
+                "X-Healthcare-Test": "enhanced",
+                "X-Clinical-Validation": "comprehensive",
+                "X-Graph-Support": "matplotlib"
             }
+            
+            response = requests.get(health_url, headers=headers, timeout=10)
 
-            logger.info("✅ Stable MCID deidentification completed")
-            return stable_result
+            if response.status_code == 200:
+                health_data = response.json()
+                
+                # Enhanced health check validation
+                service_status = "Excellent" if "status" in health_data and health_data["status"] == "healthy" else "Limited"
+                
+                return {
+                    "success": True,
+                    "health_data": health_data,
+                    "backend_url": self.config.fastapi_url,
+                    "service_status": service_status,
+                    "enhanced_connection": True,
+                    "healthcare_ready": True,
+                    "graph_support": True
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Backend health check failed: {response.status_code}",
+                    "backend_url": self.config.fastapi_url,
+                    "enhanced_connection": False,
+                    "healthcare_ready": False,
+                    "graph_support": False
+                }
 
         except Exception as e:
-            logger.error(f"Error in stable MCID deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
-
-    def extract_medical_fields_batch_enhanced(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
-        """Stable medical field extraction with batch processing"""
-        logger.info("🔬 ===== STARTING STABLE BATCH MEDICAL EXTRACTION =====")
-        
-        stable_extraction_result = {
-            "hlth_srvc_records": [],
-            "extraction_summary": {
-                "total_hlth_srvc_records": 0,
-                "total_diagnosis_codes": 0,
-                "unique_service_codes": set(),
-                "unique_diagnosis_codes": set()
-            },
-            "code_meanings": {
-                "service_code_meanings": {},
-                "diagnosis_code_meanings": {}
-            },
-            "code_meanings_added": False,
-            "stable_analysis": False,
-            "llm_call_status": "not_attempted",
-            "batch_stats": {
-                "individual_calls_saved": 0,
-                "processing_time_seconds": 0,
-                "api_calls_made": 0,
-                "codes_processed": 0
+            return {
+                "success": False,
+                "error": f"Backend test failed: {str(e)}",
+                "backend_url": self.config.fastapi_url,
+                "enhanced_connection": False,
+                "healthcare_ready": False,
+                "graph_support": False
             }
+
+    async def test_ml_connection_enhanced(self) -> Dict[str, Any]:
+        """Test enhanced ML API server connection"""
+        try:
+            logger.info(f"🔬 Testing enhanced ML API: {self.config.heart_attack_api_url}")
+
+            health_url = f"{self.config.heart_attack_api_url}/health"
+            timeout = aiohttp.ClientTimeout(total=15)
+
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # Enhanced health check
+                async with session.get(health_url) as response:
+                    if response.status == 200:
+                        health_data = await response.json()
+
+                        # Enhanced prediction test
+                        test_features = {"age": 45, "gender": 0, "diabetes": 0, "high_bp": 0, "smoking": 0}
+                        
+                        predict_url = f"{self.config.heart_attack_api_url}/predict"
+                        async with session.post(predict_url, json=test_features) as pred_response:
+                            if pred_response.status == 200:
+                                pred_data = await pred_response.json()
+                                
+                                return {
+                                    "success": True,
+                                    "health_check": health_data,
+                                    "test_prediction": pred_data,
+                                    "server_url": self.config.heart_attack_api_url,
+                                    "enhanced_connection": True,
+                                    "ml_ready": True,
+                                    "prediction_ready": True
+                                }
+                            else:
+                                error_text = await pred_response.text()
+                                return {
+                                    "success": False,
+                                    "error": f"ML prediction test failed {pred_response.status}: {error_text[:200]}",
+                                    "server_url": self.config.heart_attack_api_url,
+                                    "enhanced_connection": False,
+                                    "ml_ready": False,
+                                    "prediction_ready": False
+                                }
+                    else:
+                        error_text = await response.text()
+                        return {
+                            "success": False,
+                            "error": f"ML health endpoint error {response.status}: {error_text[:200]}",
+                            "server_url": self.config.heart_attack_api_url,
+                            "enhanced_connection": False,
+                            "ml_ready": False,
+                            "prediction_ready": False
+                        }
+
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": "ML API timeout - service may be down",
+                "server_url": self.config.heart_attack_api_url,
+                "enhanced_connection": False,
+                "ml_ready": False,
+                "prediction_ready": False
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"ML API test failed: {str(e)}",
+                "server_url": self.config.heart_attack_api_url,
+                "enhanced_connection": False,
+                "ml_ready": False,
+                "prediction_ready": False
+            }
+
+    def test_all_connections_enhanced(self) -> Dict[str, Any]:
+        """Test all connections with enhanced reporting and graph generation support"""
+        logger.info("🔬 Testing ALL enhanced connections...")
+
+        results = {
+            "llm_connection": self.test_healthcare_llm_connection(),
+            "backend_connection": self.test_backend_connection_enhanced(),
+            "graph_generation": self.test_graph_generation_capability()
         }
 
-        start_time = time.time()
-
+        # Test ML connection
         try:
-            medical_data = deidentified_medical.get("medical_claims_data", {})
-            if not medical_data:
-                logger.warning("⚠️ No medical claims data found")
-                return stable_extraction_result
-
-            # Step 1: Stable extraction
-            logger.info("🔬 Step 1: Stable medical code extraction...")
-            self._stable_medical_extraction(medical_data, stable_extraction_result)
-
-            # Convert sets to lists for processing
-            unique_service_codes = list(stable_extraction_result["extraction_summary"]["unique_service_codes"])[:15]
-            unique_diagnosis_codes = list(stable_extraction_result["extraction_summary"]["unique_diagnosis_codes"])[:20]
-            
-            stable_extraction_result["extraction_summary"]["unique_service_codes"] = unique_service_codes
-            stable_extraction_result["extraction_summary"]["unique_diagnosis_codes"] = unique_diagnosis_codes
-
-            total_codes = len(unique_service_codes) + len(unique_diagnosis_codes)
-            stable_extraction_result["batch_stats"]["codes_processed"] = total_codes
-
-            # Step 2: Stable BATCH PROCESSING
-            if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-                if unique_service_codes or unique_diagnosis_codes:
-                    logger.info(f"🔬 Step 2: Stable BATCH processing {total_codes} codes...")
-                    stable_extraction_result["llm_call_status"] = "in_progress"
-                    
-                    try:
-                        api_calls_made = 0
-                        
-                        # Stable BATCH 1: Service Codes
-                        if unique_service_codes:
-                            logger.info(f"🏥 Stable service codes batch: {len(unique_service_codes)} codes...")
-                            service_meanings = self._stable_batch_service_codes(unique_service_codes)
-                            stable_extraction_result["code_meanings"]["service_code_meanings"] = service_meanings
-                            api_calls_made += 1
-                            logger.info(f"✅ Service codes batch: {len(service_meanings)} meanings generated")
-                        
-                        # Stable BATCH 2: Diagnosis Codes
-                        if unique_diagnosis_codes:
-                            logger.info(f"🩺 Stable diagnosis codes batch: {len(unique_diagnosis_codes)} codes...")
-                            diagnosis_meanings = self._stable_batch_diagnosis_codes(unique_diagnosis_codes)
-                            stable_extraction_result["code_meanings"]["diagnosis_code_meanings"] = diagnosis_meanings
-                            api_calls_made += 1
-                            logger.info(f"✅ Diagnosis codes batch: {len(diagnosis_meanings)} meanings generated")
-                        
-                        # Calculate stable savings
-                        individual_calls_would_be = len(unique_service_codes) + len(unique_diagnosis_codes)
-                        calls_saved = individual_calls_would_be - api_calls_made
-                        
-                        stable_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
-                        stable_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
-                        
-                        # Final stable status
-                        total_meanings = len(stable_extraction_result["code_meanings"]["service_code_meanings"]) + len(stable_extraction_result["code_meanings"]["diagnosis_code_meanings"])
-                        
-                        if total_meanings > 0:
-                            stable_extraction_result["code_meanings_added"] = True
-                            stable_extraction_result["stable_analysis"] = True
-                            stable_extraction_result["llm_call_status"] = "completed"
-                            logger.info(f"🔬 Stable BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
-                        else:
-                            stable_extraction_result["llm_call_status"] = "completed_no_meanings"
-                            logger.warning("⚠️ Stable batch completed but no meanings generated")
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Stable batch processing error: {e}")
-                        stable_extraction_result["code_meaning_error"] = str(e)
-                        stable_extraction_result["llm_call_status"] = "failed"
-                else:
-                    stable_extraction_result["llm_call_status"] = "skipped_no_codes"
-                    logger.warning("⚠️ No codes found for stable batch processing")
-            else:
-                stable_extraction_result["llm_call_status"] = "skipped_no_api"
-                logger.warning("❌ No stable API integrator for batch processing")
-
-            # Stable performance stats
-            processing_time = time.time() - start_time
-            stable_extraction_result["batch_stats"]["processing_time_seconds"] = round(processing_time, 2)
-
-            logger.info(f"🔬 ===== STABLE BATCH MEDICAL EXTRACTION COMPLETED =====")
-            logger.info(f"  ⚡ Time: {processing_time:.2f}s")
-            logger.info(f"  📊 API calls: {stable_extraction_result['batch_stats']['api_calls_made']} (saved {stable_extraction_result['batch_stats']['individual_calls_saved']})")
-            logger.info(f"  ✅ Meanings: {len(stable_extraction_result['code_meanings']['service_code_meanings']) + len(stable_extraction_result['code_meanings']['diagnosis_code_meanings'])}")
-
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            results["ml_connection"] = loop.run_until_complete(self.test_ml_connection_enhanced())
+            loop.close()
         except Exception as e:
-            logger.error(f"❌ Error in stable batch medical extraction: {e}")
-            stable_extraction_result["error"] = f"Stable batch extraction failed: {str(e)}"
-
-        return stable_extraction_result
-
-    def extract_pharmacy_fields_batch_enhanced(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
-        """Stable pharmacy field extraction with batch processing"""
-        logger.info("🔬 ===== STARTING STABLE BATCH PHARMACY EXTRACTION =====")
-        
-        stable_extraction_result = {
-            "ndc_records": [],
-            "extraction_summary": {
-                "total_ndc_records": 0,
-                "unique_ndc_codes": set(),
-                "unique_label_names": set()
-            },
-            "code_meanings": {
-                "ndc_code_meanings": {},
-                "medication_meanings": {}
-            },
-            "code_meanings_added": False,
-            "stable_analysis": False,
-            "llm_call_status": "not_attempted",
-            "batch_stats": {
-                "individual_calls_saved": 0,
-                "processing_time_seconds": 0,
-                "api_calls_made": 0,
-                "codes_processed": 0
+            results["ml_connection"] = {
+                "success": False,
+                "error": f"ML test failed: {str(e)}",
+                "enhanced_connection": False,
+                "ml_ready": False,
+                "prediction_ready": False
             }
+
+        # Enhanced summary
+        all_success = all(result.get("success", False) for result in results.values())
+        enhanced_connections = sum(1 for result in results.values() if result.get("enhanced_connection", False))
+        healthcare_ready = all(result.get("healthcare_ready", False) or result.get("ml_ready", False) for result in results.values())
+        graph_ready = results.get("graph_generation", {}).get("graph_generation_ready", False)
+        
+        results["enhanced_overall_status"] = {
+            "all_connections_successful": all_success,
+            "successful_connections": sum(1 for result in results.values() if result.get("success", False)),
+            "total_connections": len(results),
+            "enhanced_connections": enhanced_connections,
+            "healthcare_ready": healthcare_ready,
+            "graph_generation_ready": graph_ready,
+            "matplotlib_supported": results.get("graph_generation", {}).get("matplotlib_supported", False),
+            "enhancement_level": "high" if enhanced_connections >= 3 else "moderate" if enhanced_connections >= 2 else "low"
         }
 
-        start_time = time.time()
+        logger.info(f"🔬 Enhanced connection test complete: {results['enhanced_overall_status']['successful_connections']}/{results['enhanced_overall_status']['total_connections']} successful")
+        logger.info(f"🏥 Healthcare ready: {healthcare_ready}")
+        logger.info(f"📊 Graph generation ready: {graph_ready}")
+        logger.info(f"📈 Enhancement level: {results['enhanced_overall_status']['enhancement_level']}")
 
-        try:
-            pharmacy_data = deidentified_pharmacy.get("pharmacy_claims_data", {})
-            if not pharmacy_data:
-                logger.warning("⚠️ No pharmacy claims data found")
-                return stable_extraction_result
-
-            # Step 1: Stable extraction
-            logger.info("🔬 Step 1: Stable pharmacy code extraction...")
-            self._stable_pharmacy_extraction(pharmacy_data, stable_extraction_result)
-
-            # Convert sets to lists for processing
-            unique_ndc_codes = list(stable_extraction_result["extraction_summary"]["unique_ndc_codes"])[:10]
-            unique_label_names = list(stable_extraction_result["extraction_summary"]["unique_label_names"])[:15]
-            
-            stable_extraction_result["extraction_summary"]["unique_ndc_codes"] = unique_ndc_codes
-            stable_extraction_result["extraction_summary"]["unique_label_names"] = unique_label_names
-
-            total_codes = len(unique_ndc_codes) + len(unique_label_names)
-            stable_extraction_result["batch_stats"]["codes_processed"] = total_codes
-
-            # Step 2: Stable BATCH PROCESSING
-            if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-                if unique_ndc_codes or unique_label_names:
-                    logger.info(f"🔬 Step 2: Stable BATCH processing {total_codes} pharmacy codes...")
-                    stable_extraction_result["llm_call_status"] = "in_progress"
-                    
-                    try:
-                        api_calls_made = 0
-                        
-                        # Stable BATCH 1: NDC Codes
-                        if unique_ndc_codes:
-                            logger.info(f"💊 Stable NDC codes batch: {len(unique_ndc_codes)} codes...")
-                            ndc_meanings = self._stable_batch_ndc_codes(unique_ndc_codes)
-                            stable_extraction_result["code_meanings"]["ndc_code_meanings"] = ndc_meanings
-                            api_calls_made += 1
-                            logger.info(f"✅ NDC codes batch: {len(ndc_meanings)} meanings generated")
-                        
-                        # Stable BATCH 2: Medications
-                        if unique_label_names:
-                            logger.info(f"💉 Stable medications batch: {len(unique_label_names)} medications...")
-                            med_meanings = self._stable_batch_medications(unique_label_names)
-                            stable_extraction_result["code_meanings"]["medication_meanings"] = med_meanings
-                            api_calls_made += 1
-                            logger.info(f"✅ Medications batch: {len(med_meanings)} meanings generated")
-                        
-                        # Calculate stable savings
-                        individual_calls_would_be = len(unique_ndc_codes) + len(unique_label_names)
-                        calls_saved = individual_calls_would_be - api_calls_made
-                        
-                        stable_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
-                        stable_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
-                        
-                        # Final stable status
-                        total_meanings = len(stable_extraction_result["code_meanings"]["ndc_code_meanings"]) + len(stable_extraction_result["code_meanings"]["medication_meanings"])
-                        
-                        if total_meanings > 0:
-                            stable_extraction_result["code_meanings_added"] = True
-                            stable_extraction_result["stable_analysis"] = True
-                            stable_extraction_result["llm_call_status"] = "completed"
-                            logger.info(f"🔬 Stable PHARMACY BATCH SUCCESS: {total_meanings} meanings, {calls_saved} calls saved!")
-                        else:
-                            stable_extraction_result["llm_call_status"] = "completed_no_meanings"
-                            logger.warning("⚠️ Stable pharmacy batch completed but no meanings generated")
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Stable pharmacy batch error: {e}")
-                        stable_extraction_result["code_meaning_error"] = str(e)
-                        stable_extraction_result["llm_call_status"] = "failed"
-                else:
-                    stable_extraction_result["llm_call_status"] = "skipped_no_codes"
-                    logger.warning("⚠️ No pharmacy codes for stable batch processing")
-            else:
-                stable_extraction_result["llm_call_status"] = "skipped_no_api"
-                logger.warning("❌ No stable API integrator for pharmacy batch processing")
-
-            # Stable performance stats
-            processing_time = time.time() - start_time
-            stable_extraction_result["batch_stats"]["processing_time_seconds"] = round(processing_time, 2)
-
-            logger.info(f"💊 ===== STABLE BATCH PHARMACY EXTRACTION COMPLETED =====")
-            logger.info(f"  ⚡ Time: {processing_time:.2f}s")
-            logger.info(f"  📊 API calls: {stable_extraction_result['batch_stats']['api_calls_made']} (saved {stable_extraction_result['batch_stats']['individual_calls_saved']})")
-
-        except Exception as e:
-            logger.error(f"❌ Error in stable batch pharmacy extraction: {e}")
-            stable_extraction_result["error"] = f"Stable pharmacy batch extraction failed: {str(e)}"
-
-        return stable_extraction_result
-
-    # [Include all the remaining helper methods from the original file]
-    # I'll include the key methods but truncate for space
-
-    def _stable_batch_service_codes(self, service_codes: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL service codes"""
-        try:
-            if not service_codes:
-                return {}
-                
-            logger.info(f"🏥 === Stable BATCH PROCESSING {len(service_codes)} SERVICE CODES ===")
-            
-            codes_list = "\n".join([f"- {code}" for code in service_codes])
-            
-            stable_prompt = f"""Explain these medical service codes briefly:
-
-Service Codes:
-{codes_list}
-
-Return ONLY valid JSON format:
-{{
-    "{service_codes[0]}": "Brief clear explanation of this medical service/procedure",
-    "{service_codes[1] if len(service_codes) > 1 else service_codes[0]}": "Brief clear explanation of this medical service/procedure"
-}}
-
-IMPORTANT: Return ONLY the JSON object, no other text."""
-
-            stable_system_msg = """You are a medical coding expert. Provide brief, clear explanations of medical codes in valid JSON format."""
-            
-            response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
-            
-            if response and response != "Brief explanation unavailable":
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable service codes batch: {len(meanings_dict)} meanings extracted")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable service codes JSON parse error: {e}")
-                    return {}
-            else:
-                logger.warning(f"⚠️ Stable service codes batch returned unavailable")
-                return {}
-                
-        except Exception as e:
-            logger.error(f"❌ Stable service codes batch exception: {e}")
-            return {}
-
-    def _stable_batch_diagnosis_codes(self, diagnosis_codes: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL diagnosis codes"""
-        try:
-            if not diagnosis_codes:
-                return {}
-                
-            logger.info(f"🩺 === Stable BATCH PROCESSING {len(diagnosis_codes)} DIAGNOSIS CODES ===")
-            
-            codes_list = "\n".join([f"- {code}" for code in diagnosis_codes])
-            
-            stable_prompt = f"""Explain these diagnosis codes briefly:
-
-Diagnosis Codes:
-{codes_list}
-
-Return ONLY valid JSON format:
-{{
-    "{diagnosis_codes[0]}": "Brief clear explanation of this medical condition",
-    "{diagnosis_codes[1] if len(diagnosis_codes) > 1 else diagnosis_codes[0]}": "Brief clear explanation of this medical condition"
-}}
-
-IMPORTANT: Return ONLY the JSON object, no other text."""
-
-            stable_system_msg = """You are a medical diagnosis expert. Provide brief, clear explanations of diagnosis codes in valid JSON format."""
-            
-            response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
-            
-            if response and response != "Brief explanation unavailable":
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable diagnosis codes batch: {len(meanings_dict)} meanings extracted")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable diagnosis codes JSON parse error: {e}")
-                    return {}
-            else:
-                logger.warning(f"⚠️ Stable diagnosis codes batch returned unavailable")
-                return {}
-                
-        except Exception as e:
-            logger.error(f"❌ Stable diagnosis codes batch exception: {e}")
-            return {}
-
-    def _stable_batch_ndc_codes(self, ndc_codes: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL NDC codes"""
-        try:
-            if not ndc_codes:
-                return {}
-                
-            logger.info(f"💊 === Stable BATCH PROCESSING {len(ndc_codes)} NDC CODES ===")
-            
-            codes_list = "\n".join([f"- {code}" for code in ndc_codes])
-            
-            stable_prompt = f"""Explain these NDC medication codes briefly:
-
-NDC Codes:
-{codes_list}
-
-Return ONLY valid JSON format:
-{{
-    "{ndc_codes[0]}": "Brief explanation of this medication and its use",
-    "{ndc_codes[1] if len(ndc_codes) > 1 else ndc_codes[0]}": "Brief explanation of this medication and its use"
-}}
-
-IMPORTANT: Return ONLY the JSON object, no other text."""
-
-            stable_system_msg = """You are a pharmacy expert. Provide brief, clear explanations of NDC codes in valid JSON format."""
-            
-            response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
-            
-            if response and response != "Brief explanation unavailable":
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable NDC codes batch: {len(meanings_dict)} meanings extracted")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable NDC codes JSON parse error: {e}")
-                    return {}
-            else:
-                logger.warning(f"⚠️ Stable NDC codes batch returned unavailable")
-                return {}
-                
-        except Exception as e:
-            logger.error(f"❌ Stable NDC codes batch exception: {e}")
-            return {}
-
-    def _stable_batch_medications(self, medications: List[str]) -> Dict[str, str]:
-        """Stable BATCH process ALL medications"""
-        try:
-            if not medications:
-                return {}
-                
-            logger.info(f"💉 === Stable BATCH PROCESSING {len(medications)} MEDICATIONS ===")
-            
-            meds_list = "\n".join([f"- {med}" for med in medications])
-            
-            stable_prompt = f"""Explain these medications briefly:
-
-Medications:
-{meds_list}
-
-Return ONLY valid JSON format:
-{{
-    "{medications[0]}": "Brief explanation of this medication and its use",
-    "{medications[1] if len(medications) > 1 else medications[0]}": "Brief explanation of this medication and its use"
-}}
-
-IMPORTANT: Return ONLY the JSON object, no other text."""
-
-            stable_system_msg = """You are a medication expert. Provide brief, clear explanations of medications in valid JSON format."""
-            
-            response = self.api_integrator.call_llm_isolated_enhanced(stable_prompt, stable_system_msg)
-            
-            if response and response != "Brief explanation unavailable":
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"✅ Stable medications batch: {len(meanings_dict)} meanings extracted")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Stable medications JSON parse error: {e}")
-                    return {}
-            else:
-                logger.warning(f"⚠️ Stable medications batch returned unavailable")
-                return {}
-                
-        except Exception as e:
-            logger.error(f"❌ Stable medications batch exception: {e}")
-            return {}
-
-    # [Include all remaining helper methods - truncated for space]
-    def _clean_json_response_stable(self, response: str) -> str:
-        """Stable LLM response cleaning for JSON extraction"""
-        try:
-            # Remove markdown wrappers
-            if response.startswith('```json'):
-                response = response[7:]
-            elif response.startswith('```'):
-                response = response[3:]
-            if response.endswith('```'):
-                response = response[:-3]
-            
-            response = response.strip()
-            
-            # Find JSON object boundaries
-            start = response.find('{')
-            end = response.rfind('}') + 1
-            
-            if start != -1 and end > start:
-                json_content = response[start:end]
-                
-                # Validate JSON
-                try:
-                    json.loads(json_content)
-                    return json_content
-                except json.JSONDecodeError:
-                    # Try to fix common issues
-                    fixed_content = self._fix_common_json_issues_stable(json_content)
-                    return fixed_content
-            else:
-                return response
-                
-        except Exception as e:
-            logger.warning(f"Stable JSON cleaning failed: {e}")
-            return response
-
-    def _fix_common_json_issues_stable(self, json_content: str) -> str:
-        """Fix common JSON formatting issues with stable approach"""
-        try:
-            # Fix trailing commas
-            json_content = re.sub(r',\s*}', '}', json_content)
-            json_content = re.sub(r',\s*]', ']', json_content)
-            
-            return json_content
-        except Exception as e:
-            logger.warning(f"Stable JSON fixing failed: {e}")
-            return json_content
-
-    # Include all other helper methods from the original file
-    # [Additional helper methods would be included here]
+        return results
 
     # Backward compatibility methods
-    def extract_medical_fields_batch(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility - uses stable extraction"""
-        return self.extract_medical_fields_batch_enhanced(deidentified_medical)
+    def call_llm_fast(self, user_message: str, system_message: Optional[str] = None) -> str:
+        """Backward compatibility - uses enhanced call"""
+        return self.call_llm_enhanced(user_message, system_message)
 
-    def extract_pharmacy_fields_batch(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility - uses stable extraction"""
-        return self.extract_pharmacy_fields_batch_enhanced(deidentified_pharmacy)
+    def call_llm_isolated(self, user_message: str, system_message: Optional[str] = None) -> str:
+        """Backward compatibility - uses enhanced isolated call"""
+        return self.call_llm_isolated_enhanced(user_message, system_message)
 
-    def deidentify_medical_data(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility - uses stable deidentification"""
-        return self.deidentify_medical_data_enhanced(medical_data, patient_data)
+    def call_llm(self, user_message: str, system_message: Optional[str] = None) -> str:
+        """Backward compatibility - uses enhanced call"""
+        return self.call_llm_enhanced(user_message, system_message)
 
-    def deidentify_pharmacy_data(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility - uses stable deidentification"""
-        return self.deidentify_pharmacy_data_enhanced(pharmacy_data)
+    def fetch_backend_data_fast(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced fetch"""
+        return self.fetch_backend_data_enhanced(patient_data)
 
-    def deidentify_mcid_data(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Backward compatibility - uses stable deidentification"""
-        return self.deidentify_mcid_data_enhanced(mcid_data)
+    def fetch_backend_data(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced fetch"""
+        return self.fetch_backend_data_enhanced(patient_data)
+
+    def test_llm_connection_enhanced(self) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced test"""
+        return self.test_healthcare_llm_connection()
+
+    def test_backend_connection(self) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced test"""
+        return self.test_backend_connection_enhanced()
+
+    def test_all_connections(self) -> Dict[str, Any]:
+        """Backward compatibility - uses enhanced test"""
+        return self.test_all_connections_enhanced()
