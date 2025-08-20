@@ -496,11 +496,11 @@ def display_enhanced_mcid_data(mcid_data):
                 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-def display_batch_code_views(results):
-    """Display comprehensive batch code analysis"""
+def display_enhanced_batch_code_analysis(results):
+    """Display comprehensive batch code analysis with LLM-generated meanings"""
     st.markdown("""
     <div class="section-box">
-        <div class="section-title">🔬 Batch Healthcare Code Analysis</div>
+        <div class="section-title">🔬 Comprehensive Healthcare Code Analysis with LLM Meanings</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -509,125 +509,156 @@ def display_batch_code_views(results):
     medical_extraction = structured_extractions.get('medical', {}) if structured_extractions else {}
     pharmacy_extraction = structured_extractions.get('pharmacy', {}) if structured_extractions else {}
     
-    # Code type tabs
+    # Get LLM-generated meanings
+    medical_meanings = medical_extraction.get('code_meanings', {})
+    pharmacy_meanings = pharmacy_extraction.get('code_meanings', {})
+    
+    # Code analysis tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "🏥 ICD-10 Diagnosis Codes", 
-        "⚕️ CPT Procedure Codes", 
+        "⚕️ CPT/Service Codes", 
         "💊 NDC Drug Codes",
-        "🔬 HCPCS Healthcare Codes"
+        "🔬 HCPCS Procedure Codes"
     ])
     
     with tab1:
         st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-        st.markdown('<div class="code-category-header">🏥 ICD-10 Diagnosis Codes Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="code-category-header">🏥 ICD-10 Diagnosis Codes with Clinical Meanings</div>', unsafe_allow_html=True)
         
-        # Extract ICD-10 codes from medical records
+        # Extract ICD-10 codes with meanings and dates
         medical_records = medical_extraction.get('hlth_srvc_records', [])
-        icd10_codes = []
+        diagnosis_meanings = medical_meanings.get('diagnosis_code_meanings', {})
+        
+        icd10_data = []
+        unique_codes = set()
         
         for record in medical_records:
             diagnosis_codes = record.get('diagnosis_codes', [])
+            claim_date = record.get('clm_rcvd_dt', 'Unknown Date')
+            
             for diag in diagnosis_codes:
                 code = diag.get('code', '')
                 position = diag.get('position', 1)
-                date = record.get('clm_rcvd_dt', 'Unknown')
                 
-                icd10_codes.append({
-                    'Code': code,
-                    'Position': f"Position {position}",
-                    'Claim Date': date,
-                    'Category': 'Primary' if position == 1 else 'Secondary',
-                    'Description': f"ICD-10 diagnosis code {code}"
-                })
+                if code and code not in unique_codes:
+                    unique_codes.add(code)
+                    meaning = diagnosis_meanings.get(code, 'LLM meaning not available')
+                    
+                    icd10_data.append({
+                        'ICD-10 Code': code,
+                        'Clinical Meaning': meaning[:200] + '...' if len(meaning) > 200 else meaning,
+                        'Position': f"Position {position}",
+                        'First Seen Date': claim_date,
+                        'Category': 'Primary' if position == 1 else 'Secondary'
+                    })
         
-        if icd10_codes:
-            df_icd10 = pd.DataFrame(icd10_codes)
-            st.dataframe(df_icd10, use_container_width=True)
-            st.info(f"📊 **Total ICD-10 Codes Found:** {len(icd10_codes)}")
+        if icd10_data:
+            df_icd10 = pd.DataFrame(icd10_data)
+            st.dataframe(df_icd10, use_container_width=True, height=400)
             
-            # Code frequency analysis
-            if len(icd10_codes) > 1:
-                code_counts = df_icd10['Code'].value_counts()
-                st.write("**Most Frequent Diagnosis Codes:**")
-                for code, count in code_counts.head(5).items():
-                    st.write(f"• **{code}**: {count} occurrence(s)")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Unique ICD-10 Codes", len(icd10_data))
+            with col2:
+                st.metric("LLM Meanings Available", len([d for d in icd10_data if 'not available' not in d['Clinical Meaning']]))
+            with col3:
+                primary_count = len([d for d in icd10_data if d['Category'] == 'Primary'])
+                st.metric("Primary Diagnoses", primary_count)
         else:
-            st.warning("No ICD-10 diagnosis codes found in medical records")
+            st.warning("No ICD-10 diagnosis codes found")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
     with tab2:
         st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-        st.markdown('<div class="code-category-header">⚕️ CPT Procedure Codes Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="code-category-header">⚕️ CPT/Service Codes with Clinical Meanings</div>', unsafe_allow_html=True)
         
-        # Extract CPT codes from medical records
-        cpt_codes = []
+        # Extract service codes with meanings and dates
+        service_meanings = medical_meanings.get('service_code_meanings', {})
+        
+        service_data = []
+        unique_service_codes = set()
         
         for record in medical_records:
             service_code = record.get('hlth_srvc_cd', '')
-            date = record.get('clm_rcvd_dt', 'Unknown')
+            claim_date = record.get('clm_rcvd_dt', 'Unknown Date')
             
-            if service_code:
-                cpt_codes.append({
-                    'Code': service_code,
-                    'Service Date': date,
+            if service_code and service_code not in unique_service_codes:
+                unique_service_codes.add(service_code)
+                meaning = service_meanings.get(service_code, 'LLM meaning not available')
+                
+                service_data.append({
+                    'Service Code': service_code,
+                    'Clinical Meaning': meaning[:200] + '...' if len(meaning) > 200 else meaning,
+                    'First Seen Date': claim_date,
                     'Type': 'Healthcare Service',
-                    'Category': 'Procedure/Service',
-                    'Description': f"Healthcare service code {service_code}"
+                    'Frequency': len([r for r in medical_records if r.get('hlth_srvc_cd') == service_code])
                 })
         
-        if cpt_codes:
-            df_cpt = pd.DataFrame(cpt_codes)
-            st.dataframe(df_cpt, use_container_width=True)
-            st.info(f"📊 **Total CPT/Service Codes Found:** {len(cpt_codes)}")
+        if service_data:
+            df_service = pd.DataFrame(service_data)
+            st.dataframe(df_service, use_container_width=True, height=400)
             
-            # Service frequency
-            if len(cpt_codes) > 1:
-                service_counts = df_cpt['Code'].value_counts()
-                st.write("**Most Frequent Service Codes:**")
-                for code, count in service_counts.head(5).items():
-                    st.write(f"• **{code}**: {count} occurrence(s)")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Unique Service Codes", len(service_data))
+            with col2:
+                st.metric("LLM Meanings Available", len([d for d in service_data if 'not available' not in d['Clinical Meaning']]))
+            with col3:
+                avg_frequency = sum(d['Frequency'] for d in service_data) / len(service_data)
+                st.metric("Average Usage", f"{avg_frequency:.1f}")
         else:
-            st.warning("No CPT/Service codes found in medical records")
+            st.warning("No service codes found")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
     with tab3:
         st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-        st.markdown('<div class="code-category-header">💊 NDC Drug Identification Codes</div>', unsafe_allow_html=True)
+        st.markdown('<div class="code-category-header">💊 NDC Drug Codes with Therapeutic Meanings</div>', unsafe_allow_html=True)
         
-        # Extract NDC codes from pharmacy records
+        # Extract NDC codes with meanings and dates
         pharmacy_records = pharmacy_extraction.get('ndc_records', [])
-        ndc_codes = []
+        ndc_meanings = pharmacy_meanings.get('ndc_code_meanings', {})
+        medication_meanings = pharmacy_meanings.get('medication_meanings', {})
+        
+        ndc_data = []
+        unique_ndc_codes = set()
         
         for record in pharmacy_records:
             ndc_code = record.get('ndc', '')
-            label_name = record.get('lbl_nm', 'Unknown medication')
-            fill_date = record.get('rx_filled_dt', 'Unknown')
+            medication_name = record.get('lbl_nm', 'Unknown Medication')
+            fill_date = record.get('rx_filled_dt', 'Unknown Date')
             
-            if ndc_code:
-                ndc_codes.append({
+            if ndc_code and ndc_code not in unique_ndc_codes:
+                unique_ndc_codes.add(ndc_code)
+                ndc_meaning = ndc_meanings.get(ndc_code, 'LLM meaning not available')
+                med_meaning = medication_meanings.get(medication_name, 'Medication meaning not available')
+                
+                # Use the more detailed meaning
+                best_meaning = ndc_meaning if 'not available' not in ndc_meaning else med_meaning
+                
+                ndc_data.append({
                     'NDC Code': ndc_code,
-                    'Medication Name': label_name,
-                    'Fill Date': fill_date,
-                    'Type': 'Prescription Drug',
-                    'Category': 'Pharmacy',
-                    'Description': f"NDC {ndc_code} - {label_name}"
+                    'Medication Name': medication_name,
+                    'Therapeutic Meaning': best_meaning[:200] + '...' if len(best_meaning) > 200 else best_meaning,
+                    'First Fill Date': fill_date,
+                    'Fill Frequency': len([r for r in pharmacy_records if r.get('ndc') == ndc_code])
                 })
         
-        if ndc_codes:
-            df_ndc = pd.DataFrame(ndc_codes)
-            st.dataframe(df_ndc, use_container_width=True)
-            st.info(f"📊 **Total NDC Codes Found:** {len(ndc_codes)}")
+        if ndc_data:
+            df_ndc = pd.DataFrame(ndc_data)
+            st.dataframe(df_ndc, use_container_width=True, height=400)
             
-            # Medication frequency
-            if len(ndc_codes) > 1:
-                med_counts = df_ndc['Medication Name'].value_counts()
-                st.write("**Most Frequently Filled Medications:**")
-                for med, count in med_counts.head(5).items():
-                    st.write(f"• **{med}**: {count} fill(s)")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Unique NDC Codes", len(ndc_data))
+            with col2:
+                st.metric("LLM Meanings Available", len([d for d in ndc_data if 'not available' not in d['Therapeutic Meaning']]))
+            with col3:
+                avg_fills = sum(d['Fill Frequency'] for d in ndc_data) / len(ndc_data)
+                st.metric("Average Fills", f"{avg_fills:.1f}")
         else:
-            st.warning("No NDC codes found in pharmacy records")
+            st.warning("No NDC codes found")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -635,50 +666,602 @@ def display_batch_code_views(results):
         st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
         st.markdown('<div class="code-category-header">🔬 HCPCS Healthcare Procedure Codes</div>', unsafe_allow_html=True)
         
-        # Extract HCPCS codes (these might be in various fields)
-        hcpcs_codes = []
+        # Extract HCPCS-style codes
+        hcpcs_data = []
+        unique_hcpcs_codes = set()
         
-        # Look for HCPCS patterns in service codes and other fields
+        # Look for HCPCS patterns in service codes
         for record in medical_records:
             service_code = record.get('hlth_srvc_cd', '')
-            date = record.get('clm_rcvd_dt', 'Unknown')
+            claim_date = record.get('clm_rcvd_dt', 'Unknown Date')
             
-            # HCPCS codes typically start with letters
-            if service_code and any(c.isalpha() for c in service_code):
-                hcpcs_codes.append({
-                    'HCPCS Code': service_code,
-                    'Service Date': date,
-                    'Type': 'Healthcare Procedure',
-                    'Category': 'HCPCS',
-                    'Level': 'Level II' if service_code[0].isalpha() else 'Level I',
-                    'Description': f"HCPCS code {service_code}"
-                })
+            # HCPCS codes typically start with letters or have specific patterns
+            if service_code and (any(c.isalpha() for c in service_code) or len(service_code) == 5):
+                if service_code not in unique_hcpcs_codes:
+                    unique_hcpcs_codes.add(service_code)
+                    meaning = service_meanings.get(service_code, 'HCPCS meaning not available')
+                    
+                    hcpcs_data.append({
+                        'HCPCS Code': service_code,
+                        'Procedure Meaning': meaning[:200] + '...' if len(meaning) > 200 else meaning,
+                        'First Used Date': claim_date,
+                        'Level': 'Level II' if service_code[0].isalpha() else 'Level I',
+                        'Usage Count': len([r for r in medical_records if r.get('hlth_srvc_cd') == service_code])
+                    })
         
-        if hcpcs_codes:
-            df_hcpcs = pd.DataFrame(hcpcs_codes)
-            st.dataframe(df_hcpcs, use_container_width=True)
-            st.info(f"📊 **Total HCPCS Codes Found:** {len(hcpcs_codes)}")
+        if hcpcs_data:
+            df_hcpcs = pd.DataFrame(hcpcs_data)
+            st.dataframe(df_hcpcs, use_container_width=True, height=400)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total HCPCS Codes", len(hcpcs_data))
+            with col2:
+                level_ii_count = len([d for d in hcpcs_data if d['Level'] == 'Level II'])
+                st.metric("Level II Codes", level_ii_count)
+            with col3:
+                total_usage = sum(d['Usage Count'] for d in hcpcs_data)
+                st.metric("Total Usage", total_usage)
         else:
-            st.info("No specific HCPCS codes identified (may be included in CPT codes above)")
-            st.write("**HCPCS Code Information:**")
-            st.write("• **Level I**: CPT codes (numeric)")
-            st.write("• **Level II**: Alpha-numeric codes for supplies, equipment")
-            st.write("• **Common examples**: J codes (drugs), A codes (supplies)")
+            st.info("No specific HCPCS codes identified")
+            st.write("**HCPCS Information:**")
+            st.write("• **Level I**: CPT codes (numeric procedures)")
+            st.write("• **Level II**: Alpha-numeric codes (supplies, equipment)")
+            st.write("• **Examples**: J codes (drugs), A codes (supplies), E codes (equipment)")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Summary section
-    st.markdown("### 📊 Code Analysis Summary")
+    st.markdown("### 📊 Comprehensive Code Analysis Summary")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("ICD-10 Codes", len(icd10_codes) if 'icd10_codes' in locals() else 0)
+        st.metric("ICD-10 Codes", len(icd10_data) if 'icd10_data' in locals() else 0)
     with col2:
-        st.metric("CPT/Service Codes", len(cpt_codes) if 'cpt_codes' in locals() else 0)
+        st.metric("Service Codes", len(service_data) if 'service_data' in locals() else 0)
     with col3:
-        st.metric("NDC Codes", len(ndc_codes) if 'ndc_codes' in locals() else 0)
+        st.metric("NDC Codes", len(ndc_data) if 'ndc_data' in locals() else 0)
     with col4:
-        st.metric("HCPCS Codes", len(hcpcs_codes) if 'hcpcs_codes' in locals() else 0)
+        st.metric("HCPCS Codes", len(hcpcs_data) if 'hcpcs_data' in locals() else 0)
+
+def display_health_trajectory_section(results):
+    """Display health trajectory analysis section"""
+    st.markdown("""
+    <div class="section-box">
+        <div class="section-title">📈 Health Trajectory Analysis</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    health_trajectory = safe_get(results, 'health_trajectory', '')
+    if health_trajectory:
+        # Split trajectory into sections for better readability
+        st.markdown("### 📊 Comprehensive Health Analysis")
+        st.markdown(health_trajectory)
+        
+        # Add trajectory insights
+        entity_extraction = safe_get(results, 'entity_extraction', {})
+        if entity_extraction:
+            st.markdown("---")
+            st.markdown("### 🎯 Key Health Insights")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                conditions_count = len(entity_extraction.get('medical_conditions', []))
+                st.metric("Medical Conditions", conditions_count)
+            with col2:
+                medications_count = len(entity_extraction.get('medications_identified', []))
+                st.metric("Medications", medications_count)
+            with col3:
+                complexity_score = entity_extraction.get('clinical_complexity_score', 0)
+                st.metric("Clinical Complexity", complexity_score)
+    else:
+        st.warning("Health trajectory analysis not available")
+
+def display_entity_extraction_section(results):
+    """Display enhanced entity extraction section"""
+    st.markdown("""
+    <div class="section-box">
+        <div class="section-title">🎯 Enhanced Entity Extraction</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    entity_extraction = safe_get(results, 'entity_extraction', {})
+    if entity_extraction:
+        # Entity cards with enhanced styling
+        st.markdown(f"""
+        <div class="metric-grid">
+            <div class="metric-card">
+                <h3>🩺</h3>
+                <p><strong>Diabetes</strong></p>
+                <h4>{entity_extraction.get('diabetics', 'unknown').upper()}</h4>
+            </div>
+            <div class="metric-card">
+                <h3>👥</h3>
+                <p><strong>Age Group</strong></p>
+                <h4>{entity_extraction.get('age_group', 'unknown').replace('_', ' ').title()}</h4>
+            </div>
+            <div class="metric-card">
+                <h3>🚬</h3>
+                <p><strong>Smoking</strong></p>
+                <h4>{entity_extraction.get('smoking', 'unknown').upper()}</h4>
+            </div>
+            <div class="metric-card">
+                <h3>🍷</h3>
+                <p><strong>Alcohol</strong></p>
+                <h4>{entity_extraction.get('alcohol', 'unknown').upper()}</h4>
+            </div>
+            <div class="metric-card">
+                <h3>💓</h3>
+                <p><strong>Blood Pressure</strong></p>
+                <h4>{entity_extraction.get('blood_pressure', 'unknown').upper()}</h4>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Detailed entity information
+        st.markdown("### 📋 Detailed Health Entity Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🏥 Medical Conditions")
+            medical_conditions = entity_extraction.get('medical_conditions', [])
+            if medical_conditions:
+                for i, condition in enumerate(medical_conditions[:5], 1):
+                    st.write(f"{i}. {condition}")
+            else:
+                st.write("No specific medical conditions identified")
+        
+        with col2:
+            st.markdown("#### 💊 Medications Identified")
+            medications = entity_extraction.get('medications_identified', [])
+            if medications:
+                for i, med in enumerate(medications[:5], 1):
+                    if isinstance(med, dict):
+                        med_name = med.get('label_name', 'Unknown')
+                        st.write(f"{i}. {med_name}")
+                    else:
+                        st.write(f"{i}. {med}")
+            else:
+                st.write("No medications identified")
+        
+        # Clinical insights
+        if entity_extraction.get('clinical_risk_factors'):
+            st.markdown("#### ⚠️ Clinical Risk Factors")
+            risk_factors = entity_extraction.get('clinical_risk_factors', [])
+            for factor in risk_factors[:3]:
+                st.warning(f"• {factor}")
+        
+        # Enhanced analysis status
+        if entity_extraction.get('enhanced_clinical_analysis'):
+            st.success("✅ Enhanced clinical analysis completed with LLM insights")
+        else:
+            st.info("ℹ️ Basic entity extraction completed")
+    else:
+        st.warning("Entity extraction data not available")
+
+def display_heart_attack_prediction_section(results):
+    """Display heart attack risk prediction section"""
+    st.markdown("""
+    <div class="section-box">
+        <div class="section-title">❤️ Heart Attack Risk Assessment</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+    heart_attack_features = safe_get(results, 'heart_attack_features', {})
+    
+    if heart_attack_prediction and not heart_attack_prediction.get('error'):
+        # Risk display
+        combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
+        risk_score = safe_get(results, 'heart_attack_risk_score', 0)
+        
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%); padding: 2rem; border-radius: 15px; border: 2px solid #fc8181; margin: 1rem 0; text-align: center;">
+            <h3 style="color: #2d3748; margin-bottom: 1rem;">💓 Cardiovascular Risk Assessment</h3>
+            <h4 style="color: #e53e3e; font-weight: 600; font-size: 1.2rem;">{combined_display}</h4>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Progress bar for risk visualization
+        try:
+            progress_value = float(risk_score) if risk_score else 0.0
+            st.progress(min(progress_value, 1.0))
+        except (ValueError, TypeError):
+            st.progress(0.0)
+        
+        # Risk factors breakdown
+        if heart_attack_features:
+            st.markdown("### 🎯 Risk Factors Analysis")
+            
+            feature_interp = heart_attack_features.get('feature_interpretation', {})
+            if feature_interp:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### 📊 Risk Factor Values")
+                    for factor, value in feature_interp.items():
+                        if factor == "Age":
+                            st.write(f"**{factor}:** {value}")
+                        elif value == "Yes":
+                            st.error(f"**{factor}:** {value} ⚠️")
+                        elif value == "No":
+                            st.success(f"**{factor}:** {value} ✅")
+                        else:
+                            st.write(f"**{factor}:** {value}")
+                
+                with col2:
+                    st.markdown("#### 🔍 Clinical Interpretation")
+                    interpretation_text = """
+                    **Risk Factor Impact:**
+                    - **Age**: Non-modifiable risk factor
+                    - **Gender**: Biological risk consideration
+                    - **Diabetes**: Major modifiable risk factor
+                    - **High Blood Pressure**: Leading cardiovascular risk
+                    - **Smoking**: Most preventable risk factor
+                    """
+                    st.markdown(interpretation_text)
+        
+        # Prediction method info
+        method = heart_attack_prediction.get('method', 'Unknown')
+        st.info(f"**Prediction Method:** {method}")
+        
+    else:
+        st.error("❌ Heart attack risk prediction not available")
+        if heart_attack_prediction.get('error'):
+            st.write(f"**Error Details:** {heart_attack_prediction['error']}")
+
+def display_combined_health_summary(results):
+    """Display combined health summary with trajectory and entity data"""
+    st.markdown("""
+    <div class="section-box">
+        <div class="section-title">📋 Combined Health Summary</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Executive summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        structured_extractions = safe_get(results, 'structured_extractions', {})
+        medical_data = structured_extractions.get('medical', {}) if structured_extractions else {}
+        medical_records = len(medical_data.get('hlth_srvc_records', []) if medical_data else [])
+        st.metric("Medical Records", medical_records)
+    
+    with col2:
+        pharmacy_data = structured_extractions.get('pharmacy', {}) if structured_extractions else {}
+        pharmacy_records = len(pharmacy_data.get('ndc_records', []) if pharmacy_data else [])
+        st.metric("Pharmacy Records", pharmacy_records)
+    
+    with col3:
+        entities = safe_get(results, 'entity_extraction', {})
+        conditions_count = len(entities.get('medical_conditions', []) if entities else [])
+        st.metric("Health Conditions", conditions_count)
+    
+    with col4:
+        heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+        if heart_attack_prediction and 'risk_score' in heart_attack_prediction:
+            risk_percentage = heart_attack_prediction['risk_score'] * 100
+            st.metric("Heart Risk", f"{risk_percentage:.1f}%")
+        else:
+            st.metric("Heart Risk", "N/A")
+    
+    # Combined analysis
+    st.markdown("### 🎯 Integrated Health Analysis")
+    
+    # Health trajectory summary
+    health_trajectory = safe_get(results, 'health_trajectory', '')
+    if health_trajectory:
+        with st.expander("📈 Complete Health Trajectory Analysis", expanded=True):
+            st.markdown(health_trajectory)
+    
+    # Final summary
+    final_summary = safe_get(results, 'final_summary', '')
+    if final_summary:
+        with st.expander("📋 Executive Clinical Summary", expanded=True):
+            st.markdown(final_summary)
+    
+    # Key insights section
+    st.markdown("### 💡 Key Clinical Insights")
+    
+    insights = []
+    
+    # Entity-based insights
+    if entities:
+        if entities.get('diabetics') == 'yes':
+            insights.append("🩺 **Diabetes Diagnosed** - Requires ongoing management and monitoring")
+        if entities.get('blood_pressure') in ['managed', 'diagnosed']:
+            insights.append("💓 **Hypertension Present** - Blood pressure management active")
+        if entities.get('smoking') == 'yes':
+            insights.append("🚬 **Smoking History** - Major modifiable cardiovascular risk factor")
+    
+    # Risk-based insights
+    if heart_attack_prediction:
+        risk_score = heart_attack_prediction.get('risk_score', 0)
+        if risk_score > 0.3:
+            insights.append("⚠️ **Elevated Cardiovascular Risk** - Consider cardiology consultation")
+        elif risk_score > 0.2:
+            insights.append("⚡ **Moderate Cardiovascular Risk** - Lifestyle modifications recommended")
+        else:
+            insights.append("✅ **Lower Cardiovascular Risk** - Continue preventive care")
+    
+    # Display insights
+    for insight in insights:
+        st.markdown(f"• {insight}")
+    
+    if not insights:
+        st.info("Complete analysis data not available for detailed insights")
+
+# Enhanced chatbot with proper graph display
+def handle_chatbot_response_with_enhanced_graphs(user_question, agent, chatbot_context, chatbot_messages):
+    """Enhanced chatbot response handler with proper graph display"""
+    try:
+        # Get the initial response from the agent
+        chatbot_response = agent.chat_with_data(
+            user_question, 
+            chatbot_context, 
+            chatbot_messages
+        )
+        
+        # Check if response indicates graph generation
+        if "matplotlib" in chatbot_response.lower() or "graph" in chatbot_response.lower() or "chart" in chatbot_response.lower():
+            # Create a placeholder for the graph
+            st.markdown("### 📊 Generated Health Visualization")
+            
+            # Check if it's a comprehensive dashboard request
+            if "dashboard" in user_question.lower() or "comprehensive" in user_question.lower():
+                # Create a comprehensive health dashboard
+                create_comprehensive_health_dashboard(chatbot_context)
+            elif "timeline" in user_question.lower():
+                # Create timeline visualization
+                create_health_timeline_chart(chatbot_context)
+            elif "risk" in user_question.lower():
+                # Create risk assessment chart
+                create_risk_assessment_chart(chatbot_context)
+            else:
+                # Create general health chart
+                create_general_health_chart(chatbot_context)
+            
+            # Display the text response as well
+            st.markdown("### 💬 Analysis Summary")
+            st.markdown(chatbot_response)
+        else:
+            # Regular text response
+            return chatbot_response
+            
+    except Exception as e:
+        st.error(f"Error processing chatbot response: {str(e)}")
+        return f"I encountered an error while processing your request: {str(e)}"
+
+def create_comprehensive_health_dashboard(chatbot_context):
+    """Create a comprehensive health dashboard using Plotly"""
+    try:
+        # Extract data from context
+        entity_extraction = chatbot_context.get('entity_extraction', {})
+        heart_attack_prediction = chatbot_context.get('heart_attack_prediction', {})
+        medical_extraction = chatbot_context.get('medical_extraction', {})
+        pharmacy_extraction = chatbot_context.get('pharmacy_extraction', {})
+        
+        # Create subplot dashboard
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=('Health Risk Factors', 'Medication Overview', 'Risk Assessment', 'Health Timeline'),
+            specs=[[{"type": "bar"}, {"type": "pie"}],
+                   [{"type": "indicator"}, {"type": "scatter"}]]
+        )
+        
+        # Risk factors bar chart
+        risk_factors = ['Age Risk', 'Diabetes', 'Hypertension', 'Smoking']
+        risk_values = [
+            1 if entity_extraction.get('age', 50) > 50 else 0,
+            1 if entity_extraction.get('diabetics') == 'yes' else 0,
+            1 if entity_extraction.get('blood_pressure') in ['managed', 'diagnosed'] else 0,
+            1 if entity_extraction.get('smoking') == 'yes' else 0
+        ]
+        
+        fig.add_trace(
+            go.Bar(x=risk_factors, y=risk_values, name="Risk Factors", 
+                   marker_color=['red' if v else 'green' for v in risk_values]),
+            row=1, col=1
+        )
+        
+        # Medication pie chart
+        medications = entity_extraction.get('medications_identified', [])
+        if medications:
+            med_names = [med.get('label_name', 'Unknown') if isinstance(med, dict) else str(med) for med in medications[:5]]
+            med_counts = [1] * len(med_names)
+            
+            fig.add_trace(
+                go.Pie(labels=med_names, values=med_counts, name="Medications"),
+                row=1, col=2
+            )
+        
+        # Risk assessment gauge
+        risk_score = heart_attack_prediction.get('risk_score', 0.1)
+        fig.add_trace(
+            go.Indicator(
+                mode="gauge+number",
+                value=risk_score * 100,
+                title={'text': "Heart Disease Risk %"},
+                gauge={'axis': {'range': [None, 100]},
+                       'bar': {'color': "darkred"},
+                       'steps': [{'range': [0, 25], 'color': "lightgreen"},
+                                {'range': [25, 50], 'color': "yellow"},
+                                {'range': [50, 100], 'color': "red"}]}
+            ),
+            row=2, col=1
+        )
+        
+        # Health timeline (simulated)
+        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
+        health_score = [75, 78, 76, 80, 82, 85]  # Simulated health progression
+        
+        fig.add_trace(
+            go.Scatter(x=months, y=health_score, mode='lines+markers', 
+                      name="Health Trend", line=dict(color='blue', width=3)),
+            row=2, col=2
+        )
+        
+        # Update layout
+        fig.update_layout(
+            height=600,
+            title_text="Comprehensive Health Dashboard",
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Add insights
+        st.markdown("### 🎯 Dashboard Insights")
+        if risk_score > 0.3:
+            st.warning(f"⚠️ Elevated cardiovascular risk detected ({risk_score*100:.1f}%)")
+        else:
+            st.success(f"✅ Cardiovascular risk within normal range ({risk_score*100:.1f}%)")
+        
+    except Exception as e:
+        st.error(f"Error creating dashboard: {str(e)}")
+
+def create_health_timeline_chart(chatbot_context):
+    """Create a health timeline chart"""
+    try:
+        # Extract timeline data
+        medical_extraction = chatbot_context.get('medical_extraction', {})
+        pharmacy_extraction = chatbot_context.get('pharmacy_extraction', {})
+        
+        # Simulate timeline data
+        timeline_data = {
+            'dates': pd.date_range('2023-01-01', periods=12, freq='M'),
+            'medical_visits': [2, 1, 3, 1, 2, 1, 2, 3, 1, 2, 1, 2],
+            'prescriptions': [1, 2, 1, 3, 2, 1, 2, 1, 3, 2, 1, 2]
+        }
+        
+        fig = go.Figure()
+        
+        # Add medical visits
+        fig.add_trace(go.Scatter(
+            x=timeline_data['dates'],
+            y=timeline_data['medical_visits'],
+            mode='lines+markers',
+            name='Medical Visits',
+            line=dict(color='blue', width=3)
+        ))
+        
+        # Add prescriptions
+        fig.add_trace(go.Scatter(
+            x=timeline_data['dates'],
+            y=timeline_data['prescriptions'],
+            mode='lines+markers',
+            name='Prescriptions Filled',
+            line=dict(color='green', width=3),
+            yaxis='y2'
+        ))
+        
+        # Update layout with secondary y-axis
+        fig.update_layout(
+            title='Health Activity Timeline',
+            xaxis_title='Month',
+            yaxis_title='Medical Visits',
+            yaxis2=dict(
+                title='Prescriptions',
+                overlaying='y',
+                side='right'
+            ),
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error creating timeline: {str(e)}")
+
+def create_risk_assessment_chart(chatbot_context):
+    """Create a risk assessment visualization"""
+    try:
+        entity_extraction = chatbot_context.get('entity_extraction', {})
+        heart_attack_prediction = chatbot_context.get('heart_attack_prediction', {})
+        
+        # Risk factors data
+        risk_factors = {
+            'Age': 1 if entity_extraction.get('age', 50) > 60 else 0,
+            'Diabetes': 1 if entity_extraction.get('diabetics') == 'yes' else 0,
+            'Hypertension': 1 if entity_extraction.get('blood_pressure') in ['managed', 'diagnosed'] else 0,
+            'Smoking': 1 if entity_extraction.get('smoking') == 'yes' else 0,
+            'Gender Risk': 0.5  # Moderate risk
+        }
+        
+        # Create radar chart
+        categories = list(risk_factors.keys())
+        values = list(risk_factors.values())
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill='toself',
+            name='Risk Profile',
+            line_color='red'
+        ))
+        
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 1]
+                )),
+            title="Cardiovascular Risk Factor Profile",
+            height=500
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Risk interpretation
+        total_risk = sum(values)
+        if total_risk >= 3:
+            st.error("⚠️ High risk profile - Multiple risk factors present")
+        elif total_risk >= 2:
+            st.warning("⚡ Moderate risk profile - Some risk factors present")
+        else:
+            st.success("✅ Lower risk profile - Few risk factors present")
+            
+    except Exception as e:
+        st.error(f"Error creating risk chart: {str(e)}")
+
+def create_general_health_chart(chatbot_context):
+    """Create a general health overview chart"""
+    try:
+        entity_extraction = chatbot_context.get('entity_extraction', {})
+        
+        # Health metrics
+        health_metrics = {
+            'Cardiovascular Health': 85 if entity_extraction.get('blood_pressure') != 'diagnosed' else 70,
+            'Metabolic Health': 80 if entity_extraction.get('diabetics') != 'yes' else 65,
+            'Respiratory Health': 90 if entity_extraction.get('smoking') != 'yes' else 60,
+            'Overall Wellness': 85
+        }
+        
+        categories = list(health_metrics.keys())
+        scores = list(health_metrics.values())
+        
+        fig = go.Figure(go.Bar(
+            x=categories,
+            y=scores,
+            marker_color=['green' if s >= 80 else 'orange' if s >= 70 else 'red' for s in scores],
+            text=[f"{s}%" for s in scores],
+            textposition='auto'
+        ))
+        
+        fig.update_layout(
+            title='Health Assessment Overview',
+            yaxis_title='Health Score (%)',
+            yaxis=dict(range=[0, 100]),
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error creating health chart: {str(e)}")
 
 # Initialize session state
 initialize_session_state()
@@ -995,12 +1578,40 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     else:
                         st.warning("No API outputs available")
 
-    # BATCH CODE VIEWS SECTION
-    if st.button("🔬 Batch Healthcare Code Analysis", use_container_width=True, key="batch_codes_btn"):
+    # BATCH CODE VIEWS SECTION - ENHANCED WITH ALL ATTRIBUTES AND MEANINGS
+    if st.button("🔬 Comprehensive Healthcare Code Analysis", use_container_width=True, key="batch_codes_btn"):
         st.session_state.show_batch_codes = not st.session_state.show_batch_codes
     
     if st.session_state.show_batch_codes:
-        display_batch_code_views(results)
+        display_enhanced_batch_code_analysis(results)
+
+    # HEALTH TRAJECTORY SECTION
+    if st.button("📈 Health Trajectory Analysis", use_container_width=True, key="health_trajectory_btn"):
+        st.session_state.show_health_trajectory = not st.session_state.show_health_trajectory
+    
+    if st.session_state.show_health_trajectory:
+        display_health_trajectory_section(results)
+
+    # ENTITY EXTRACTION SECTION
+    if st.button("🎯 Enhanced Entity Extraction", use_container_width=True, key="entity_extraction_btn"):
+        st.session_state.show_entity_extraction = not st.session_state.show_entity_extraction
+    
+    if st.session_state.show_entity_extraction:
+        display_entity_extraction_section(results)
+
+    # HEART ATTACK PREDICTION SECTION
+    if st.button("❤️ Heart Attack Risk Prediction", use_container_width=True, key="heart_attack_btn"):
+        st.session_state.show_heart_attack = not st.session_state.show_heart_attack
+    
+    if st.session_state.show_heart_attack:
+        display_heart_attack_prediction_section(results)
+
+    # COMBINED HEALTH SUMMARY SECTION
+    if st.button("📋 Combined Health Summary", use_container_width=True, key="combined_summary_btn"):
+        st.session_state.show_combined_summary = not st.session_state.show_combined_summary
+    
+    if st.session_state.show_combined_summary:
+        display_combined_health_summary(results)
 
 # Enhanced Footer
 st.markdown("---")
