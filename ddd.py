@@ -27,6 +27,109 @@ class EnhancedHealthDataProcessor:
         else:
             logger.warning("⚠️ No API integrator - batch processing disabled")
 
+    def extract_health_entities_with_clinical_insights(self, pharmacy_data: Dict[str, Any],
+                                                      pharmacy_extraction: Dict[str, Any],
+                                                      medical_extraction: Dict[str, Any],
+                                                      patient_data: Dict[str, Any] = None,
+                                                      api_integrator = None) -> Dict[str, Any]:
+        """Enhanced health entity extraction with clinical insights"""
+        logger.info("🔬 Starting health entity extraction with clinical insights...")
+        
+        # Initialize result structure
+        entities = {
+            "diabetics": "no",
+            "age_group": "unknown",
+            "age": None,
+            "smoking": "no",
+            "alcohol": "no",
+            "blood_pressure": "unknown",
+            "analysis_details": [],
+            "medical_conditions": [],
+            "medications_identified": [],
+            "stable_analysis": True,
+            "llm_analysis": "completed"
+        }
+
+        try:
+            # Age calculation
+            if patient_data and patient_data.get('date_of_birth'):
+                try:
+                    dob = datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date()
+                    today = date.today()
+                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                    entities["age"] = age
+                    
+                    if age < 18:
+                        entities["age_group"] = "pediatric"
+                    elif age < 35:
+                        entities["age_group"] = "young_adult"
+                    elif age < 50:
+                        entities["age_group"] = "adult"
+                    elif age < 65:
+                        entities["age_group"] = "middle_aged"
+                    else:
+                        entities["age_group"] = "senior"
+                        
+                    entities["analysis_details"].append(f"Age calculated: {age} years")
+                except Exception as e:
+                    logger.warning(f"Age calculation failed: {e}")
+
+            # Analyze medical data for conditions
+            medical_conditions = []
+            if medical_extraction and medical_extraction.get("code_meanings", {}).get("diagnosis_code_meanings"):
+                diagnosis_meanings = medical_extraction["code_meanings"]["diagnosis_code_meanings"]
+                
+                for code, meaning in diagnosis_meanings.items():
+                    meaning_lower = meaning.lower()
+                    
+                    # Check for diabetes
+                    if any(term in meaning_lower for term in ['diabetes', 'diabetic', 'insulin', 'glucose']):
+                        entities["diabetics"] = "yes"
+                        medical_conditions.append(f"Diabetes (ICD-10 {code})")
+                    
+                    # Check for hypertension
+                    if any(term in meaning_lower for term in ['hypertension', 'high blood pressure']):
+                        entities["blood_pressure"] = "diagnosed"
+                        medical_conditions.append(f"Hypertension (ICD-10 {code})")
+                    
+                    # Check for smoking
+                    if any(term in meaning_lower for term in ['tobacco', 'smoking', 'nicotine']):
+                        entities["smoking"] = "yes"
+                        medical_conditions.append(f"Tobacco use (ICD-10 {code})")
+
+            # Analyze pharmacy data for medications
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                for record in pharmacy_extraction["ndc_records"]:
+                    if record.get("lbl_nm"):
+                        medication_info = {
+                            "ndc": record.get("ndc", ""),
+                            "label_name": record.get("lbl_nm", ""),
+                            "stable_processing": True
+                        }
+                        entities["medications_identified"].append(medication_info)
+                        
+                        # Check medication names for conditions
+                        medication_name = record.get("lbl_nm", "").lower()
+                        if any(term in medication_name for term in ['metformin', 'insulin', 'glipizide']):
+                            entities["diabetics"] = "yes"
+                            medical_conditions.append(f"Diabetes medication: {record.get('lbl_nm', '')}")
+                        
+                        if any(term in medication_name for term in ['amlodipine', 'lisinopril', 'atenolol']):
+                            if entities["blood_pressure"] == "unknown":
+                                entities["blood_pressure"] = "managed"
+                            medical_conditions.append(f"BP medication: {record.get('lbl_nm', '')}")
+
+            entities["medical_conditions"] = medical_conditions
+            entities["analysis_details"].append("Clinical insights analysis completed")
+            
+            logger.info(f"✅ Entity extraction completed: {len(medical_conditions)} conditions, {len(entities['medications_identified'])} medications")
+            
+        except Exception as e:
+            logger.error(f"Error in entity extraction: {e}")
+            entities["analysis_details"].append(f"Analysis error: {str(e)}")
+
+        return entities
+
     def detect_graph_request(self, user_query: str) -> Dict[str, Any]:
         """Detect if user is requesting a graph/chart"""
         query_lower = user_query.lower()
@@ -947,6 +1050,431 @@ IMPORTANT: Return ONLY the JSON object, no other text."""
         except Exception as e:
             logger.error(f"❌ Stable medications batch exception: {e}")
             return {}
+
+    def extract_health_entities_with_clinical_insights(self, pharmacy_data: Dict[str, Any],
+                                                      pharmacy_extraction: Dict[str, Any],
+                                                      medical_extraction: Dict[str, Any],
+                                                      patient_data: Dict[str, Any] = None,
+                                                      api_integrator = None) -> Dict[str, Any]:
+        """Stable health entity extraction with clinical insights"""
+        logger.info("🔬 ===== Stable HEALTH ENTITY EXTRACTION =====")
+        
+        stable_entities = {
+            "diabetics": "no",
+            "age_group": "unknown",
+            "age": None,
+            "smoking": "no",
+            "alcohol": "no",
+            "blood_pressure": "unknown",
+            "analysis_details": [],
+            "medical_conditions": [],
+            "medications_identified": [],
+            "stable_analysis": False,
+            "llm_analysis": "not_performed"
+        }
+
+        try:
+            # Stable age calculation
+            if patient_data and patient_data.get('date_of_birth'):
+                age = self._calculate_age_stable(patient_data['date_of_birth'])
+                if age != "unknown":
+                    try:
+                        age_num = int(age.split()[0])
+                        stable_entities["age"] = age_num
+                        stable_entities["age_group"] = self._get_stable_age_group(age_num)
+                        stable_entities["analysis_details"].append(f"Age analysis: {age}")
+                    except:
+                        pass
+
+            # Stable entity extraction using batch meanings
+            medical_meanings_available = (medical_extraction and 
+                                        medical_extraction.get("code_meanings_added", False) and
+                                        medical_extraction.get("stable_analysis", False))
+            
+            pharmacy_meanings_available = (pharmacy_extraction and 
+                                         pharmacy_extraction.get("code_meanings_added", False) and
+                                         pharmacy_extraction.get("stable_analysis", False))
+            
+            if medical_meanings_available or pharmacy_meanings_available:
+                logger.info("🔬 Using stable batch-generated meanings for entity extraction")
+                stable_entities = self._stable_analyze_entities_with_meanings(
+                    stable_entities, medical_extraction, pharmacy_extraction
+                )
+                stable_entities["stable_analysis"] = True
+                stable_entities["llm_analysis"] = "used_stable_batch_meanings"
+                stable_entities["analysis_details"].append("Used stable batch-generated meanings")
+            else:
+                logger.info("🔬 Using stable direct pattern matching for entity extraction")
+                self._stable_analyze_entities_direct(pharmacy_data, pharmacy_extraction, medical_extraction, stable_entities)
+
+            # Stable medication identification
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                for record in pharmacy_extraction["ndc_records"]:
+                    if record.get("lbl_nm"):
+                        medication_info = {
+                            "ndc": record.get("ndc", ""),
+                            "label_name": record.get("lbl_nm", ""),
+                            "detailed_meaning": record.get("medication_detailed_meaning", ""),
+                            "stable_processing": True
+                        }
+                        stable_entities["medications_identified"].append(medication_info)
+
+            logger.info(f"🔬 ===== Stable HEALTH ENTITY EXTRACTION COMPLETED =====")
+            logger.info(f"  ✅ Stable analysis: {stable_entities['stable_analysis']}")
+            logger.info(f"  🩺 Diabetes: {stable_entities['diabetics']}")
+            logger.info(f"  💓 Blood pressure: {stable_entities['blood_pressure']}")
+            logger.info(f"  💊 Medications: {len(stable_entities['medications_identified'])}")
+
+        except Exception as e:
+            logger.error(f"❌ Error in stable entity extraction: {e}")
+            stable_entities["analysis_details"].append(f"Stable analysis error: {str(e)}")
+
+        return stable_entities
+
+    def _calculate_age_stable(self, date_of_birth: str) -> str:
+        """Stable age calculation"""
+        try:
+            if not date_of_birth:
+                return "unknown"
+            dob = datetime.strptime(date_of_birth, '%Y-%m-%d').date()
+            today = date.today()
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            
+            # Stable age context
+            if age < 18:
+                return f"{age} years (Pediatric)"
+            elif age < 65:
+                return f"{age} years (Adult)"
+            else:
+                return f"{age} years (Senior)"
+        except:
+            return "unknown"
+
+    def _get_stable_age_group(self, age: int) -> str:
+        """Stable age group determination"""
+        if age < 18:
+            return "pediatric"
+        elif age < 35:
+            return "young_adult"
+        elif age < 50:
+            return "adult"
+        elif age < 65:
+            return "middle_aged"
+        else:
+            return "senior"
+
+    def _stable_analyze_entities_with_meanings(self, entities: Dict[str, Any], 
+                                             medical_extraction: Dict[str, Any], 
+                                             pharmacy_extraction: Dict[str, Any]) -> Dict[str, Any]:
+        """Stable entity analysis using batch meanings"""
+        try:
+            medical_conditions = []
+            
+            # Stable analysis of medical meanings
+            medical_meanings = medical_extraction.get("code_meanings", {})
+            diagnosis_meanings = medical_meanings.get("diagnosis_code_meanings", {})
+            
+            for code, meaning in diagnosis_meanings.items():
+                meaning_lower = meaning.lower()
+                
+                # Stable diabetes analysis
+                if any(term in meaning_lower for term in ['diabetes', 'diabetic', 'insulin', 'glucose']):
+                    entities["diabetics"] = "yes"
+                    medical_conditions.append(f"Diabetes (ICD-10 {code})")
+                
+                # Stable hypertension analysis
+                if any(term in meaning_lower for term in ['hypertension', 'high blood pressure']):
+                    entities["blood_pressure"] = "diagnosed"
+                    medical_conditions.append(f"Hypertension (ICD-10 {code})")
+                
+                # Stable smoking analysis
+                if any(term in meaning_lower for term in ['tobacco', 'smoking', 'nicotine']):
+                    entities["smoking"] = "yes"
+                    medical_conditions.append(f"Tobacco use (ICD-10 {code})")
+                
+                # Stable alcohol analysis
+                if any(term in meaning_lower for term in ['alcohol', 'alcoholism']):
+                    entities["alcohol"] = "yes"
+                    medical_conditions.append(f"Alcohol-related condition (ICD-10 {code})")
+
+            # Stable analysis of pharmacy meanings
+            pharmacy_meanings = pharmacy_extraction.get("code_meanings", {})
+            medication_meanings = pharmacy_meanings.get("medication_meanings", {})
+            
+            for medication, meaning in medication_meanings.items():
+                meaning_lower = meaning.lower()
+                
+                # Stable diabetes medication analysis
+                if any(term in meaning_lower for term in ['diabetes', 'blood sugar', 'insulin', 'metformin']):
+                    entities["diabetics"] = "yes"
+                    medical_conditions.append(f"Diabetes medication: {medication}")
+                
+                # Stable cardiovascular medication analysis
+                if any(term in meaning_lower for term in ['blood pressure', 'hypertension', 'ace inhibitor']):
+                    if entities["blood_pressure"] == "unknown":
+                        entities["blood_pressure"] = "managed"
+                    medical_conditions.append(f"BP medication: {medication}")
+
+            entities["medical_conditions"] = medical_conditions
+            
+            logger.info(f"🔬 Stable meaning analysis: {len(medical_conditions)} conditions identified")
+            
+            return entities
+            
+        except Exception as e:
+            logger.error(f"Error in stable meaning analysis: {e}")
+            return entities
+
+    def _stable_analyze_entities_direct(self, pharmacy_data: Dict[str, Any],
+                                      pharmacy_extraction: Dict[str, Any],
+                                      medical_extraction: Dict[str, Any],
+                                      entities: Dict[str, Any]):
+        """Stable direct entity analysis using pattern matching"""
+        try:
+            logger.info("🔬 Stable direct pattern matching analysis")
+            
+            # Stable medication pattern matching
+            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
+                for record in pharmacy_extraction["ndc_records"]:
+                    medication_name = record.get("lbl_nm", "").lower()
+                    
+                    # Stable diabetes detection
+                    if any(term in medication_name for term in ['metformin', 'insulin', 'glipizide']):
+                        entities["diabetics"] = "yes"
+                        
+                    # Stable cardiovascular detection
+                    if any(term in medication_name for term in ['amlodipine', 'lisinopril', 'atenolol']):
+                        entities["blood_pressure"] = "managed"
+
+            entities["analysis_details"].append("Stable direct pattern matching completed")
+
+        except Exception as e:
+            logger.error(f"Error in stable direct analysis: {e}")
+            entities["analysis_details"].append(f"Stable direct analysis error: {str(e)}")
+
+    def prepare_enhanced_clinical_context(self, chat_context: Dict[str, Any]) -> str:
+        """Stable context preparation for chatbot"""
+        try:
+            context_parts = []
+
+            # Stable patient overview
+            patient_overview = chat_context.get("patient_overview", {})
+            if patient_overview:
+                context_parts.append(f"**PATIENT**: Age {patient_overview.get('age', 'unknown')}, ZIP {patient_overview.get('zip', 'unknown')}")
+
+            # Stable medical extractions
+            medical_extraction = chat_context.get("medical_extraction", {})
+            if medical_extraction and not medical_extraction.get('error'):
+                context_parts.append(f"**MEDICAL DATA**: {json.dumps(medical_extraction, indent=2)}")
+
+            # Stable pharmacy extractions
+            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
+            if pharmacy_extraction and not pharmacy_extraction.get('error'):
+                context_parts.append(f"**PHARMACY DATA**: {json.dumps(pharmacy_extraction, indent=2)}")
+
+            # Stable entity extraction
+            entity_extraction = chat_context.get("entity_extraction", {})
+            if entity_extraction:
+                context_parts.append(f"**HEALTH ENTITIES**: {json.dumps(entity_extraction, indent=2)}")
+
+            # Stable health trajectory
+            health_trajectory = chat_context.get("health_trajectory", "")
+            if health_trajectory:
+                context_parts.append(f"**HEALTH TRAJECTORY**: {health_trajectory[:500]}...")
+
+            # Stable cardiovascular risk assessment
+            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
+            if heart_attack_prediction:
+                context_parts.append(f"**CARDIOVASCULAR RISK**: {json.dumps(heart_attack_prediction, indent=2)}")
+
+            return "\n\n" + "\n\n".join(context_parts)
+
+        except Exception as e:
+            logger.error(f"Error preparing stable context: {e}")
+            return "Stable patient healthcare data available for analysis."
+
+    # Helper methods for stable processing
+    def _stable_deidentify_json(self, data: Any) -> Any:
+        """Stable JSON deidentification"""
+        if isinstance(data, dict):
+            deidentified_dict = {}
+            for key, value in data.items():
+                if isinstance(value, (dict, list)):
+                    deidentified_dict[key] = self._stable_deidentify_json(value)
+                elif isinstance(value, str):
+                    deidentified_dict[key] = self._stable_deidentify_string(value)
+                else:
+                    deidentified_dict[key] = value
+            return deidentified_dict
+        elif isinstance(data, list):
+            return [self._stable_deidentify_json(item) for item in data]
+        elif isinstance(data, str):
+            return self._stable_deidentify_string(data)
+        else:
+            return data
+
+    def _stable_deidentify_pharmacy_json(self, data: Any) -> Any:
+        """Stable pharmacy JSON deidentification"""
+        if isinstance(data, dict):
+            deidentified_dict = {}
+            for key, value in data.items():
+                if key.lower() in ['src_mbr_first_nm', 'src_mbr_frst_nm', 'scr_mbr_last_nm', 'src_mbr_last_nm']:
+                    deidentified_dict[key] = "[MASKED_NAME]"
+                elif isinstance(value, (dict, list)):
+                    deidentified_dict[key] = self._stable_deidentify_pharmacy_json(value)
+                elif isinstance(value, str):
+                    deidentified_dict[key] = self._stable_deidentify_string(value)
+                else:
+                    deidentified_dict[key] = value
+            return deidentified_dict
+        elif isinstance(data, list):
+            return [self._stable_deidentify_pharmacy_json(item) for item in data]
+        elif isinstance(data, str):
+            return self._stable_deidentify_string(data)
+        else:
+            return data
+
+    def _mask_medical_fields_stable(self, data: Any) -> Any:
+        """Stable medical field masking"""
+        if isinstance(data, dict):
+            masked_data = {}
+            for key, value in data.items():
+                if key.lower() in ['src_mbr_frst_nm', 'src_mbr_first_nm', 'src_mbr_last_nm', 'src_mvr_last_nm']:
+                    masked_data[key] = "[MASKED_NAME]"
+                elif isinstance(value, (dict, list)):
+                    masked_data[key] = self._mask_medical_fields_stable(value)
+                else:
+                    masked_data[key] = value
+            return masked_data
+        elif isinstance(data, list):
+            return [self._mask_medical_fields_stable(item) for item in data]
+        else:
+            return data
+
+    def _stable_deidentify_string(self, data: str) -> str:
+        """Stable string deidentification"""
+        if not isinstance(data, str) or not data.strip():
+            return data
+
+        deidentified = str(data)
+        
+        # Stable pattern replacements
+        deidentified = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[MASKED_SSN]', deidentified)
+        deidentified = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[MASKED_PHONE]', deidentified)
+        deidentified = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[MASKED_EMAIL]', deidentified)
+        deidentified = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', '[MASKED_NAME]', deidentified)
+        
+        return deidentified
+
+    def _stable_medical_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Stable recursive medical field extraction"""
+        if isinstance(data, dict):
+            current_record = {}
+
+            # Stable health service code extraction
+            if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
+                service_code = str(data["hlth_srvc_cd"]).strip()
+                current_record["hlth_srvc_cd"] = service_code
+                result["extraction_summary"]["unique_service_codes"].add(service_code)
+
+            # Stable claim received date extraction
+            if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
+                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
+
+            # Stable diagnosis codes extraction
+            diagnosis_codes = []
+
+            # Handle comma-separated diagnosis codes
+            if "diag_1_50_cd" in data and data["diag_1_50_cd"]:
+                diag_value = str(data["diag_1_50_cd"]).strip()
+                if diag_value and diag_value.lower() not in ['null', 'none', '']:
+                    individual_codes = [code.strip() for code in diag_value.split(',') if code.strip()]
+                    for i, code in enumerate(individual_codes, 1):
+                        if code and code.lower() not in ['null', 'none', '']:
+                            diagnosis_info = {
+                                "code": code,
+                                "position": i,
+                                "source": "diag_1_50_cd"
+                            }
+                            diagnosis_codes.append(diagnosis_info)
+                            result["extraction_summary"]["unique_diagnosis_codes"].add(code)
+
+            # Handle individual diagnosis fields
+            for i in range(1, 51):
+                diag_key = f"diag_{i}_cd"
+                if diag_key in data and data[diag_key]:
+                    diag_code = str(data[diag_key]).strip()
+                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
+                        diagnosis_info = {
+                            "code": diag_code,
+                            "position": i,
+                            "source": f"individual_{diag_key}"
+                        }
+                        diagnosis_codes.append(diagnosis_info)
+                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
+
+            if diagnosis_codes:
+                current_record["diagnosis_codes"] = diagnosis_codes
+                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
+
+            if current_record:
+                current_record["data_path"] = path
+                result["hlth_srvc_records"].append(current_record)
+                result["extraction_summary"]["total_hlth_srvc_records"] += 1
+
+            # Continue stable recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._stable_medical_extraction(value, result, new_path)
+
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._stable_medical_extraction(item, result, new_path)
+
+    def _stable_pharmacy_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
+        """Stable recursive pharmacy field extraction"""
+        if isinstance(data, dict):
+            current_record = {}
+
+            # Stable NDC code extraction
+            ndc_found = False
+            for key in data:
+                if key.lower() in ['ndc', 'ndc_code', 'ndc_number', 'national_drug_code']:
+                    ndc_code = str(data[key]).strip()
+                    current_record["ndc"] = ndc_code
+                    result["extraction_summary"]["unique_ndc_codes"].add(ndc_code)
+                    ndc_found = True
+                    break
+
+            # Stable medication name extraction
+            label_found = False
+            for key in data:
+                if key.lower() in ['lbl_nm', 'label_name', 'drug_name', 'medication_name', 'product_name']:
+                    medication_name = str(data[key]).strip()
+                    current_record["lbl_nm"] = medication_name
+                    result["extraction_summary"]["unique_label_names"].add(medication_name)
+                    label_found = True
+                    break
+
+            # Stable prescription filled date extraction
+            if "rx_filled_dt" in data and data["rx_filled_dt"]:
+                current_record["rx_filled_dt"] = data["rx_filled_dt"]
+
+            if ndc_found or label_found or "rx_filled_dt" in current_record:
+                current_record["data_path"] = path
+                result["ndc_records"].append(current_record)
+                result["extraction_summary"]["total_ndc_records"] += 1
+
+            # Continue stable recursive search
+            for key, value in data.items():
+                new_path = f"{path}.{key}" if path else key
+                self._stable_pharmacy_extraction(value, result, new_path)
+
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                self._stable_pharmacy_extraction(item, result, new_path)
 
     # [Include all remaining helper methods - truncated for space]
     def _clean_json_response_stable(self, response: str) -> str:
