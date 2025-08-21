@@ -1855,28 +1855,28 @@ with st.sidebar:
         st.markdown("---")
         st.markdown("**💡 Quick Questions:**")
         
-        # Define categorized prompts
+        # Define categorized prompts with NEW HEALTHCARE PREDICTION QUESTIONS
         prompt_categories = {
             "🏥 Medical Records": [
                 "What diagnoses were found in the medical records?",
-                "What medical procedures were performed?",
+                "What medical procedures were performed?", 
                 "List all ICD-10 diagnosis codes found",
-                "Show me the most recent medical claims",
-                "Explain the medical service codes identified"
+                "When did patient started taking diabetes medication?",
+                "Are there any unusual prescribing or billing patterns related to this person's records?"
             ],
             "💊 Medications": [
                 "What medications is this patient taking?",
                 "What NDC codes were identified?",
-                "Are there any diabetes medications?",
-                "What blood pressure medications are prescribed?",
-                "Analyze potential drug interactions"
+                "Is this person at risk of polypharmacy (taking too many medications or unsafe combinations)?",
+                "How likely is this person to stop taking prescribed medications (medication adherence risk)?",
+                "Is this person likely to switch to higher-cost specialty drugs or need therapy escalation soon?"
             ],
             "❤️ Risk Assessment": [
                 "What is the heart attack risk and explain why?",
-                "What are the main cardiovascular risk factors?",
-                "Compare ML prediction vs clinical assessment",
-                "What chronic conditions does this patient have?",
-                "Assess overall health risk profile"
+                "Based on this person's medical and pharmacy history, is there a risk of developing chronic diseases like diabetes, hypertension, COPD, or chronic kidney disease?",
+                "What is the likelihood that this person will be hospitalized or readmitted in the next 6–12 months?",
+                "Is this person at risk of using the emergency room instead of outpatient care?",
+                "Does this person have a high risk of serious events like stroke, heart attack, or other complications due to comorbidities?"
             ],
             "📊 Analysis & Graphs": [
                 "Create a medication timeline chart",
@@ -1887,12 +1887,19 @@ with st.sidebar:
                 "Create a bar chart of medical conditions",
                 "Show medication distribution graph"
             ],
-            "📈 Health Summary": [
-                "Provide a comprehensive health analysis summary",
-                "What does the health trajectory analysis show?",
-                "Summarize key health findings and recommendations",
-                "What are the priority health concerns?",
-                "Explain the overall health status and prognosis"
+            "🔮 Predictive Analysis": [
+                "Predict the patient life expectancy with two scenarios: 1) adhering to the medication 2) non-adhering to the medication",
+                "Can you model how this person's disease might progress over time (for example: diabetes → complications → hospitalizations)?",
+                "Is this person likely to become a high-cost claimant next year?",
+                "Can you estimate this person's future healthcare costs (per month or per year)?",
+                "Based on health data, how should this person be segmented — healthy, rising risk, chronic but stable, or high-cost/critical?"
+            ],
+            "🎯 Care Management": [
+                "What preventive screenings, wellness programs, or lifestyle changes should be recommended as the next best action for this person?",
+                "Does this person have any care gaps, such as missed checkups, cancer screenings, or vaccinations?",
+                "Does this person have any care gaps that could affect quality metrics (like HEDIS or STAR ratings)?",
+                "Is this person more likely to need inpatient hospital care or outpatient care in the future?",
+                "Based on available data, how might this person's long-term health contribute to population-level risk?"
             ]
         }
         
@@ -2218,8 +2225,8 @@ if st.session_state.analysis_running:
 if st.session_state.analysis_results and not st.session_state.analysis_running:
     results = st.session_state.analysis_results
 
-    # 1. COMPLETE CLAIMS DATA VIEWER
-    if st.button("🗂️ Complete Claims Data Viewer", use_container_width=True, key="claims_data_btn"):
+    # 1. CLAIMS DATA
+    if st.button("🗂️ Claims Data", use_container_width=True, key="claims_data_btn"):
         st.session_state.show_all_claims_data = not st.session_state.show_all_claims_data
     
     if st.session_state.show_all_claims_data:
@@ -2276,15 +2283,15 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
         else:
             st.error("❌ No claims data available")
 
-    # 2. ENHANCED BATCH CODE MEANINGS SECTION
-    if st.button("🧠 Enhanced Batch Code Meanings Analysis", use_container_width=True, key="batch_meanings_btn"):
+    # 2. CLAIMS DATA ANALYSIS
+    if st.button("🧠 Claims Data Analysis", use_container_width=True, key="batch_meanings_btn"):
         st.session_state.show_batch_meanings = not st.session_state.show_batch_meanings
     
     if st.session_state.show_batch_meanings:
         display_batch_code_meanings_enhanced(results)
 
-    # 3. ENHANCED ENTITY EXTRACTION WITH IMPROVED GRAPHS
-    if st.button("🎯 Enhanced Entity Extraction & Health Metrics", use_container_width=True, key="entity_extraction_btn", help="View comprehensive health entity analysis with interactive visualizations"):
+    # 3. ENTITY EXTRACTION
+    if st.button("🎯 Entity Extraction", use_container_width=True, key="entity_extraction_btn", help="View comprehensive health entity analysis with interactive visualizations"):
         st.session_state.show_entity_extraction = not st.session_state.show_entity_extraction
     
     if st.session_state.show_entity_extraction:
@@ -2361,8 +2368,8 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
             
             st.markdown("</div>", unsafe_allow_html=True)
 
-    # 4. HEALTH TRAJECTORY ANALYSIS
-    if st.button("📈 Health Trajectory Analysis", use_container_width=True, key="health_trajectory_btn", help="View comprehensive health trajectory and predictive analysis"):
+    # 4. HEALTH TRAJECTORY
+    if st.button("📈 Health Trajectory", use_container_width=True, key="health_trajectory_btn", help="View comprehensive health trajectory and predictive analysis"):
         st.session_state.show_health_trajectory = not st.session_state.show_health_trajectory
 
     if st.session_state.show_health_trajectory:
