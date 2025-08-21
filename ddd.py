@@ -898,97 +898,13 @@ def display_enhanced_mcid_data(mcid_data):
         st.warning("⚠️ No MCID data available")
         return
     
-    st.markdown("""
-    <div class="mcid-container">
-        <h3>🆔 MCID (Member Consumer ID) Analysis</h3>
-        <p><strong>Purpose:</strong> Patient identity verification and matching across healthcare systems</p>
-    </div>
-    """, unsafe_allow_html=True)
     
-    # Display MCID status information
-    status_code = mcid_data.get('status_code', 'Unknown')
-    service = mcid_data.get('service', 'Unknown')
-    timestamp = mcid_data.get('timestamp', '')
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Response Status", f"HTTP {status_code}")
-    with col2:
-        st.metric("Service", service)
-    with col3:
-        if timestamp:
-            try:
-                formatted_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
-                st.metric("Query Time", formatted_time)
-            except:
-                st.metric("Query Time", "Recent")
-        else:
-            st.metric("Query Time", "Unknown")
-    
-    # Process and display consumer matches
-    if status_code == 200 and mcid_data.get('body'):
-        mcid_body = mcid_data.get('body', {})
-        consumers = mcid_body.get('consumer', [])
-        
-        if consumers and len(consumers) > 0:
-            st.success(f"✅ Found {len(consumers)} consumer match(es)")
-            
-            for i, consumer in enumerate(consumers, 1):
-                st.markdown(f"""
-                <div class="mcid-match-card">
-                    <h4>🔍 Consumer Match #{i}</h4>
-                """, unsafe_allow_html=True)
-                
-                # Create two columns for consumer info
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("**Consumer Information:**")
-                    st.write(f"• **Consumer ID:** {consumer.get('consumerId', 'N/A')}")
-                    st.write(f"• **Match Score:** {consumer.get('score', 'N/A')}")
-                    st.write(f"• **Status:** {consumer.get('status', 'N/A')}")
-                    st.write(f"• **Date of Birth:** {consumer.get('dateOfBirth', 'N/A')}")
-                
-                with col2:
-                    st.write("**Address Information:**")
-                    address = consumer.get('address', {})
-                    if address:
-                        st.write(f"• **City:** {address.get('city', 'N/A')}")
-                        st.write(f"• **State:** {address.get('state', 'N/A')}")
-                        st.write(f"• **ZIP Code:** {address.get('zip', 'N/A')}")
-                        st.write(f"• **County:** {address.get('county', 'N/A')}")
-                    else:
-                        st.write("• No address information available")
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-                
-                # Show additional consumer data if available
-                if consumer.get('additionalData'):
-                    with st.expander(f"Additional Data for Consumer #{i}"):
-                        st.json(consumer.get('additionalData'))
-        else:
-            st.info("ℹ️ No consumer matches found in MCID search")
-            st.markdown("""
-            **Possible reasons:**
-            - Patient may be new to the healthcare system
-            - Different name variations or spelling
-            - Updated personal information not yet synchronized
-            """)
-    else:
-        st.warning(f"⚠️ MCID search returned status code: {status_code}")
-        if mcid_data.get('error'):
-            st.error(f"Error details: {mcid_data['error']}")
-    
-    # Raw MCID data in expandable section
-    with st.expander("🔍 View Raw MCID JSON Data"):
-        st.json(mcid_data)
 
 def display_batch_code_meanings_enhanced(results):
     """Enhanced batch processed code meanings in organized tabular format with proper subdivisions and FIXED METRICS"""
     st.markdown("""
     <div class="batch-meanings-card">
-        <h3>🧠 Enhanced Batch Code Meanings Analysis</h3>
-        <p><strong>Features:</strong> LLM-powered interpretation of medical and pharmacy codes with detailed tabular display</p>
+        <h3>🧠 Claims Data Analysis</h3>
     </div>
     """, unsafe_allow_html=True)
     
@@ -1815,7 +1731,7 @@ if not AGENT_AVAILABLE:
 # ENHANCED SIDEBAR CHATBOT WITH CATEGORIZED PROMPTS AND GRAPH GENERATION - ALWAYS COLLAPSED
 with st.sidebar:
     if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
-        st.title("💬 Medical Assistant with Graphs")
+        st.title("💬 Medical Assistant")
         st.markdown("---")
         
         # Chat history at top
@@ -1938,34 +1854,6 @@ with st.sidebar:
                         st.session_state.selected_prompt = prompt
                         st.rerun()
         
-        # Quick access buttons for most common questions
-        st.markdown("**🚀 Quick Access:**")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("📋 Health Summary", use_container_width=True, key="quick_summary"):
-                st.session_state.selected_prompt = "Provide a comprehensive health analysis summary including trajectory and key findings"
-                st.rerun()
-        
-        with col2:
-            if st.button("❤️ Risk Analysis", use_container_width=True, key="quick_heart"):
-                st.session_state.selected_prompt = "What is this patient's cardiovascular risk assessment and explain the clinical reasoning?"
-                st.rerun()
-        
-        # Graph generation quick buttons
-        st.markdown("**📊 Quick Graphs:**")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("📈 Timeline", use_container_width=True, key="quick_timeline"):
-                st.session_state.selected_prompt = "Create a comprehensive medication timeline chart"
-                st.rerun()
-        
-        with col2:
-            if st.button("🎯 Dashboard", use_container_width=True, key="quick_dashboard"):
-                st.session_state.selected_prompt = "Generate a comprehensive risk assessment dashboard"
-                st.rerun()
-        
         # Chat input at bottom
         st.markdown("---")
         user_question = st.chat_input("Type your question or use prompts above...")
@@ -2046,11 +1934,11 @@ with st.container():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            first_name = st.text_input("First Name *", value="")
-            last_name = st.text_input("Last Name *", value="")
+            first_name = st.text_input("First Name *", value="",type="password")
+            last_name = st.text_input("Last Name *", value="",type="password")
         
         with col2:
-            ssn = st.text_input("SSN *", value="")
+            ssn = st.text_input("SSN *", value="",type="password")
             date_of_birth = st.date_input(
                 "Date of Birth *", 
                 value=datetime.now().date(),
@@ -2060,7 +1948,7 @@ with st.container():
         
         with col3:
             gender = st.selectbox("Gender *", ["F", "M"])
-            zip_code = st.text_input("Zip Code *", value="")
+            zip_code = st.text_input("Zip Code *", value="",type="password")
         
         # Show calculated age
         if date_of_birth:
@@ -2232,16 +2120,10 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
     if st.session_state.show_all_claims_data:
         st.markdown("""
         <div class="section-box">
-            <div class="section-title">🗂️ Complete Claims Data Analysis</div>
+            <div class="section-title">🗂️  Claims Data </div>
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("""
-        <div class="claims-viewer-card">
-            <h3>📋 Comprehensive Deidentified Claims Database</h3>
-            <p><strong>Features:</strong> Complete access to all deidentified claims data with detailed analysis and comprehensive JSON exploration.</p>
-        </div>
-        """, unsafe_allow_html=True)
         
         deidentified_data = safe_get(results, 'deidentified_data', {})
         api_outputs = safe_get(results, 'api_outputs', {})
@@ -2375,7 +2257,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
     if st.session_state.show_health_trajectory:
         st.markdown("""
         <div class="health-trajectory-container">
-            <div class="section-title">📈 Comprehensive Health Trajectory Analysis</div>
+            <div class="section-title">📈  Health Trajectory </div>
         </div>
         """, unsafe_allow_html=True)
         
