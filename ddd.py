@@ -1,7 +1,7 @@
 # Configure Streamlit page FIRST
 import streamlit as st
 
-# Determine sidebar state based on chatbot readiness
+# Determine sidebar state - collapsed by default, expanded only when chatbot is ready
 if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
     sidebar_state = "expanded"
 else:
@@ -54,35 +54,13 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
-# Enhanced CSS with advanced animations and modern styling + new sections + SIDEBAR WIDTH FIX
+# Enhanced CSS with advanced animations and modern styling + new sections
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 * {
     font-family: 'Inter', sans-serif;
-}
-
-/* SIDEBAR WIDTH FIX - Make sidebar take up half the screen */
-.css-1d391kg {
-    width: 50% !important;
-    min-width: 50% !important;
-    max-width: 50% !important;
-}
-
-.css-1lcbmhc {
-    width: 50% !important;
-    margin-left: 50% !important;
-}
-
-section[data-testid="stSidebar"] {
-    width: 50% !important;
-    min-width: 50% !important;
-}
-
-section[data-testid="stSidebar"] > div {
-    width: 50% !important;
-    min-width: 50% !important;
 }
 
 .main-header {
@@ -788,7 +766,7 @@ def initialize_session_state():
     if 'show_health_trajectory' not in st.session_state:
         st.session_state.show_health_trajectory = False
     
-    # Enhanced workflow steps
+    # Enhanced workflow steps - REMOVED FINAL SUMMARY
     if 'workflow_steps' not in st.session_state:
         st.session_state.workflow_steps = [
             {'name': 'API Fetch', 'status': 'pending', 'description': 'Fetching comprehensive claims data', 'icon': '⚡'},
@@ -796,7 +774,6 @@ def initialize_session_state():
             {'name': 'Field Extraction', 'status': 'pending', 'description': 'Extracting medical and pharmacy fields', 'icon': '🚀'},
             {'name': 'Entity Extraction', 'status': 'pending', 'description': 'Advanced health entity identification', 'icon': '🎯'},
             {'name': 'Health Trajectory', 'status': 'pending', 'description': 'Comprehensive predictive health analysis', 'icon': '📈'},
-            {'name': 'Final Summary', 'status': 'pending', 'description': 'Executive healthcare summary generation', 'icon': '📋'},
             {'name': 'Heart Risk Prediction', 'status': 'pending', 'description': 'ML-based cardiovascular assessment', 'icon': '❤️'},
             {'name': 'Chatbot Initialization', 'status': 'pending', 'description': 'AI assistant with graph generation', 'icon': '💬'}
         ]
@@ -817,7 +794,6 @@ def reset_workflow():
         {'name': 'Field Extraction', 'status': 'pending', 'description': 'Extracting medical and pharmacy fields', 'icon': '🚀'},
         {'name': 'Entity Extraction', 'status': 'pending', 'description': 'Advanced health entity identification', 'icon': '🎯'},
         {'name': 'Health Trajectory', 'status': 'pending', 'description': 'Comprehensive predictive health analysis', 'icon': '📈'},
-        {'name': 'Final Summary', 'status': 'pending', 'description': 'Executive healthcare summary generation', 'icon': '📋'},
         {'name': 'Heart Risk Prediction', 'status': 'pending', 'description': 'ML-based cardiovascular assessment', 'icon': '❤️'},
         {'name': 'Chatbot Initialization', 'status': 'pending', 'description': 'AI assistant with graph generation', 'icon': '💬'}
     ]
@@ -1136,13 +1112,13 @@ def display_batch_code_meanings_enhanced(results):
         
         with med_tab2:
             st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-            st.markdown("#### 🏥 Medical Service Codes with Dates and Meanings")
+            st.markdown("#### 🏥 Medical Service Codes with Service End Dates and Meanings")
             
             if service_meanings and medical_records:
                 # Prepare data for enhanced table display
                 service_data = []
                 for record in medical_records:
-                    claim_date = record.get("clm_rcvd_dt", "Unknown")
+                    service_end_date = record.get("clm_line_srvc_end_dt", "Unknown")  # CHANGED: Use service end date
                     service_code = record.get("hlth_srvc_cd", "")
                     record_path = record.get("data_path", "")
                     
@@ -1150,7 +1126,7 @@ def display_batch_code_meanings_enhanced(results):
                         service_data.append({
                             "Service Code": service_code,
                             "Service Meaning": service_meanings[service_code],
-                            "Claim Date": claim_date,
+                            "Service End Date": service_end_date,  # CHANGED: Use service end date
                             "Record Path": record_path
                         })
                 
@@ -1162,8 +1138,8 @@ def display_batch_code_meanings_enhanced(results):
                     # Create DataFrame and display as enhanced table
                     df_service = pd.DataFrame(service_data)
                     
-                    # Sort by claim date (most recent first)
-                    df_service_sorted = df_service.sort_values('Claim Date', ascending=False, na_position='last')
+                    # Sort by service end date (most recent first)
+                    df_service_sorted = df_service.sort_values('Service End Date', ascending=False, na_position='last')
                     
                     st.dataframe(
                         df_service_sorted, 
@@ -1172,7 +1148,7 @@ def display_batch_code_meanings_enhanced(results):
                         column_config={
                             "Service Code": st.column_config.TextColumn("Service Code", width="small"),
                             "Service Meaning": st.column_config.TextColumn("Service Description", width="large"),
-                            "Claim Date": st.column_config.DateColumn("Claim Date", width="medium"),
+                            "Service End Date": st.column_config.DateColumn("Service End Date", width="medium"),  # CHANGED: Column name
                             "Record Path": st.column_config.TextColumn("Record Path", width="small")
                         }
                     )
@@ -2101,62 +2077,159 @@ if submitted:
         # Create workflow animation placeholder
         workflow_placeholder = st.empty()
         
-        # ENHANCED TIMING: Show workflow animation immediately and throughout processing
+        # ENHANCED PARALLEL WORKFLOW: Run analysis with real-time workflow updates
         with st.spinner("🔬 Running Enhanced Healthcare Analysis..."):
             try:
                 # Display initial workflow state
                 with workflow_placeholder.container():
                     display_advanced_professional_workflow()
                 
-                # Run analysis in background
-                results = None
-                analysis_success = False
-                
-                # Animate workflow steps DURING processing with LONGER DELAYS
-                for i, step in enumerate(st.session_state.workflow_steps):
-                    step_name = step['name']
-                    
-                    # Set step to running
-                    st.session_state.workflow_steps[i]['status'] = 'running'
+                # Start actual analysis and update workflow steps in real-time
+                try:
+                    # Step 1: API Fetch
+                    st.session_state.workflow_steps[0]['status'] = 'running'
                     with workflow_placeholder.container():
                         display_advanced_professional_workflow()
                     
-                    # INCREASED TIME: Longer pause for better visibility (2-3 seconds per step)
-                    time.sleep(2.5)  
+                    # Actually start the analysis
+                    results = st.session_state.agent.run_analysis(patient_data)
+                    analysis_success = results.get("success", False)
                     
-                    # For the first step, actually start the analysis
-                    if i == 0:
-                        # Start the actual analysis asynchronously
-                        try:
-                            results = st.session_state.agent.run_analysis(patient_data)
-                            analysis_success = results.get("success", False)
-                        except Exception as analysis_error:
-                            st.error(f"Analysis failed: {str(analysis_error)}")
-                            analysis_success = False
+                    if analysis_success:
+                        st.session_state.workflow_steps[0]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[0]['status'] = 'error'
+                        # Mark all remaining steps as error
+                        for j in range(1, len(st.session_state.workflow_steps)):
+                            st.session_state.workflow_steps[j]['status'] = 'error'
+                        raise Exception("API Fetch failed")
                     
-                    # INCREASED TIME: Another pause to show running state
+                    # Update workflow display
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.0)
+                    
+                    # Step 2: Deidentification
+                    st.session_state.workflow_steps[1]['status'] = 'running'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
                     time.sleep(1.5)
                     
-                    # Mark step as completed or error
-                    if analysis_success:
-                        st.session_state.workflow_steps[i]['status'] = 'completed'
+                    # Check if deidentification completed successfully
+                    deidentified_data = results.get('deidentified_data', {})
+                    if deidentified_data:
+                        st.session_state.workflow_steps[1]['status'] = 'completed'
                     else:
-                        st.session_state.workflow_steps[i]['status'] = 'error'
-                        # Mark remaining steps as error
-                        for j in range(i+1, len(st.session_state.workflow_steps)):
+                        st.session_state.workflow_steps[1]['status'] = 'error'
+                        for j in range(2, len(st.session_state.workflow_steps)):
                             st.session_state.workflow_steps[j]['status'] = 'error'
-                        break
+                        raise Exception("Deidentification failed")
                     
-                    # Update display after each step with delay
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.0)
+                    
+                    # Step 3: Field Extraction
+                    st.session_state.workflow_steps[2]['status'] = 'running'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.5)
+                    
+                    # Check if field extraction completed
+                    structured_extractions = results.get('structured_extractions', {})
+                    if structured_extractions:
+                        st.session_state.workflow_steps[2]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[2]['status'] = 'error'
+                        for j in range(3, len(st.session_state.workflow_steps)):
+                            st.session_state.workflow_steps[j]['status'] = 'error'
+                        raise Exception("Field extraction failed")
+                    
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.0)
+                    
+                    # Step 4: Entity Extraction
+                    st.session_state.workflow_steps[3]['status'] = 'running'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.5)
+                    
+                    # Check if entity extraction completed
+                    entity_extraction = results.get('entity_extraction', {})
+                    if entity_extraction:
+                        st.session_state.workflow_steps[3]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[3]['status'] = 'error'
+                        for j in range(4, len(st.session_state.workflow_steps)):
+                            st.session_state.workflow_steps[j]['status'] = 'error'
+                        raise Exception("Entity extraction failed")
+                    
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.0)
+                    
+                    # Step 5: Health Trajectory
+                    st.session_state.workflow_steps[4]['status'] = 'running'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.5)
+                    
+                    # Check if health trajectory completed
+                    health_trajectory = results.get('health_trajectory', '')
+                    if health_trajectory:
+                        st.session_state.workflow_steps[4]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[4]['status'] = 'error'
+                        for j in range(5, len(st.session_state.workflow_steps)):
+                            st.session_state.workflow_steps[j]['status'] = 'error'
+                        raise Exception("Health trajectory failed")
+                    
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.0)
+                    
+                    # Step 6: Heart Risk Prediction
+                    st.session_state.workflow_steps[5]['status'] = 'running'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.5)
+                    
+                    # Check if heart risk prediction completed
+                    heart_attack_prediction = results.get('heart_attack_prediction', {})
+                    if heart_attack_prediction:
+                        st.session_state.workflow_steps[5]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[5]['status'] = 'error'
+                        for j in range(6, len(st.session_state.workflow_steps)):
+                            st.session_state.workflow_steps[j]['status'] = 'error'
+                        raise Exception("Heart risk prediction failed")
+                    
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.0)
+                    
+                    # Step 7: Chatbot Initialization
+                    st.session_state.workflow_steps[6]['status'] = 'running'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(1.5)
+                    
+                    # Check if chatbot is ready
+                    chatbot_ready = results.get('chatbot_ready', False)
+                    if chatbot_ready:
+                        st.session_state.workflow_steps[6]['status'] = 'completed'
+                    else:
+                        st.session_state.workflow_steps[6]['status'] = 'error'
+                        raise Exception("Chatbot initialization failed")
+                    
+                    # Final workflow display
                     with workflow_placeholder.container():
                         display_advanced_professional_workflow()
                     
-                    # INCREASED TIME: Additional pause after completion
-                    time.sleep(1.0)
-                
-                # Final workflow display
-                with workflow_placeholder.container():
-                    display_advanced_professional_workflow()
+                except Exception as step_error:
+                    st.error(f"Workflow step failed: {str(step_error)}")
+                    analysis_success = False
                 
                 st.session_state.analysis_results = results
                 st.session_state.analysis_running = False
