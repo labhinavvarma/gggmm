@@ -2297,7 +2297,7 @@ Only return the JSON object, no other text."""
         """Stable recursive medical field extraction"""
         if isinstance(data, dict):
             current_record = {}
-
+            
             # Stable health service code extraction
             if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
                 service_code = str(data["hlth_srvc_cd"]).strip()
@@ -2306,7 +2306,20 @@ Only return the JSON object, no other text."""
 
             # Stable claim received date extraction
             if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
-                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
+                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]##########@@@@@
+
+            if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
+               service_code = str(data["hlth_srvc_cd"]).strip()
+               current_record["hlth_srvc_cd"] = service_code
+               result["extraction_summary"]["unique_service_codes"].add(service_code)
+
+        # Stable claim received date extraction
+            if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
+               current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
+
+        # Stable claim line service end date extraction  <-- ADDED HERE
+            if "clm_line_srvc_end_dt" in data and data["clm_line_srvc_end_dt"]:
+               current_record["clm_line_srvc_end_dt"] = data["clm_line_srvc_end_dt"]
 
             # Stable diagnosis codes extraction
             diagnosis_codes = []
