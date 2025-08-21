@@ -1,11 +1,8 @@
 # Configure Streamlit page FIRST
 import streamlit as st
 
-# Determine sidebar state - collapsed by default, expanded only when chatbot is ready
-if 'analysis_results' in st.session_state and st.session_state.get('analysis_results') and st.session_state.analysis_results.get("chatbot_ready", False):
-    sidebar_state = "expanded"
-else:
-    sidebar_state = "collapsed"
+# Determine sidebar state - ALWAYS collapsed by default
+sidebar_state = "collapsed"
 
 st.set_page_config(
     page_title="⚡ Enhanced Health Agent with Graph Generation",
@@ -167,11 +164,19 @@ st.markdown("""
 
 .metric-summary-box {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1rem;
-    border-radius: 8px;
-    margin: 0.5rem 0;
-    border: 1px solid #dee2e6;
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin: 0.8rem;
+    border: 2px solid #dee2e6;
     text-align: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    transition: all 0.3s ease;
+}
+
+.metric-summary-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+    border-color: #007bff;
 }
 
 .collapsible-section {
@@ -1021,25 +1026,38 @@ def display_batch_code_meanings_enhanced(results):
                 if code:
                     unique_diagnosis_codes.add(code)
         
-        # Medical summary metrics with CORRECTED VALUES
+        # Medical summary metrics with CORRECTED VALUES and PROPER STYLING
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
-            st.metric("Service Codes", len(unique_service_codes))  # FIXED: Count from actual data
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: #007bff; font-size: 2rem; font-weight: bold;">{len(unique_service_codes)}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Service Codes</p>
+            </div>
+            ''', unsafe_allow_html=True)
         with col2:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
-            st.metric("ICD-10 Codes", len(unique_diagnosis_codes))  # FIXED: Count from actual data
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: #28a745; font-size: 2rem; font-weight: bold;">{len(unique_diagnosis_codes)}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">ICD-10 Codes</p>
+            </div>
+            ''', unsafe_allow_html=True)
         with col3:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
-            st.metric("Medical Records", total_medical_records)  # FIXED: Count from actual records
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: #dc3545; font-size: 2rem; font-weight: bold;">{total_medical_records}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Medical Records</p>
+            </div>
+            ''', unsafe_allow_html=True)
         with col4:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
             batch_status = medical_extraction.get("llm_call_status", "unknown")
-            st.metric("Batch Status", batch_status)
-            st.markdown('</div>', unsafe_allow_html=True)
+            status_color = "#28a745" if batch_status == "success" else "#ffc107" if batch_status == "pending" else "#dc3545"
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: {status_color}; font-size: 1.5rem; font-weight: bold;">{batch_status.upper()}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Batch Status</p>
+            </div>
+            ''', unsafe_allow_html=True)
         
         # Create sub-tabs for different medical code types
         med_tab1, med_tab2 = st.tabs(["🩺 ICD-10 Diagnosis Codes", "🏥 Medical Service Codes"])
@@ -1198,25 +1216,38 @@ def display_batch_code_meanings_enhanced(results):
             if med_name:
                 unique_medications.add(med_name)
         
-        # Pharmacy summary metrics with CORRECTED VALUES
+        # Pharmacy summary metrics with CORRECTED VALUES and PROPER STYLING
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
-            st.metric("NDC Codes", len(unique_ndc_codes))  # FIXED: Count from actual data
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: #007bff; font-size: 2rem; font-weight: bold;">{len(unique_ndc_codes)}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">NDC Codes</p>
+            </div>
+            ''', unsafe_allow_html=True)
         with col2:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
-            st.metric("Medications", len(unique_medications))  # FIXED: Count from actual data
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: #28a745; font-size: 2rem; font-weight: bold;">{len(unique_medications)}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Medications</p>
+            </div>
+            ''', unsafe_allow_html=True)
         with col3:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
-            st.metric("Pharmacy Records", total_pharmacy_records)  # FIXED: Count from actual records
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: #dc3545; font-size: 2rem; font-weight: bold;">{total_pharmacy_records}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Pharmacy Records</p>
+            </div>
+            ''', unsafe_allow_html=True)
         with col4:
-            st.markdown('<div class="metric-summary-box">', unsafe_allow_html=True)
             batch_status = pharmacy_extraction.get("llm_call_status", "unknown")
-            st.metric("Batch Status", batch_status)
-            st.markdown('</div>', unsafe_allow_html=True)
+            status_color = "#28a745" if batch_status == "success" else "#ffc107" if batch_status == "pending" else "#dc3545"
+            st.markdown(f'''
+            <div class="metric-summary-box">
+                <h3 style="margin: 0; color: {status_color}; font-size: 1.5rem; font-weight: bold;">{batch_status.upper()}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Batch Status</p>
+            </div>
+            ''', unsafe_allow_html=True)
         
         # Create sub-tabs for different pharmacy code types
         pharm_tab1, pharm_tab2 = st.tabs(["💊 NDC Codes", "💉 Medication Names"])
@@ -1781,7 +1812,7 @@ if not AGENT_AVAILABLE:
     st.markdown(f'<div class="status-error">❌ Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
     st.stop()
 
-# ENHANCED SIDEBAR CHATBOT WITH CATEGORIZED PROMPTS AND GRAPH GENERATION
+# ENHANCED SIDEBAR CHATBOT WITH CATEGORIZED PROMPTS AND GRAPH GENERATION - ALWAYS COLLAPSED
 with st.sidebar:
     if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False) and st.session_state.chatbot_context:
         st.title("💬 Medical Assistant with Graphs")
@@ -2077,159 +2108,65 @@ if submitted:
         # Create workflow animation placeholder
         workflow_placeholder = st.empty()
         
-        # ENHANCED PARALLEL WORKFLOW: Run analysis with real-time workflow updates
+        # ENHANCED WORKFLOW: Run graphics animation FIRST, then actual processing
         with st.spinner("🔬 Running Enhanced Healthcare Analysis..."):
             try:
                 # Display initial workflow state
                 with workflow_placeholder.container():
                     display_advanced_professional_workflow()
                 
-                # Start actual analysis and update workflow steps in real-time
-                try:
-                    # Step 1: API Fetch
-                    st.session_state.workflow_steps[0]['status'] = 'running'
+                # PHASE 1: Run the visual workflow animation first (make all green)
+                st.info("🎬 Initializing workflow visualization...")
+                
+                for i, step in enumerate(st.session_state.workflow_steps):
+                    # Set step to running
+                    st.session_state.workflow_steps[i]['status'] = 'running'
                     with workflow_placeholder.container():
                         display_advanced_professional_workflow()
+                    time.sleep(1.2)  # Quick animation
                     
-                    # Actually start the analysis
+                    # Set step to completed
+                    st.session_state.workflow_steps[i]['status'] = 'completed'
+                    with workflow_placeholder.container():
+                        display_advanced_professional_workflow()
+                    time.sleep(0.8)  # Brief pause before next step
+                
+                # All steps are now green - pause to show complete workflow
+                st.success("🎉 Workflow visualization complete! Starting actual processing...")
+                time.sleep(2.0)  # Wait time after everything is green
+                
+                # PHASE 2: Now run the actual analysis
+                st.info("🔬 Running actual healthcare analysis...")
+                
+                # Reset workflow for actual processing
+                for step in st.session_state.workflow_steps:
+                    step['status'] = 'pending'
+                
+                # Actually run the analysis
+                try:
                     results = st.session_state.agent.run_analysis(patient_data)
                     analysis_success = results.get("success", False)
                     
                     if analysis_success:
-                        st.session_state.workflow_steps[0]['status'] = 'completed'
+                        # Mark all steps as completed
+                        for step in st.session_state.workflow_steps:
+                            step['status'] = 'completed'
                     else:
-                        st.session_state.workflow_steps[0]['status'] = 'error'
-                        # Mark all remaining steps as error
-                        for j in range(1, len(st.session_state.workflow_steps)):
-                            st.session_state.workflow_steps[j]['status'] = 'error'
-                        raise Exception("API Fetch failed")
+                        # Mark all steps as error
+                        for step in st.session_state.workflow_steps:
+                            step['status'] = 'error'
+                        raise Exception("Analysis failed")
                     
-                    # Update workflow display
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.0)
-                    
-                    # Step 2: Deidentification
-                    st.session_state.workflow_steps[1]['status'] = 'running'
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.5)
-                    
-                    # Check if deidentification completed successfully
-                    deidentified_data = results.get('deidentified_data', {})
-                    if deidentified_data:
-                        st.session_state.workflow_steps[1]['status'] = 'completed'
-                    else:
-                        st.session_state.workflow_steps[1]['status'] = 'error'
-                        for j in range(2, len(st.session_state.workflow_steps)):
-                            st.session_state.workflow_steps[j]['status'] = 'error'
-                        raise Exception("Deidentification failed")
-                    
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.0)
-                    
-                    # Step 3: Field Extraction
-                    st.session_state.workflow_steps[2]['status'] = 'running'
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.5)
-                    
-                    # Check if field extraction completed
-                    structured_extractions = results.get('structured_extractions', {})
-                    if structured_extractions:
-                        st.session_state.workflow_steps[2]['status'] = 'completed'
-                    else:
-                        st.session_state.workflow_steps[2]['status'] = 'error'
-                        for j in range(3, len(st.session_state.workflow_steps)):
-                            st.session_state.workflow_steps[j]['status'] = 'error'
-                        raise Exception("Field extraction failed")
-                    
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.0)
-                    
-                    # Step 4: Entity Extraction
-                    st.session_state.workflow_steps[3]['status'] = 'running'
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.5)
-                    
-                    # Check if entity extraction completed
-                    entity_extraction = results.get('entity_extraction', {})
-                    if entity_extraction:
-                        st.session_state.workflow_steps[3]['status'] = 'completed'
-                    else:
-                        st.session_state.workflow_steps[3]['status'] = 'error'
-                        for j in range(4, len(st.session_state.workflow_steps)):
-                            st.session_state.workflow_steps[j]['status'] = 'error'
-                        raise Exception("Entity extraction failed")
-                    
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.0)
-                    
-                    # Step 5: Health Trajectory
-                    st.session_state.workflow_steps[4]['status'] = 'running'
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.5)
-                    
-                    # Check if health trajectory completed
-                    health_trajectory = results.get('health_trajectory', '')
-                    if health_trajectory:
-                        st.session_state.workflow_steps[4]['status'] = 'completed'
-                    else:
-                        st.session_state.workflow_steps[4]['status'] = 'error'
-                        for j in range(5, len(st.session_state.workflow_steps)):
-                            st.session_state.workflow_steps[j]['status'] = 'error'
-                        raise Exception("Health trajectory failed")
-                    
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.0)
-                    
-                    # Step 6: Heart Risk Prediction
-                    st.session_state.workflow_steps[5]['status'] = 'running'
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.5)
-                    
-                    # Check if heart risk prediction completed
-                    heart_attack_prediction = results.get('heart_attack_prediction', {})
-                    if heart_attack_prediction:
-                        st.session_state.workflow_steps[5]['status'] = 'completed'
-                    else:
-                        st.session_state.workflow_steps[5]['status'] = 'error'
-                        for j in range(6, len(st.session_state.workflow_steps)):
-                            st.session_state.workflow_steps[j]['status'] = 'error'
-                        raise Exception("Heart risk prediction failed")
-                    
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.0)
-                    
-                    # Step 7: Chatbot Initialization
-                    st.session_state.workflow_steps[6]['status'] = 'running'
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    time.sleep(1.5)
-                    
-                    # Check if chatbot is ready
-                    chatbot_ready = results.get('chatbot_ready', False)
-                    if chatbot_ready:
-                        st.session_state.workflow_steps[6]['status'] = 'completed'
-                    else:
-                        st.session_state.workflow_steps[6]['status'] = 'error'
-                        raise Exception("Chatbot initialization failed")
-                    
-                    # Final workflow display
-                    with workflow_placeholder.container():
-                        display_advanced_professional_workflow()
-                    
-                except Exception as step_error:
-                    st.error(f"Workflow step failed: {str(step_error)}")
+                except Exception as analysis_error:
+                    st.error(f"Analysis failed: {str(analysis_error)}")
                     analysis_success = False
+                    # Mark all steps as error
+                    for step in st.session_state.workflow_steps:
+                        step['status'] = 'error'
+                
+                # Final workflow display
+                with workflow_placeholder.container():
+                    display_advanced_professional_workflow()
                 
                 st.session_state.analysis_results = results
                 st.session_state.analysis_running = False
@@ -2250,9 +2187,9 @@ if submitted:
                 st.session_state.analysis_running = False
                 st.error(f"Analysis failed: {str(e)}")
                 
-                # Mark current step as error
-                if st.session_state.current_step < len(st.session_state.workflow_steps):
-                    st.session_state.workflow_steps[st.session_state.current_step]['status'] = 'error'
+                # Mark all steps as error
+                for step in st.session_state.workflow_steps:
+                    step['status'] = 'error'
                 
                 with workflow_placeholder.container():
                     display_advanced_professional_workflow()
