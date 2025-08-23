@@ -1,8 +1,8 @@
 # Configure Streamlit page FIRST
 import streamlit as st
 
-# Determine sidebar state - EXPANDED for better chatbot view
-sidebar_state = "expanded"
+# Determine sidebar state - COLLAPSED by default with larger width
+sidebar_state = "collapsed"
 
 st.set_page_config(
     page_title="⚡ Enhanced Health Agent with Graph Generation",
@@ -779,10 +779,42 @@ st.markdown("""
     font-weight: 600;
 }
 
-/* Enhanced sidebar for better chat display */
+/* Enhanced sidebar for better chat display - LARGER WIDTH FOR ALL SCREEN SIZES */
 .css-1d391kg {
-    width: 400px !important;
-    min-width: 400px !important;
+    width: 450px !important;
+    min-width: 450px !important;
+    max-width: 450px !important;
+}
+
+/* Ensure sidebar is properly sized on all screen resolutions */
+@media (max-width: 1200px) {
+    .css-1d391kg {
+        width: 400px !important;
+        min-width: 400px !important;
+        max-width: 400px !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .css-1d391kg {
+        width: 350px !important;
+        min-width: 350px !important;
+        max-width: 350px !important;
+    }
+}
+
+@media (min-width: 1400px) {
+    .css-1d391kg {
+        width: 500px !important;
+        min-width: 500px !important;
+        max-width: 500px !important;
+    }
+}
+
+/* Additional sidebar styling */
+.sidebar .sidebar-content {
+    width: 100% !important;
+    padding: 1rem !important;
 }
 
 /* Chat message styling */
@@ -1637,85 +1669,16 @@ def display_enhanced_mcid_data(mcid_data):
     
 
 def display_batch_code_meanings_enhanced(results):
-    """Enhanced batch processed code meanings with debugging info"""
+    """Enhanced batch processed code meanings in organized tabular format with proper subdivisions and FIXED METRICS"""
     st.markdown("""
     <div class="batch-meanings-card">
-        <h3>🧠 Claims Data Analysis with Batch Processing Status</h3>
+        <h3>🧠 Claims Data Analysis</h3>
     </div>
     """, unsafe_allow_html=True)
     
     # Get extraction results
     medical_extraction = safe_get(results, 'structured_extractions', {}).get('medical', {})
     pharmacy_extraction = safe_get(results, 'structured_extractions', {}).get('pharmacy', {})
-    
-    # NEW: Add batch processing status indicators
-    st.markdown("### 📊 Batch Processing Status")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        medical_status = medical_extraction.get("llm_call_status", "unknown")
-        status_color = "green" if medical_status in ["completed", "success"] else "orange" if "progress" in medical_status else "red"
-        st.markdown(f"""
-        <div style="text-align: center; padding: 1rem; background: {status_color}20; border-radius: 8px; border: 2px solid {status_color};">
-            <h4 style="margin: 0; color: {status_color};">Medical Batch</h4>
-            <p style="margin: 0; font-weight: bold;">{medical_status.upper()}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        pharmacy_status = pharmacy_extraction.get("llm_call_status", "unknown")
-        status_color = "green" if pharmacy_status in ["completed", "success"] else "orange" if "progress" in pharmacy_status else "red"
-        st.markdown(f"""
-        <div style="text-align: center; padding: 1rem; background: {status_color}20; border-radius: 8px; border: 2px solid {status_color};">
-            <h4 style="margin: 0; color: {status_color};">Pharmacy Batch</h4>
-            <p style="margin: 0; font-weight: bold;">{pharmacy_status.upper()}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        medical_meanings = medical_extraction.get("code_meanings_added", False)
-        pharmacy_meanings = pharmacy_extraction.get("code_meanings_added", False)
-        total_meanings = int(medical_meanings) + int(pharmacy_meanings)
-        st.markdown(f"""
-        <div style="text-align: center; padding: 1rem; background: #f0f8ff; border-radius: 8px; border: 2px solid #007bff;">
-            <h4 style="margin: 0; color: #007bff;">Meanings Status</h4>
-            <p style="margin: 0; font-weight: bold;">{total_meanings}/2 READY</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        # Show API retry statistics if available
-        medical_attempts = medical_extraction.get("batch_stats", {}).get("api_calls_made", 0)
-        pharmacy_attempts = pharmacy_extraction.get("batch_stats", {}).get("api_calls_made", 0)
-        total_attempts = medical_attempts + pharmacy_attempts
-        st.markdown(f"""
-        <div style="text-align: center; padding: 1rem; background: #e8f5e8; border-radius: 8px; border: 2px solid #28a745;">
-            <h4 style="margin: 0; color: #28a745;">API Calls</h4>
-            <p style="margin: 0; font-weight: bold;">{total_attempts} MADE</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # NEW: Show error details if batch processing failed
-    if pharmacy_status in ["failed", "skipped_no_api", "skipped_no_codes"]:
-        st.error("❌ NDC/Medication meanings failed to generate")
-        
-        error_details = []
-        if pharmacy_status == "skipped_no_api":
-            error_details.append("• API integrator not available")
-        elif pharmacy_status == "skipped_no_codes":
-            error_details.append("• No pharmacy codes found to process")
-        elif pharmacy_status == "failed":
-            error_details.append("• API calls failed after retries")
-            
-            # Show specific error if available
-            if pharmacy_extraction.get("code_meaning_error"):
-                error_details.append(f"• Error: {pharmacy_extraction['code_meaning_error']}")
-        
-        for detail in error_details:
-            st.write(detail)
-        
-        st.info("💡 Try running the batch processing diagnostic test above to identify the issue.")
     
     # Create main tabs for Medical and Pharmacy
     tab1, tab2 = st.tabs(["🏥 Medical Code Meanings", "💊 Pharmacy Code Meanings"])
@@ -2029,41 +1992,6 @@ def display_batch_code_meanings_enhanced(results):
                             st.write(f"• **{code}** ({count}x): {meaning}")
                 else:
                     st.info("No NDC codes found in pharmacy records")
-                
-                # NEW: Add retry button when no meanings are found
-                if not ndc_meanings and not med_meanings:
-                    st.warning("⚠️ No NDC/medication meanings found")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("🔄 Retry Batch Processing", key="retry_pharmacy_batch"):
-                            if hasattr(st.session_state, 'agent') and st.session_state.agent:
-                                with st.spinner("Retrying pharmacy batch processing..."):
-                                    try:
-                                        # Extract pharmacy data
-                                        pharmacy_data = safe_get(st.session_state.analysis_results, 'deidentified_data', {}).get('pharmacy', {})
-                                        
-                                        if pharmacy_data:
-                                            # Rerun pharmacy extraction with batch processing
-                                            retry_result = st.session_state.agent.data_processor.extract_pharmacy_fields_batch_enhanced(pharmacy_data)
-                                            
-                                            # Update results
-                                            if retry_result.get("code_meanings_added"):
-                                                st.success("✅ Retry successful! Meanings generated.")
-                                                st.session_state.analysis_results['structured_extractions']['pharmacy'] = retry_result
-                                                st.rerun()
-                                            else:
-                                                st.error(f"❌ Retry failed: {retry_result.get('llm_call_status', 'unknown error')}")
-                                        else:
-                                            st.error("No pharmacy data available for retry")
-                                    except Exception as e:
-                                        st.error(f"Retry failed with error: {str(e)}")
-                            else:
-                                st.error("Agent not available for retry")
-                    
-                    with col2:
-                        st.info("🔧 Use the diagnostic tools above to identify the issue before retrying")
-                        
             else:
                 st.warning("No pharmacy records available for NDC analysis")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -2434,30 +2362,11 @@ if submitted:
         st.session_state.chatbot_context = None
         st.session_state.calculated_age = None  # Reset age for new patient
         
-        # Initialize agent with enhanced API integrator
+        # Initialize agent
         try:
             config = Config()
             st.session_state.config = config
-            
-            # Initialize agent with enhanced API integrator
             st.session_state.agent = HealthAnalysisAgent(config)
-            
-            # Test batch processing capabilities
-            if hasattr(st.session_state.agent, 'api_integrator'):
-                st.info("🔧 Testing batch processing capabilities...")
-                
-                # Run diagnostic test
-                diagnosis = st.session_state.agent.api_integrator.diagnose_batch_processing()
-                
-                if diagnosis["summary"]["batch_processing_ready"]:
-                    st.success("✅ Batch processing ready for NDC/medication meanings")
-                else:
-                    st.warning("⚠️ Batch processing issues detected")
-                    
-                    # Show diagnostic details in expander
-                    with st.expander("🔧 Diagnostic Details"):
-                        st.json(diagnosis)
-            
         except Exception as e:
             st.error(f"Failed to initialize agent: {str(e)}")
             st.session_state.analysis_running = False
@@ -2582,72 +2491,6 @@ if st.session_state.analysis_running:
 # ENHANCED RESULTS SECTION - CHANGED TO EXPANDABLE SECTIONS
 if st.session_state.analysis_results and not st.session_state.analysis_running:
     results = st.session_state.analysis_results
-
-    # NEW: Add batch processing diagnostics section
-    with st.expander("🔧 Batch Processing Diagnostics", expanded=False):
-        st.markdown("### NDC/Medication Meanings Diagnostics")
-        
-        if hasattr(st.session_state, 'agent') and st.session_state.agent:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("🧪 Test Batch Processing", use_container_width=True):
-                    with st.spinner("Testing batch processing..."):
-                        try:
-                            diagnosis = st.session_state.agent.api_integrator.diagnose_batch_processing()
-                            
-                            # Display results
-                            st.write("**Test Results:**")
-                            for test_name, result in diagnosis["test_results"].items():
-                                status = "✅" if result.get("success", False) else "❌"
-                                st.write(f"{status} {test_name}: {result.get('processing_time', 0):.2f}s")
-                            
-                            # Display summary
-                            st.write("**Summary:**")
-                            summary = diagnosis["summary"]
-                            st.write(f"- Success Rate: {summary['overall_success_rate']}")
-                            st.write(f"- API Connectivity: {summary['api_connectivity']}")
-                            st.write(f"- Batch Ready: {summary['batch_processing_ready']}")
-                            
-                            # Show recommendations
-                            if summary["recommendations"]:
-                                st.write("**Recommendations:**")
-                                for rec in summary["recommendations"]:
-                                    st.write(f"• {rec}")
-                        except Exception as e:
-                            st.error(f"Diagnostic test failed: {str(e)}")
-            
-            with col2:
-                if st.button("🔍 Check Current Meanings", use_container_width=True):
-                    # Check current extraction results
-                    pharmacy_extraction = safe_get(results, 'structured_extractions', {}).get('pharmacy', {})
-                    
-                    st.write("**Pharmacy Extraction Status:**")
-                    st.write(f"- Records found: {len(pharmacy_extraction.get('ndc_records', []))}")
-                    st.write(f"- LLM status: {pharmacy_extraction.get('llm_call_status', 'unknown')}")
-                    st.write(f"- Meanings added: {pharmacy_extraction.get('code_meanings_added', False)}")
-                    
-                    # Show actual meanings if available
-                    ndc_meanings = pharmacy_extraction.get('code_meanings', {}).get('ndc_code_meanings', {})
-                    med_meanings = pharmacy_extraction.get('code_meanings', {}).get('medication_meanings', {})
-                    
-                    if ndc_meanings:
-                        st.write(f"- NDC meanings: {len(ndc_meanings)} codes")
-                        with st.expander("NDC Meanings Sample"):
-                            for code, meaning in list(ndc_meanings.items())[:3]:
-                                st.write(f"**{code}**: {meaning}")
-                    else:
-                        st.warning("No NDC meanings found")
-                    
-                    if med_meanings:
-                        st.write(f"- Medication meanings: {len(med_meanings)} medications")
-                        with st.expander("Medication Meanings Sample"):
-                            for med, meaning in list(med_meanings.items())[:3]:
-                                st.write(f"**{med}**: {meaning}")
-                    else:
-                        st.warning("No medication meanings found")
-        else:
-            st.warning("Agent not available for diagnostics")
 
     # 1. CLAIMS DATA - CHANGED TO EXPANDABLE
     with st.expander("🗂️ Claims Data", expanded=False):
