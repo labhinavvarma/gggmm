@@ -2334,12 +2334,23 @@ with st.sidebar:
         chat_container = st.container()
         with chat_container:
             if st.session_state.chatbot_messages:
-                # FIXED: Display messages in REVERSE order (newest first)
-                for message in reversed(st.session_state.chatbot_messages):
-                    message_class = "user-message" if message["role"] == "user" else "assistant-message"
-                    
-                    # FIXED: Use emoji avatars instead of text strings
-                    with st.chat_message(message["role"]):
+                # FIXED: Group messages in pairs (question-answer) and reverse pairs
+                messages = st.session_state.chatbot_messages
+                
+                # Group messages into pairs (user question + assistant answer)
+                message_pairs = []
+                for i in range(0, len(messages), 2):
+                    if i + 1 < len(messages):
+                        # Complete pair (user + assistant)
+                        message_pairs.append([messages[i], messages[i + 1]])
+                    else:
+                        # Incomplete pair (just user message)
+                        message_pairs.append([messages[i]])
+                
+                # Display pairs in reverse order (newest pair first)
+                for pair in reversed(message_pairs):
+                    for message in pair:
+                        with st.chat_message(message["role"]):
                         if message["role"] == "assistant":
                             # Check if message contains matplotlib code
                             matplotlib_code = extract_matplotlib_code(message["content"])
