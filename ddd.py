@@ -1553,7 +1553,7 @@ def display_advanced_professional_workflow():
     # Header
     st.markdown("""
     <div style="text-align: center; margin-bottom: 2rem;">
-        <h2 style="color: #2c3e50; font-weight: 700;">🔬 LangGraph Healthcare Analysis Pipeline</h2>
+        <h2 style="color: #2c3e50; font-weight: 700;">🔬 Enhanced Healthcare Analysis Pipeline</h2>
         <p style="color: #34495e; font-size: 1.1rem;">Comprehensive health analysis workflow with graph generation</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1612,11 +1612,11 @@ def display_advanced_professional_workflow():
         current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
         status_message = f"🔄 Currently executing: {current_step_name}"
     elif completed_steps == total_steps:
-        status_message = "🎉 All LangGraph workflow steps completed successfully!"
+        status_message = "🎉 All healthcare workflow steps completed successfully!"
     elif error_steps > 0:
         status_message = f"⚠️ {error_steps} step(s) encountered errors"
     else:
-        status_message = "⏳ LangGraph healthcare analysis pipeline ready..."
+        status_message = "⏳ Healthcare analysis pipeline ready..."
     
     st.markdown(f"""
     <div style="text-align: center; margin-top: 2rem; padding: 1rem; background: rgba(255,255,255,0.8); border-radius: 10px;">
@@ -2355,25 +2355,32 @@ if submitted:
                 with workflow_placeholder.container():
                     display_advanced_professional_workflow()
                 
-                # PHASE 1: Run the visual workflow animation first (make all green)
+                # PHASE 1: Run the visual workflow animation first (make all green) - 1 MINUTE DURATION
                 st.info("🎬 Initializing workflow visualization...")
+                
+                total_steps = len(st.session_state.workflow_steps)
+                # Calculate timing for 1 minute total (60 seconds)
+                step_running_time = 4.0  # 4 seconds per step running
+                step_pause_time = 4.5    # 4.5 seconds pause between steps
+                final_pause_time = 8.0   # 8 seconds final pause
+                # Total: 7 steps * (4 + 4.5) = 59.5 + 8 = 67.5 seconds ≈ 1 minute
                 
                 for i, step in enumerate(st.session_state.workflow_steps):
                     # Set step to running
                     st.session_state.workflow_steps[i]['status'] = 'running'
                     with workflow_placeholder.container():
                         display_advanced_professional_workflow()
-                    time.sleep(1.2)  # Quick animation
+                    time.sleep(step_running_time)  # Extended animation time
                     
                     # Set step to completed
                     st.session_state.workflow_steps[i]['status'] = 'completed'
                     with workflow_placeholder.container():
                         display_advanced_professional_workflow()
-                    time.sleep(0.8)  # Brief pause before next step
+                    time.sleep(step_pause_time)  # Extended pause between steps
                 
-                # All steps are now green - pause to show complete workflow
+                # All steps are now green - extended pause to show complete workflow
                 st.success("🎉 Workflow visualization complete! Starting actual processing...")
-                time.sleep(2.0)  # Wait time after everything is green
+                time.sleep(final_pause_time)  # Extended wait time after everything is green
                 
                 # PHASE 2: Now run the actual analysis
                 st.info("🔬 Running actual healthcare analysis...")
@@ -2634,7 +2641,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
         heart_attack_risk_score = safe_get(results, 'heart_attack_risk_score', 0.0)
         
         if heart_attack_prediction and not heart_attack_prediction.get('error'):
-            # Main risk display - CLEANED UP TEXT AND ENHANCED STYLING
+            # Main risk display - USING STREAMLIT COMPONENTS INSTEAD OF HTML
             combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: Not available")
             risk_category = heart_attack_prediction.get("risk_category", "Unknown")
             
@@ -2653,28 +2660,50 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 if percentage_match:
                     risk_percentage = percentage_match.group(1)
             
-            # Enhanced risk display with cleaner styling
-            risk_category_color = '#dc3545' if risk_category == 'High Risk' else '#ffc107' if risk_category == 'Medium Risk' else '#28a745'
+            # Enhanced risk display using Streamlit components
+            st.markdown("### 🫀 ML Model Prediction Results")
             
-            st.markdown(f"""
-            <div class="heart-risk-display">
-                <h3 style="color: #2c3e50; margin-bottom: 2rem; font-family: 'Inter', serif;">🫀 ML Model Prediction Results</h3>
+            # Create a clean display box
+            with st.container():
+                # Risk title
+                st.markdown("""
+                <div style="text-align: center; margin: 1rem 0;">
+                    <h3 style="color: #2c3e50; font-size: 1.8rem; margin-bottom: 1rem;">Heart Disease Risk</h3>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                <div style="text-align: center; margin: 2rem 0;">
-                    <div style="font-size: 1.8rem; color: #2c3e50; font-weight: 600; margin-bottom: 1rem;">Heart Disease Risk</div>
-                    <div style="font-size: 4rem; font-weight: 800; color: #dc3545; margin: 1rem 0; text-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);">
-                        {risk_percentage if risk_percentage else "Assessment Complete"}
+                # Risk percentage in large text
+                if risk_percentage:
+                    st.markdown(f"""
+                    <div style="text-align: center; margin: 2rem 0;">
+                        <div style="font-size: 4rem; font-weight: 800; color: #dc3545; text-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);">
+                            {risk_percentage}
+                        </div>
                     </div>
-                </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="text-align: center; margin: 2rem 0;">
+                        <div style="font-size: 3rem; font-weight: 800; color: #dc3545;">
+                            Assessment Complete
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
-                <div class="elegant-risk-text">
-                    Advanced machine learning analysis provides cardiovascular risk assessment based on comprehensive health data evaluation and clinical indicators.
-                </div>
-                <div class="risk-category-elegant" style="background: linear-gradient(135deg, {risk_category_color}15 0%, {risk_category_color}25 100%); border: 2px solid {risk_category_color}; color: {risk_category_color};">
-                    {risk_category}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                # Description text
+                st.info("🧠 Advanced machine learning analysis provides cardiovascular risk assessment based on comprehensive health data evaluation and clinical indicators.")
+                
+                # Risk category
+                risk_category_color = '#dc3545' if risk_category == 'High Risk' else '#ffc107' if risk_category == 'Medium Risk' else '#28a745'
+                
+                # Use Streamlit's built-in styling
+                if risk_category == 'High Risk':
+                    st.error(f"🚨 **{risk_category}**")
+                elif risk_category == 'Medium Risk':
+                    st.warning(f"⚠️ **{risk_category}**")
+                else:
+                    st.success(f"✅ **{risk_category}**")
+                    
         else:
             st.warning("⚠️ Heart attack risk prediction not available.")
 
