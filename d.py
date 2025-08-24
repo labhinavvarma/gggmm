@@ -143,11 +143,17 @@ st.markdown("""
 
 .sidebar-category {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1rem;
-    border-radius: 10px;
-    margin: 0.8rem 0;
-    border-left: 4px solid #007bff;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    padding: 0.5rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    border-left: 3px solid #007bff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transition: all 0.3s ease;
+}
+
+.sidebar-category:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
 }
 
 .sidebar-category h4 {
@@ -157,6 +163,29 @@ st.markdown("""
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1px;
+}
+
+/* Streamlit expander styling override for collapsed state */
+.streamlit-expanderHeader {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%) !important;
+    border-radius: 8px !important;
+    border-left: 3px solid #007bff !important;
+    padding: 0.8rem !important;
+    margin: 0.5rem 0 !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
+    transition: all 0.3s ease !important;
+}
+
+.streamlit-expanderHeader:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12) !important;
+}
+
+.streamlit-expanderContent {
+    background: white !important;
+    border: 1px solid #dee2e6 !important;
+    border-radius: 0 0 8px 8px !important;
+    padding: 1rem !important;
 }
 
 .category-prompt-btn {
@@ -311,6 +340,75 @@ st.markdown("""
 
 .chat-history-container::-webkit-scrollbar-thumb:hover {
     background: #0056b3;
+}
+
+/* Q&A Format Styling */
+.qa-question-box {
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+    padding: 1rem;
+    border-radius: 10px;
+    margin: 0.8rem 0;
+    border-left: 4px solid #2196f3;
+    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2);
+    transition: all 0.3s ease;
+}
+
+.qa-question-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+}
+
+.qa-answer-box {
+    background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c8 100%);
+    padding: 1rem;
+    border-radius: 10px;
+    margin: 0.8rem 0;
+    border-left: 4px solid #4caf50;
+    box-shadow: 0 2px 8px rgba(76, 175, 80, 0.2);
+    transition: all 0.3s ease;
+}
+
+.qa-answer-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+}
+
+.qa-content-box {
+    background: white;
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    border: 1px solid #e0e0e0;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+
+.qa-number {
+    display: inline-block;
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+    color: white;
+    padding: 0.2rem 0.8rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-right: 0.5rem;
+}
+
+.search-highlight {
+    background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.chat-stats {
+    text-align: center;
+    padding: 1rem;
+    color: #6c757d;
+    font-style: italic;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 10px;
+    margin: 1rem 0;
+    border: 1px solid #dee2e6;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -782,17 +880,13 @@ def main():
             ]
         }
         
-        # Create expandable sections for each category
+        # Create COLLAPSED expandable sections for each category
         for category, prompts in prompt_categories.items():
-            st.markdown(f'<div class="sidebar-category">', unsafe_allow_html=True)
-            st.markdown(f'<h4>{category}</h4>', unsafe_allow_html=True)
-            
-            for i, prompt in enumerate(prompts):
-                if st.button(prompt, key=f"cat_prompt_{category}_{i}", use_container_width=True):
-                    st.session_state.selected_prompt = prompt
-                    st.rerun()
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+            with st.expander(category, expanded=False):
+                for i, prompt in enumerate(prompts):
+                    if st.button(prompt, key=f"cat_prompt_{category}_{i}", use_container_width=True):
+                        st.session_state.selected_prompt = prompt
+                        st.rerun()
         
         st.markdown("---")
         
@@ -863,54 +957,135 @@ def main():
                 st.error(f"Error: {str(e)}")
                 st.session_state.selected_prompt = None
     
-    # Chat history display
+    # Chat Search and History
     st.markdown("### 💬 Chat History")
     
+    # Add search functionality
     if st.session_state.chatbot_messages:
-        # Display messages in reverse order (newest first) but grouped properly
-        messages = st.session_state.chatbot_messages
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            search_term = st.text_input(
+                "🔍 Search chat history:", 
+                placeholder="Search questions and answers...",
+                help="Search through your chat history to find specific topics"
+            )
+        with col2:
+            if st.button("Clear Search", key="clear_search"):
+                st.rerun()
         
-        # Group messages into pairs (user question + assistant answer)
-        message_pairs = []
+        st.markdown("---")
+    
+    if st.session_state.chatbot_messages:
+        # Group messages into Q&A pairs
+        messages = st.session_state.chatbot_messages
+        qa_pairs = []
+        
         for i in range(0, len(messages), 2):
             if i + 1 < len(messages):
-                # Complete pair (user + assistant)
-                message_pairs.append([messages[i], messages[i + 1]])
+                # Complete pair (user question + assistant answer)
+                question = messages[i]["content"]
+                answer = messages[i + 1]["content"]
+                qa_pairs.append({"question": question, "answer": answer})
             else:
                 # Incomplete pair (just user message)
-                message_pairs.append([messages[i]])
+                question = messages[i]["content"]
+                qa_pairs.append({"question": question, "answer": "Processing..."})
         
-        # Display pairs in reverse order (newest pair first)
-        for pair in reversed(message_pairs):
-            for message in pair:
-                with st.chat_message(message["role"]):
-                    if message["role"] == "assistant":
-                        # Check if message contains matplotlib code
-                        matplotlib_code = extract_matplotlib_code_enhanced(message["content"])
-                        if matplotlib_code:
-                            # Display text content
-                            text_content = message["content"]
-                            for pattern in [f"```python\n{matplotlib_code}\n```", f"```\n{matplotlib_code}\n```"]:
-                                text_content = text_content.replace(pattern, "")
-                            if text_content.strip():
-                                st.write(text_content.strip())
-                            
-                            # Execute and display graph
-                            with st.spinner("Generating graph..."):
-                                try:
-                                    img_buffer = execute_matplotlib_code_enhanced_stability(matplotlib_code)
-                                    if img_buffer:
-                                        st.markdown('<div class="graph-display-container">', unsafe_allow_html=True)
-                                        st.image(img_buffer, use_container_width=True)
-                                        st.markdown('</div>', unsafe_allow_html=True)
-                                    else:
-                                        st.error("Failed to generate graph")
-                                except Exception as e:
-                                    st.error(f"Graph generation error: {str(e)}")
+        # Filter by search term if provided
+        filtered_pairs = qa_pairs
+        if st.session_state.chatbot_messages and 'search_term' in locals() and search_term:
+            filtered_pairs = [
+                pair for pair in qa_pairs 
+                if search_term.lower() in pair["question"].lower() or 
+                   search_term.lower() in pair["answer"].lower()
+            ]
+            if filtered_pairs:
+                st.success(f"🎯 Found {len(filtered_pairs)} result(s) matching '{search_term}'")
+            else:
+                st.warning(f"❌ No results found for '{search_term}'. Try different keywords.")
+                st.info("💡 **Search Tips:** Try searching for 'medication', 'risk', 'chart', 'diagnosis', etc.")
+        
+        # Display Q&A pairs in Question1/Answer1/Question2/Answer2 format
+        for idx, pair in enumerate(reversed(filtered_pairs), 1):
+            # Question section
+            st.markdown(f"""
+            <div class="qa-question-box">
+                <h4 style="margin: 0; color: #1976d2;">
+                    <span class="qa-number">Q{idx}</span>❓ Question {idx}
+                </h4>
+                <div class="qa-content-box">
+                    <p style="margin: 0; color: #0d47a1; font-size: 1.05rem; line-height: 1.5;">
+                        {pair["question"]}
+                    </p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Answer section
+            answer_content = pair["answer"]
+            
+            # Check if answer contains matplotlib code
+            matplotlib_code = extract_matplotlib_code_enhanced(answer_content)
+            
+            st.markdown(f"""
+            <div class="qa-answer-box">
+                <h4 style="margin: 0; color: #2e7d32;">
+                    <span class="qa-number">A{idx}</span>💡 Answer {idx}
+                </h4>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display answer content
+            if matplotlib_code:
+                # Display text content without code
+                text_content = answer_content
+                for pattern in [f"```python\n{matplotlib_code}\n```", f"```\n{matplotlib_code}\n```"]:
+                    text_content = text_content.replace(pattern, "")
+                
+                if text_content.strip():
+                    st.markdown(f"""
+                    <div class="qa-content-box">
+                        <div style="color: #2e7d32; line-height: 1.6;">
+                            {text_content.strip()}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Execute and display graph
+                with st.spinner(f"🎨 Generating visualization for Answer {idx}..."):
+                    try:
+                        img_buffer = execute_matplotlib_code_enhanced_stability(matplotlib_code)
+                        if img_buffer:
+                            st.markdown('<div class="graph-display-container">', unsafe_allow_html=True)
+                            st.markdown(f"**📊 Visualization for Answer {idx}:**")
+                            st.image(img_buffer, use_container_width=True, caption=f"Healthcare Data Visualization - Answer {idx}")
+                            st.markdown('</div>', unsafe_allow_html=True)
                         else:
-                            st.write(message["content"])
-                    else:
-                        st.write(message["content"])
+                            st.error("❌ Failed to generate graph")
+                    except Exception as e:
+                        st.error(f"❌ Graph generation error: {str(e)}")
+            else:
+                # Display regular answer
+                st.markdown(f"""
+                <div class="qa-content-box">
+                    <div style="color: #2e7d32; line-height: 1.6;">
+                        {answer_content}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Add separator between Q&A pairs
+            if idx < len(filtered_pairs):
+                st.markdown("---")
+        
+        # Show total count
+        if not ('search_term' in locals() and search_term):
+            st.markdown(f"""
+            <div class="chat-stats">
+                📊 <strong>Chat Statistics:</strong> {len(qa_pairs)} question(s) and answer(s) • 
+                📈 Total interactions: {len(st.session_state.chatbot_messages)} messages
+            </div>
+            """, unsafe_allow_html=True)
     else:
         st.info("🚀 Start a conversation! Use the quick prompts in the sidebar or type your question above.")
         
