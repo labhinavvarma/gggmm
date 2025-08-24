@@ -308,39 +308,60 @@ COMMUNICATION STYLE:
             # Build conversation with better context management
             messages = []
             
-            # Add recent conversation history (last 8 messages for better context)
+            # Add recent conversation history (last 6 messages for better context)
             if conversation_history:
-                messages.extend(conversation_history[-8:])
+                # Ensure all messages have proper string content
+                for msg in conversation_history[-6:]:
+                    if isinstance(msg.get('content'), str) and msg.get('content').strip():
+                        messages.append({
+                            "role": str(msg.get('role', 'user')),
+                            "content": str(msg.get('content', '')).strip()
+                        })
             
             # Add current user message
             messages.append({
                 "role": "user", 
-                "content": user_message
+                "content": str(user_message).strip()
             })
             
+            # Build payload with correct data types
             payload = {
                 "query": {
-                    "aplctn_cd": self.aplctn_cd,
-                    "app_id": self.app_id,
-                    "api_key": self.api_key,
+                    "aplctn_cd": str(self.aplctn_cd),
+                    "app_id": str(self.app_id),
+                    "api_key": str(self.api_key),
                     "method": "cortex",
-                    "model": self.model,
-                    "sys_msg": sys_msg,
-                    "limit_convs": "0",
+                    "model": str(self.model),
+                    "sys_msg": str(sys_msg)[:8000],  # Limit system message length
+                    "limit_convs": 0,  # Integer instead of string
                     "prompt": {"messages": messages},
                     "app_lvl_prefix": "",
                     "user_id": "",
-                    "session_id": session_id
+                    "session_id": str(session_id)
                 }
             }
             
             headers = {
                 "Content-Type": "application/json; charset=utf-8",
                 "Accept": "application/json",
-                "Authorization": f'Snowflake Token="{self.api_key}"'
+                "Authorization": f'Snowflake Token="{str(self.api_key)}"'
             }
             
-            response = requests.post(self.api_url, headers=headers, json=payload, verify=False, timeout=60)
+            # Debug logging
+            print(f"Sending request to: {self.api_url}")
+            print(f"Payload keys: {list(payload['query'].keys())}")
+            print(f"Message count: {len(messages)}")
+            print(f"System message length: {len(sys_msg)}")
+            
+            response = requests.post(
+                self.api_url, 
+                headers=headers, 
+                json=payload, 
+                verify=False, 
+                timeout=60
+            )
+            
+            print(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 raw = response.text
@@ -349,11 +370,16 @@ COMMUNICATION STYLE:
                     return answer.strip()
                 return raw.strip()
             else:
-                st.error(f"API Error {response.status_code}: {response.text}")
+                error_msg = f"API Error {response.status_code}: {response.text}"
+                print(f"Full error response: {error_msg}")
+                st.error(error_msg)
                 return None
                 
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             st.error(f"Request failed: {str(e)}")
+            return None
+        except Exception as e:
+            st.error(f"Unexpected error: {str(e)}")
             return None
 
 def create_quick_questions():
@@ -411,7 +437,412 @@ def render_chat_message(role: str, content: str, timestamp: str):
         formatted_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', formatted_content)
         
         # Handle bullet points
-        formatted_content = re.sub(r'^\s*[-•]\s*(.+)', r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
+        formatted_content = re.sub(r'^\s*[-•]\s*(.+)
+
+def main():
+    """Enhanced main application with ChatGPT-like interface"""
+    
+    # Set pandas options to avoid warnings
+    pd.set_option('future.no_silent_downcasting', True)
+    
+    # Page configuration
+    st.set_page_config(
+        page_title="AI Data Analyst",
+        page_icon="🤖",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Custom CSS for enhanced chat appearance
+    st.markdown("""
+    <style>
+    .main > div {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    .stChatInput > div {
+        background: white;
+    }
+    .chat-container {
+        height: 70vh;
+        overflow-y: auto;
+        padding: 40px 30px;
+        background: linear-gradient(to bottom, #fafafa 0%, #f0f9ff 100%);
+        border-radius: 20px;
+        margin-bottom: 30px;
+        border: 1px solid #e5e7eb;
+    }
+    
+    /* Scrollbar styling */
+    .chat-container::-webkit-scrollbar {
+        width: 8px;
+    }
+    .chat-container::-webkit-scrollbar-track {
+        background: #f1f5f9;
+        border-radius: 10px;
+    }
+    .chat-container::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 10px;
+    }
+    .chat-container::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+    }
+    
+    .file-upload-container {
+        background: white;
+        padding: 25px;
+        border-radius: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        margin-bottom: 25px;
+        border: 1px solid #e5e7eb;
+    }
+    .quick-questions {
+        background: white;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+        margin: 20px 0;
+        border: 1px solid #e5e7eb;
+    }
+    .stExpander {
+        border: 2px solid #e5e7eb;
+        border-radius: 12px;
+        margin: 10px 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .stExpander > div > div > div > div {
+        padding: 15px 20px;
+    }
+    .stExpander summary {
+        font-weight: 600;
+        font-size: 15px;
+        padding: 15px 20px;
+    }
+    
+    /* Sidebar styling */
+    .css-1d391kg {
+        padding-top: 2rem;
+    }
+    
+    /* Enhanced input box */
+    .stTextInput > div > div > input {
+        padding: 18px 24px;
+        border-radius: 30px;
+        border: 3px solid #e5e7eb;
+        font-size: 17px;
+        font-weight: 500;
+        background: white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        transition: all 0.3s ease;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.15);
+        outline: none;
+    }
+    .stTextInput > div > div > input::placeholder {
+        color: #9ca3af;
+        font-style: italic;
+    }
+    
+    /* Enhanced button styling */
+    .stButton > button {
+        border-radius: 25px;
+        border: none;
+        font-weight: 700;
+        font-size: 15px;
+        padding: 12px 24px;
+        transition: all 0.3s ease;
+        box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+    }
+    .stButton > button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+    }
+    
+    /* Welcome message enhancement */
+    .welcome-message {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    /* File info styling */
+    .file-info-card {
+        background: linear-gradient(135deg, #e8f5e8 0%, #f0f9ff 100%);
+        border-left: 5px solid #10b981;
+        padding: 15px;
+        border-radius: 10px;
+        margin: 8px 0;
+        font-size: 13px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    /* Header enhancement */
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        text-align: center;
+        padding: 30px 0;
+        border-radius: 20px;
+        margin-bottom: 30px;
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "files_data" not in st.session_state:
+        st.session_state.files_data = []
+    if "uploaded_files_names" not in st.session_state:
+        st.session_state.uploaded_files_names = []
+    
+    # Initialize API client
+    api_client = SFAssistAPI()
+    
+    # Enhanced Header
+    st.markdown("""
+    <div class="main-header">
+        <div style="font-size: 50px; margin-bottom: 15px;">🤖</div>
+        <h1 style="margin: 0; font-size: 48px; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            AI Data Analyst
+        </h1>
+        <p style="margin: 15px 0 0 0; font-size: 20px; opacity: 0.95; font-weight: 500;">
+            Upload multiple files and chat with your data using advanced AI
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Sidebar for file upload and quick questions
+    with st.sidebar:
+        st.markdown('<div class="file-upload-container">', unsafe_allow_html=True)
+        st.header("📁 Upload Files")
+        
+        # Determine supported file types
+        supported_types = ['xlsx', 'xls']
+        type_descriptions = ["Excel (.xlsx, .xls)"]
+        
+        if DOCX_AVAILABLE:
+            supported_types.extend(['docx'])
+            type_descriptions.append("Word (.docx)")
+        
+        if PDF_AVAILABLE:
+            supported_types.extend(['pdf'])
+            type_descriptions.append("PDF (.pdf)")
+        
+        help_text = f"Supported: {', '.join(type_descriptions)}"
+        
+        # Multiple file uploader
+        uploaded_files = st.file_uploader(
+            "Choose files (multiple files supported)",
+            type=supported_types,
+            help=help_text,
+            accept_multiple_files=True
+        )
+        
+        # Process uploaded files
+        if uploaded_files:
+            current_file_names = [f.name for f in uploaded_files]
+            
+            # Check if we have new files
+            if current_file_names != st.session_state.uploaded_files_names:
+                st.session_state.uploaded_files_names = current_file_names
+                st.session_state.files_data = []
+                
+                # Process each file
+                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
+                    for uploaded_file in uploaded_files:
+                        file_extension = uploaded_file.name.split('.')[-1].lower()
+                        
+                        if file_extension in ['xlsx', 'xls']:
+                            file_data = FileProcessor.process_excel(uploaded_file)
+                        elif file_extension == 'docx':
+                            file_data = FileProcessor.process_word(uploaded_file)
+                        elif file_extension == 'pdf':
+                            file_data = FileProcessor.process_pdf(uploaded_file)
+                        else:
+                            continue
+                            
+                        if file_data and "error" not in file_data:
+                            st.session_state.files_data.append(file_data)
+                
+                if st.session_state.files_data:
+                    st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
+        
+        # Display uploaded files info
+        if st.session_state.files_data:
+            st.markdown("### 📋 Uploaded Files")
+            for file_data in st.session_state.files_data:
+                if "error" not in file_data:
+                    file_icon = {"excel": "📊", "word": "📄", "pdf": "📕"}.get(file_data.get('type'), "📄")
+                    st.markdown(f"""
+                    <div class="file-info-card">
+                        <div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 8px;">
+                            {file_icon} {file_data.get('filename', 'Unknown')}
+                        </div>
+                        <div style="color: #6b7280; font-size: 13px; font-style: italic; margin-bottom: 6px;">
+                            {file_data.get('type', 'Unknown').upper()} File
+                        </div>
+                        <div style="color: #374151; font-size: 12px; line-height: 1.4;">
+                            {file_data.get('summary', 'No summary')}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Quick Questions in Sidebar
+        st.markdown('<div class="quick-questions">', unsafe_allow_html=True)
+        st.markdown("### 🎯 Quick Questions")
+        
+        quick_questions = create_quick_questions()
+        
+        for category, questions in quick_questions.items():
+            with st.expander(category):
+                for question, detailed_prompt in questions.items():
+                    if st.button(question, key=f"q_{hash(question)}", help="Click to ask this question", use_container_width=True):
+                        if not st.session_state.files_data:
+                            st.warning("Upload files first!")
+                        else:
+                            # Auto-send the detailed prompt
+                            with st.spinner("🤔 Analyzing..."):
+                                conversation_history = []
+                                for role, message, _ in st.session_state.messages[-6:]:
+                                    conversation_history.append({"role": role, "content": message})
+                                
+                                response = api_client.send_message(
+                                    detailed_prompt,
+                                    st.session_state.files_data,
+                                    conversation_history
+                                )
+                                
+                                if response:
+                                    timestamp = datetime.now().strftime("%H:%M")
+                                    st.session_state.messages.append(("user", question, timestamp))
+                                    st.session_state.messages.append(("assistant", response, timestamp))
+                                    st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Library status
+        if not DOCX_AVAILABLE or not PDF_AVAILABLE:
+            st.markdown("### ⚠️ Library Status")
+            if not DOCX_AVAILABLE:
+                st.warning("Word support disabled")
+            if not PDF_AVAILABLE:
+                st.warning("PDF support disabled")
+    
+    # Main chat area (full width)
+    # Chat messages container
+    chat_container = st.container()
+    
+    with chat_container:
+        if st.session_state.messages:
+            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+            for role, message, timestamp in st.session_state.messages:
+                render_chat_message(role, message, timestamp)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="text-align: center; padding: 80px 50px; background: white; 
+                        border-radius: 25px; margin: 40px 0; 
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+                        border: 1px solid #e5e7eb;">
+                <div style="font-size: 60px; margin-bottom: 20px;">🤖</div>
+                <h1 style="color: #1f2937; font-size: 32px; font-weight: 800; margin-bottom: 20px; 
+                           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                           -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
+                           background-clip: text;">
+                    Welcome to AI Data Analyst!
+                </h1>
+                <p style="font-size: 20px; color: #4b5563; margin: 25px 0; font-weight: 500;">
+                    Upload your files in the sidebar and start asking questions about your data.
+                </p>
+                <p style="font-size: 17px; color: #6b7280; opacity: 0.9; margin-bottom: 40px;">
+                    Use the quick questions in the sidebar to get started, or type your own question below.
+                </p>
+                <div style="margin-top: 40px;">
+                    <span style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); 
+                                 padding: 12px 20px; border-radius: 25px; margin: 0 8px; 
+                                 font-size: 15px; font-weight: 600; color: #1565c0;
+                                 box-shadow: 0 3px 8px rgba(21, 101, 192, 0.2);">📊 Data Analysis</span>
+                    <span style="background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%); 
+                                 padding: 12px 20px; border-radius: 25px; margin: 0 8px; 
+                                 font-size: 15px; font-weight: 600; color: #7b1fa2;
+                                 box-shadow: 0 3px 8px rgba(123, 31, 162, 0.2);">💼 Business Intelligence</span>
+                    <span style="background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%); 
+                                 padding: 12px 20px; border-radius: 25px; margin: 0 8px; 
+                                 font-size: 15px; font-weight: 600; color: #2e7d32;
+                                 box-shadow: 0 3px 8px rgba(46, 125, 50, 0.2);">📈 Financial Analysis</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Chat input at bottom (ChatGPT style) - Full width
+    st.markdown("""
+    <div style="margin: 40px 0 20px 0;">
+        <h3 style="font-size: 24px; font-weight: 700; color: #1f2937; margin-bottom: 15px; 
+                   display: flex; align-items: center;">
+            <span style="font-size: 28px; margin-right: 10px;">💬</span> 
+            Ask about your data
+        </h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col_input, col_send, col_clear = st.columns([5, 1, 1])
+    
+    with col_input:
+        user_input = st.text_input(
+            "Type your question here...",
+            placeholder="e.g., What are the key insights from my data?",
+            label_visibility="collapsed"
+        )
+    
+    with col_send:
+        send_clicked = st.button("Send 🚀", use_container_width=True)
+    
+    with col_clear:
+        clear_clicked = st.button("Clear 🗑️", use_container_width=True)
+    
+    if clear_clicked:
+        st.session_state.messages = []
+        st.rerun()
+    
+    # Process input
+    if (send_clicked and user_input.strip()) or (user_input and len(user_input) > 0 and st.session_state.get('auto_send', False)):
+        if st.session_state.get('auto_send', False):
+            st.session_state['auto_send'] = False
+        
+        if not st.session_state.files_data:
+            st.warning("Please upload files first to start analysis!")
+        else:
+            with st.spinner("🤔 Analyzing your question..."):
+                # Get conversation history
+                conversation_history = []
+                for role, message, _ in st.session_state.messages[-6:]:
+                    conversation_history.append({"role": role, "content": message})
+                
+                # Send to API
+                response = api_client.send_message(
+                    user_input, 
+                    st.session_state.files_data,
+                    conversation_history
+                )
+                
+                if response:
+                    timestamp = datetime.now().strftime("%H:%M")
+                    st.session_state.messages.append(("user", user_input, timestamp))
+                    st.session_state.messages.append(("assistant", response, timestamp))
+                    st.rerun()
+
+if __name__ == "__main__":
+    main(), r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
         
         st.markdown(f"""
         <div style="display: flex; justify-content: flex-start; margin: 25px 0;">
@@ -690,11 +1121,11 @@ def main():
             <div style="text-align: center; padding: 60px 40px; color: #6b7280; background: #fafafa; border-radius: 15px; margin: 30px 0;">
                 <h2>👋 Welcome to AI Data Analyst!</h2>
                 <p style="font-size: 18px; margin: 20px 0;">Upload your files in the sidebar and start asking questions about your data.</p>
-                <p style="font-size: 16px; opacity: 0.8; margin-bottom: 30px;">Use the quick questions in the sidebar to get started, or type your own question below.</p>
-                <div style="display: flex; justify-content: center;">
-                    <span style="background: #e3f2fd; padding: 10px 20px; border-radius: 25px; margin: 0 5px; font-size: 14px;">📊 Data Analysis</span>
-                    <span style="background: #f3e5f5; padding: 10px 20px; border-radius: 25px; margin: 0 5px; font-size: 14px;">💼 Business Intelligence</span>
-                    <span style="background: #e8f5e8; padding: 10px 20px; border-radius: 25px; margin: 0 5px; font-size: 14px;">📈 Financial Analysis</span>
+                <p style="font-size: 16px; opacity: 0.8;">Use the quick questions in the sidebar to get started, or type your own question below.</p>
+                <div style="margin-top: 30px;">
+                    <span style="background: #e3f2fd; padding: 8px 16px; border-radius: 20px; margin: 0 5px; font-size: 14px;">📊 Data Analysis</span>
+                    <span style="background: #f3e5f5; padding: 8px 16px; border-radius: 20px; margin: 0 5px; font-size: 14px;">💼 Business Intelligence</span>
+                    <span style="background: #e8f5e8; padding: 8px 16px; border-radius: 20px; margin: 0 5px; font-size: 14px;">📈 Financial Analysis</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
