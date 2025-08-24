@@ -789,19 +789,8 @@ def display_batch_code_meanings_enhanced(results):
     medical_extraction = safe_get(results, 'structured_extractions', {}).get('medical', {})
     pharmacy_extraction = safe_get(results, 'structured_extractions', {}).get('pharmacy', {})
     
-    # DEBUG: Show available fields in pharmacy records
+    # Get pharmacy records for processing
     pharmacy_records = pharmacy_extraction.get("ndc_records", [])
-    if pharmacy_records:
-        st.write("**DEBUG: Sample pharmacy record fields:**")
-        sample_record = pharmacy_records[0] if pharmacy_records else {}
-        st.write(list(sample_record.keys()))
-        
-        # DEBUG: Show actual values for provider fields
-        st.write("**DEBUG: Provider field values in first few records:**")
-        for i, record in enumerate(pharmacy_records[:3]):
-            st.write(f"Record {i+1}:")
-            st.write(f"  - billg_prov_nm: '{record.get('billg_prov_nm', 'NOT FOUND')}'")
-            st.write(f"  - prscrbg_prov_nm: '{record.get('prscrbg_prov_nm', 'NOT FOUND')}'")
     
     # Create main tabs for Medical and Pharmacy
     tab1, tab2 = st.tabs(["Medical Code Meanings", "Pharmacy Code Meanings"])
@@ -939,20 +928,6 @@ def display_batch_code_meanings_enhanced(results):
                         for code, count in code_counts.head(5).items():
                             meaning = diagnosis_meanings.get(code, "Unknown")
                             st.write(f"• **{code}** ({count}x): {meaning}")
-                    
-                    # Show provider analysis
-                    with st.expander("Provider Analysis"):
-                        provider_counts = df_diagnosis['Billing Provider'].value_counts()
-                        st.write("**Most Frequent Billing Providers:**")
-                        for provider, count in provider_counts.head(5).items():
-                            if provider != "Not Available":
-                                st.write(f"• **{provider}** ({count} claims)")
-                        
-                        zip_counts = df_diagnosis['Provider ZIP'].value_counts()
-                        st.write("**Provider ZIP Distribution:**")
-                        for zip_code, count in zip_counts.head(5).items():
-                            if zip_code != "Not Available":
-                                st.write(f"• **{zip_code}** ({count} claims)")
                 else:
                     st.info("No ICD-10 diagnosis codes found in medical records")
             else:
@@ -1047,22 +1022,15 @@ def display_batch_code_meanings_enhanced(results):
             if med_name:
                 unique_medications.add(med_name)
             
-            # Count prescribing providers WITH DEBUGGING
+            # Count prescribing providers
             prescribing_provider = record.get("prscrbg_prov_nm", "")
             if prescribing_provider and prescribing_provider.strip() != "" and prescribing_provider != "Not Available":
                 unique_prescribing_providers.add(prescribing_provider)
-                if i < 3:  # Debug first 3 records
-                    st.write(f"DEBUG: Added prescribing provider: '{prescribing_provider}'")
             
             # Count billing providers
             billing_provider = record.get("billg_prov_nm", "")
             if billing_provider and billing_provider.strip() != "" and billing_provider != "Not Available":
                 unique_billing_providers_pharmacy.add(billing_provider)
-        
-        # DEBUG: Show what we found
-        st.write(f"**DEBUG: Found {len(unique_prescribing_providers)} unique prescribing providers:**")
-        for provider in list(unique_prescribing_providers)[:5]:
-            st.write(f"  - '{provider}'")
         
         # Pharmacy summary metrics 
         col1, col2, col3, col4 = st.columns(4)
@@ -1222,19 +1190,6 @@ def display_batch_code_meanings_enhanced(results):
                         for med, count in med_counts.head(5).items():
                             meaning = med_meanings.get(med, f"Medication: {med}")
                             st.write(f"• **{med}** ({count}x): {meaning}")
-                    
-                    with st.expander("Provider Analysis"):
-                        billing_provider_counts = df_medication['Billing Provider'].value_counts()
-                        st.write("**Most Frequent Billing Providers:**")
-                        for provider, count in billing_provider_counts.head(5).items():
-                            if provider != "Not Available":
-                                st.write(f"• **{provider}** ({count} prescriptions)")
-                        
-                        prescribing_provider_counts = df_medication['Prescribing Provider'].value_counts()
-                        st.write("**Most Frequent Prescribing Providers:**")
-                        for provider, count in prescribing_provider_counts.head(5).items():
-                            if provider != "Not Available":
-                                st.write(f"• **{provider}** ({count} prescriptions)")
                 else:
                     st.info("No medication names found in pharmacy records")
             else:
