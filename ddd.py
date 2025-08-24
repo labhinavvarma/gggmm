@@ -435,9 +435,9 @@ def render_chat_message(role: str, content: str, timestamp: str):
         import re
         formatted_content = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', formatted_content)
         formatted_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', formatted_content)
-        
+        formatted_content = re.sub(r'^\s*[-•]\s*(.+)$', r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
+
         # Handle bullet points
-        formatted_content = re.sub(r'^\s*[-•]\s*(.+)
 
 def main():
     """Enhanced main application with ChatGPT-like interface"""
