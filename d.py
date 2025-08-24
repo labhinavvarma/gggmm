@@ -2111,4 +2111,66 @@ with st.sidebar:
         st.markdown("---")
         
         # Status
-        if st.session_state.get
+        if st.session_state.get('chatbot_context'):
+            st.success("✅ AI Assistant Ready!")
+        else:
+            st.info("⏳ Complete analysis to enable chatbot")
+        
+        st.markdown("---")
+        
+        # Display categorized prompts in sidebar
+        display_categorized_prompts_sidebar()
+        
+        # Additional tools
+        st.markdown("---")
+        st.markdown("### 🛠️ Tools")
+        
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            if st.session_state.chatbot_context:
+                st.success("✅ Data refreshed!")
+            else:
+                st.warning("⚠️ No data to refresh")
+        
+        if st.button("📊 Generate Sample Chart", use_container_width=True):
+            if st.session_state.chatbot_context:
+                st.session_state.chatbot_messages.append({
+                    "role": "user",
+                    "content": "Create a comprehensive health dashboard"
+                })
+                st.rerun()
+            else:
+                st.warning("⚠️ Complete analysis first")
+        
+        # Footer
+        st.markdown("---")
+        st.markdown("""
+        <div style="text-align: center; color: #6c757d; font-size: 0.8rem;">
+            <p>🤖 Complete Health Agent v2.0</p>
+            <p>Real-time Analysis & Separate Chatbot</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    else:
+        # Placeholder when chatbot is not ready
+        st.title("🤖 Medical Assistant")
+        st.info("Complete health analysis to enable AI assistant")
+        st.markdown("---")
+        
+        st.markdown("**What you can ask when ready:**")
+        st.markdown("• **Medical Records:** Diagnoses, procedures, ICD codes")
+        st.markdown("• **Medications:** Prescriptions, NDC codes, interactions") 
+        st.markdown("• **Risk Assessment:** Heart attack risk, chronic conditions")
+        st.markdown("• **Visualizations:** Charts, graphs, dashboards")
+        st.markdown("• **Predictions:** Health outcomes, cost analysis")
+        st.markdown("---")
+        
+        st.markdown("**Enhanced Features:**")
+        st.markdown("• Separate chatbot window")
+        st.markdown("• Real-time graph generation")
+        st.markdown("• Categorized prompt system")
+        st.markdown("• Professional visualizations")
+        st.markdown("• Comprehensive health analysis")
+
+# MAIN EXECUTION
+if __name__ == "__main__":
+    main()
