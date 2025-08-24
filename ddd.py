@@ -1208,25 +1208,7 @@ if not AGENT_AVAILABLE:
     st.stop()
 
 # REMOVED SIDEBAR CHATBOT - Only show placeholder when chatbot is NOT ready
-with st.sidebar:
-    st.title("Medical Assistant")
-    st.info("Medical Assistant will be available after running health analysis")
-    st.markdown("---")
-    st.markdown("**What you can ask:**")
-    st.markdown("• **Medical Records:** Diagnoses, procedures, ICD codes, service codes")
-    st.markdown("• **Medications:** Prescriptions, NDC codes, drug interactions, therapeutic analysis") 
-    st.markdown("• **Risk Assessment:** Heart attack risk, chronic conditions, clinical predictions")
-    st.markdown("• **Health Summary:** Combined trajectory analysis, comprehensive health insights")
-    st.markdown("• **Visualizations:** Charts, graphs, dashboards, timelines with matplotlib")
-    st.markdown("---")
-    st.markdown("**Enhanced Features:**")
-    st.markdown("• Categorized prompt system for easy navigation")
-    st.markdown("• Quick access buttons for common analyses")
-    st.markdown("• **Advanced graph generation with matplotlib**")
-    st.markdown("• **Real-time chart display in chat**")
-    st.markdown("• Comprehensive health summary with trajectory analysis")
-    st.markdown("• Professional clinical decision support")
-    st.markdown("• **Batch code meanings with LLM explanations**")
+
     
     # Show loading graphs while chatbot is being prepared
     if st.session_state.analysis_running or (st.session_state.analysis_results and not st.session_state.analysis_results.get("chatbot_ready", False)):
@@ -1455,10 +1437,11 @@ if st.session_state.analysis_results and st.session_state.analysis_results.get("
             st.switch_page("pages/chatbot.py")
 
 # ENHANCED RESULTS SECTION - CHANGED TO EXPANDABLE SECTIONS
+# ENHANCED RESULTS SECTION - FIXED NESTED EXPANDER ISSUE
 if st.session_state.analysis_results and not st.session_state.analysis_running:
     results = st.session_state.analysis_results
 
-    # 1. CLAIMS DATA - CHANGED TO EXPANDABLE
+    # 1. CLAIMS DATA - FIXED: REMOVED NESTED EXPANDERS
     with st.expander("Claims Data", expanded=False):
         st.markdown("""
         <div class="section-box">
@@ -1483,8 +1466,9 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     
                     medical_claims_data = medical_data.get('medical_claims_data', {})
                     if medical_claims_data:
-                        with st.expander("Medical Claims JSON Data", expanded=False):
-                            st.json(medical_claims_data)
+                        # FIXED: Use st.json directly instead of nested expander
+                        st.markdown("**Medical Claims JSON Data:**")
+                        st.json(medical_claims_data)
                 else:
                     st.error("No medical claims data available")
             
@@ -1495,14 +1479,21 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                     
                     pharmacy_claims_data = pharmacy_data.get('pharmacy_claims_data', {})
                     if pharmacy_claims_data:
-                        with st.expander("Pharmacy Claims JSON Data", expanded=False):
-                            st.json(pharmacy_claims_data)
+                        # FIXED: Use st.json directly instead of nested expander
+                        st.markdown("**Pharmacy Claims JSON Data:**")
+                        st.json(pharmacy_claims_data)
                 else:
                     st.error("No pharmacy claims data available")
             
             with tab3:
                 mcid_data = safe_get(api_outputs, 'mcid', {})
-                display_enhanced_mcid_data(mcid_data)
+                if mcid_data:
+                    st.markdown("### MCID Data Analysis")
+                    # FIXED: Use st.json directly instead of nested expander
+                    st.markdown("**Raw MCID JSON Data:**")
+                    st.json(mcid_data)
+                else:
+                    st.warning("No MCID data available")
         else:
             st.error("No claims data available")
 
@@ -1621,7 +1612,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
         else:
             st.warning("Health trajectory analysis not available. Please run the analysis first.")
 
-    # 5. HEART ATTACK RISK PREDICTION - CHANGED TO EXPANDABLE AND ENHANCED BOX
+    # 5. HEART ATTACK RISK PREDICTION - FIXED WITH DYNAMIC COLORS
     with st.expander("Heart Attack Risk Prediction", expanded=False):
         st.markdown("""
         <div class="heart-attack-container">
@@ -1665,7 +1656,7 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Risk percentage in large text
+                # UPDATED: Dynamic color based on risk category
                 if risk_percentage:
                     # Determine color based on risk category
                     if risk_category == "Low Risk":
@@ -1697,16 +1688,19 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 # Description text
                 st.info("Advanced machine learning analysis provides cardiovascular risk assessment based on comprehensive health data evaluation and clinical indicators.")
                 
-                # Risk category
+                # Risk category with matching colors
                 if risk_category == 'High Risk':
                     st.error(f"**{risk_category}**")
                 elif risk_category == 'Medium Risk':
                     st.warning(f"**{risk_category}**")
-                else:
+                elif risk_category == 'Low Risk':
                     st.success(f"**{risk_category}**")
+                else:
+                    st.info(f"**{risk_category}**")
                     
         else:
             st.warning("Heart attack risk prediction not available.")
 
+    
 if __name__ == "__main__":
     pass
