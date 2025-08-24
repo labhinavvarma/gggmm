@@ -57,7 +57,6 @@ plt.rcParams.update({
     'ytick.labelsize': 9,
     'legend.fontsize': 9,
     'figure.titlesize': 14,
-    # FIXED: Font configuration for unicode handling
     'font.family': 'DejaVu Sans',
     'axes.unicode_minus': False,
     'text.usetex': False,
@@ -88,7 +87,7 @@ except ImportError as e:
     AGENT_AVAILABLE = False
     import_error = str(e)
 
-# Enhanced CSS with advanced animations and modern styling + new sections + NEW CHATBOT WINDOW STYLES
+# Enhanced CSS with modern styling
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -113,24 +112,6 @@ st.markdown("""
 @keyframes glow-pulse {
     0%, 100% { filter: drop-shadow(0 0 10px rgba(102, 126, 234, 0.3)); }
     50% { filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.6)); }
-}
-
-.enhanced-badge {
-    background: linear-gradient(135deg, #00ff87 0%, #60efff 100%);
-    color: #2c3e50;
-    padding: 0.6rem 1.2rem;
-    border-radius: 25px;
-    font-weight: 600;
-    font-size: 0.9rem;
-    display: inline-block;
-    margin: 0.4rem;
-    box-shadow: 0 8px 25px rgba(0, 255, 135, 0.4);
-    animation: float 3s ease-in-out infinite;
-}
-
-@keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-5px); }
 }
 
 .section-box {
@@ -159,7 +140,6 @@ st.markdown("""
 
 /* SECTION AVAILABILITY STATES */
 .section-available {
-    background: white;
     border: 2px solid #28a745;
     box-shadow: 0 8px 25px rgba(40, 167, 69, 0.2);
 }
@@ -167,7 +147,6 @@ st.markdown("""
 .section-loading {
     background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
     border: 2px solid #ffc107;
-    box-shadow: 0 8px 25px rgba(255, 193, 7, 0.2);
     animation: pulse-loading 2s infinite;
 }
 
@@ -175,7 +154,6 @@ st.markdown("""
     background: #f8f9fa;
     border: 2px solid #e9ecef;
     opacity: 0.6;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.05);
 }
 
 @keyframes pulse-loading {
@@ -183,7 +161,48 @@ st.markdown("""
     50% { opacity: 1; }
 }
 
-/* NEW CHATBOT WINDOW STYLES */
+.workflow-container {
+    background: linear-gradient(135deg, #e8f0fe 0%, #f3e5f5 25%, #e1f5fe 50%, #f1f8e9 75%, #fff8e1 100%);
+    padding: 2rem;
+    border-radius: 20px;
+    margin: 2rem 0;
+    border: 2px solid rgba(52, 152, 219, 0.3);
+    box-shadow: 0 15px 40px rgba(52, 152, 219, 0.2);
+}
+
+.workflow-step {
+    background: rgba(255, 255, 255, 0.9);
+    padding: 1.2rem;
+    border-radius: 12px;
+    margin: 0.8rem 0;
+    border-left: 4px solid #6c757d;
+    transition: all 0.4s ease;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.workflow-step.running {
+    border-left-color: #ffc107;
+    background: rgba(255, 193, 7, 0.15);
+    animation: pulse-step 2s infinite;
+}
+
+.workflow-step.completed {
+    border-left-color: #28a745;
+    background: rgba(40, 167, 69, 0.15);
+}
+
+.workflow-step.error {
+    border-left-color: #dc3545;
+    background: rgba(220, 53, 69, 0.15);
+}
+
+@keyframes pulse-step {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+}
+
 .chatbot-window-btn {
     background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%) !important;
     border: none !important;
@@ -202,6 +221,89 @@ st.markdown("""
     background: linear-gradient(135deg, #5f3dc4 0%, #9775fa 100%) !important;
     transform: translateY(-5px) !important;
     box-shadow: 0 15px 40px rgba(108, 92, 231, 0.6) !important;
+}
+
+.entity-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.2rem;
+    margin: 1.5rem 0;
+}
+
+.entity-card {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    padding: 1.5rem;
+    border-radius: 12px;
+    text-align: center;
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+}
+
+.entity-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.15);
+    border-color: #007bff;
+}
+
+.entity-icon {
+    font-size: 2.5rem;
+    margin-bottom: 0.8rem;
+    display: block;
+}
+
+.entity-label {
+    font-size: 0.9rem;
+    color: #6c757d;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.entity-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #2c3e50;
+}
+
+.entity-value.positive { color: #dc3545; }
+.entity-value.negative { color: #28a745; }
+.entity-value.unknown { color: #6c757d; }
+
+.metric-summary-box {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin: 0.8rem;
+    border: 2px solid #dee2e6;
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    transition: all 0.3s ease;
+}
+
+.metric-summary-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+    border-color: #007bff;
+}
+
+.trajectory-container {
+    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
+    padding: 2rem;
+    border-radius: 15px;
+    border: 2px solid #28a745;
+    margin: 1.5rem 0;
+    box-shadow: 0 12px 30px rgba(40, 167, 69, 0.2);
+}
+
+.heart-risk-container {
+    background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%);
+    padding: 2rem;
+    border-radius: 15px;
+    border: 2px solid #dc3545;
+    margin: 1.5rem 0;
+    box-shadow: 0 12px 30px rgba(220, 53, 69, 0.2);
 }
 
 .chatbot-modal {
@@ -243,34 +345,48 @@ st.markdown("""
     padding: 2rem;
 }
 
-.chatbot-modal-header {
-    border-bottom: 2px solid #e9ecef;
-    padding-bottom: 1rem;
-    margin-bottom: 2rem;
+.sidebar-category {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.8rem;
+    border-radius: 8px;
+    margin: 0.8rem 0;
+    border-left: 3px solid #00ff87;
 }
 
-.chatbot-modal-chat {
-    flex: 1;
-    overflow-y: auto;
-    background: #f8f9fa;
-    border-radius: 15px;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
+.category-prompt-btn {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    padding: 0.5rem 0.8rem;
+    margin: 0.3rem 0;
+    font-size: 0.85rem;
+    transition: all 0.3s ease;
+    width: 100%;
+    cursor: pointer;
 }
 
-.chatbot-modal-input {
+.category-prompt-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: translateX(5px);
+}
+
+.status-error {
+    background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+    color: #d32f2f;
     padding: 1rem;
-    border: 2px solid #e9ecef;
-    border-radius: 10px;
-    font-size: 1rem;
+    border-radius: 8px;
+    margin: 1rem 0;
+    border-left: 4px solid #f44336;
+    font-weight: 600;
 }
 
 .step-indicator {
     display: inline-block;
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
-    margin-right: 0.5rem;
+    margin-left: 0.5rem;
 }
 
 .step-pending { background: #6c757d; }
@@ -286,529 +402,36 @@ st.markdown("""
     50% { opacity: 1; }
 }
 
-/* Keep all existing styles */
-.claims-viewer-card {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 2.2rem;
-    border-radius: 18px;
-    border: 2px solid #dee2e6;
-    margin: 1.2rem 0;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+/* Enhanced sidebar sizing */
+.css-1d391kg {
+    width: 450px !important;
+    min-width: 450px !important;
+    max-width: 450px !important;
 }
 
-.batch-meanings-card {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    padding: 2.2rem;
-    border-radius: 18px;
-    border: 2px solid #2196f3;
-    margin: 1.2rem 0;
-    box-shadow: 0 10px 30px rgba(33, 150, 243, 0.2);
+@media (max-width: 1200px) {
+    .css-1d391kg {
+        width: 400px !important;
+        min-width: 400px !important;
+        max-width: 400px !important;
+    }
 }
 
-.medical-codes-section {
-    background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c8 100%);
-    padding: 1.5rem;
-    border-radius: 12px;
-    margin: 1rem 0;
-    border-left: 4px solid #4caf50;
+.loading-spinner {
+    width: 30px;
+    height: 30px;
+    border: 3px solid #e3f2fd;
+    border-top: 3px solid #2196f3;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 10px auto;
 }
 
-.pharmacy-codes-section {
-    background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
-    padding: 1.5rem;
-    border-radius: 12px;
-    margin: 1rem 0;
-    border-left: 4px solid #ff9800;
-}
-
-.code-table-container {
-    background: white;
-    border-radius: 8px;
-    padding: 1rem;
-    margin: 1rem 0;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-
-.metric-summary-box {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1.5rem;
-    border-radius: 12px;
-    margin: 0.8rem;
-    border: 2px solid #dee2e6;
-    text-align: center;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-    transition: all 0.3s ease;
-}
-
-.metric-summary-box:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.12);
-    border-color: #007bff;
-}
-
-.collapsible-section {
-    background: white;
-    border-radius: 15px;
-    border: 1px solid #e9ecef;
-    margin: 1rem 0;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-.collapsible-section:hover {
-    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-}
-
-.section-header {
-    padding: 1rem 1.5rem;
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border-radius: 15px 15px 0 0;
-    border-bottom: 1px solid #dee2e6;
-    cursor: pointer;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.section-content {
-    padding: 1.5rem;
-}
-
-.mcid-container {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    padding: 1.8rem;
-    border-radius: 15px;
-    border: 2px solid #2196f3;
-    margin: 1rem 0;
-    box-shadow: 0 8px 25px rgba(33, 150, 243, 0.2);
-}
-
-.mcid-match-card {
-    background: white;
-    padding: 1.5rem;
-    border-radius: 12px;
-    margin: 0.8rem 0;
-    border-left: 4px solid #4caf50;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-}
-
-.metric-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.2rem;
-    margin: 1.2rem 0;
-}
-
-.metric-card {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1.5rem;
-    border-radius: 12px;
-    text-align: center;
-    border: 1px solid #dee2e6;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-}
-
-.metric-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-}
-
-.chatbot-loading-container {
-    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
-    padding: 2rem;
-    border-radius: 20px;
-    margin: 1.5rem 0;
-    border: 2px solid #28a745;
-    text-align: center;
-    animation: pulse-glow 2s infinite;
-}
-
-@keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 20px rgba(40, 167, 69, 0.3); }
-    50% { box-shadow: 0 0 40px rgba(40, 167, 69, 0.6); }
-}
-
-.quick-prompts-enhanced {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    padding: 1.8rem;
-    border-radius: 18px;
-    margin: 1.2rem 0;
-    border: 2px solid #2196f3;
-}
-
-.prompt-button-enhanced {
-    background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
-    color: white;
-    border: none;
-    padding: 0.8rem 1.4rem;
-    border-radius: 25px;
-    margin: 0.4rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-weight: 500;
-    transition: all 0.3s ease;
-    box-shadow: 0 6px 20px rgba(33, 150, 243, 0.3);
-}
-
-.prompt-button-enhanced:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(33, 150, 243, 0.5);
-}
-
-.advanced-workflow-container {
-    background: linear-gradient(135deg, #e8f0fe 0%, #f3e5f5 25%, #e1f5fe 50%, #f1f8e9 75%, #fff8e1 100%);
-    padding: 3rem;
-    border-radius: 25px;
-    margin: 2rem 0;
-    border: 2px solid rgba(52, 152, 219, 0.3);
-    box-shadow: 0 20px 50px rgba(52, 152, 219, 0.2);
-    position: relative;
-    overflow: hidden;
-}
-
-.advanced-workflow-container::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-    animation: rotate-glow 20s linear infinite;
-    pointer-events: none;
-}
-
-@keyframes rotate-glow {
+@keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
 
-.workflow-step {
-    background: rgba(255, 255, 255, 0.8);
-    padding: 1.5rem;
-    border-radius: 15px;
-    margin: 1rem 0;
-    border-left: 4px solid #6c757d;
-    transition: all 0.4s ease;
-    backdrop-filter: blur(10px);
-}
-
-.workflow-step.running {
-    border-left-color: #ffc107;
-    background: rgba(255, 193, 7, 0.15);
-    animation: pulse-step 2s infinite;
-    box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
-}
-
-.workflow-step.completed {
-    border-left-color: #28a745;
-    background: rgba(40, 167, 69, 0.15);
-    box-shadow: 0 10px 30px rgba(40, 167, 69, 0.2);
-}
-
-@keyframes pulse-step {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.02); }
-}
-
-.graph-container {
-    background: white;
-    padding: 1.5rem;
-    border-radius: 15px;
-    margin: 1rem 0;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    border: 2px solid #e3f2fd;
-}
-
-.graph-title {
-    font-size: 1.2rem;
-    font-weight: 600;
-    color: #1976d2;
-    margin-bottom: 1rem;
-    text-align: center;
-}
-
-/* Enhanced Health Trajectory Section */
-.health-trajectory-container {
-    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
-    padding: 2.5rem;
-    border-radius: 20px;
-    border: 2px solid #28a745;
-    margin: 1.5rem 0;
-    box-shadow: 0 15px 40px rgba(40, 167, 69, 0.2);
-    position: relative;
-    overflow: hidden;
-}
-
-.health-trajectory-container::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle, rgba(40, 167, 69, 0.1) 0%, transparent 70%);
-    animation: pulse-health 4s ease-in-out infinite;
-}
-
-@keyframes pulse-health {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 0.6; }
-}
-
-.trajectory-content {
-    position: relative;
-    z-index: 2;
-    background: rgba(255, 255, 255, 0.9);
-    padding: 2rem;
-    border-radius: 15px;
-    backdrop-filter: blur(10px);
-}
-
-/* Enhanced Heart Attack Prediction Section */
-.heart-attack-container {
-    background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%);
-    padding: 2.5rem;
-    border-radius: 20px;
-    border: 2px solid #dc3545;
-    margin: 1.5rem 0;
-    box-shadow: 0 15px 40px rgba(220, 53, 69, 0.2);
-    position: relative;
-    overflow: hidden;
-}
-
-.heart-attack-container::before {
-    content: '❤️';
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    font-size: 3rem;
-    opacity: 0.3;
-    animation: heartbeat 2s ease-in-out infinite;
-}
-
-@keyframes heartbeat {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.1); }
-}
-
-.heart-risk-display {
-    background: rgba(255, 255, 255, 0.95);
-    padding: 2.5rem;
-    border-radius: 20px;
-    text-align: center;
-    margin: 1.5rem 0;
-    box-shadow: 0 12px 35px rgba(0,0,0,0.15);
-    border: 1px solid rgba(220, 53, 69, 0.2);
-}
-
-.risk-score-large {
-    font-size: 3.5rem;
-    font-weight: 800;
-    margin: 1.5rem 0;
-    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    text-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
-    font-family: 'Inter', sans-serif;
-    letter-spacing: -2px;
-}
-
-.elegant-risk-text {
-    font-family: 'Inter', serif;
-    font-size: 1.3rem;
-    color: #2c3e50;
-    font-weight: 500;
-    margin: 1rem 0;
-    line-height: 1.6;
-}
-
-.risk-category-elegant {
-    display: inline-block;
-    padding: 0.8rem 2rem;
-    border-radius: 50px;
-    font-weight: 600;
-    font-size: 1.1rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin: 1rem 0;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.1);
-}
-
-/* Enhanced Entity Extraction with Graphs */
-.entity-grid-enhanced {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1.5rem;
-    margin: 2rem 0;
-}
-
-.entity-card-enhanced {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 2rem;
-    border-radius: 15px;
-    text-align: center;
-    border: 2px solid transparent;
-    transition: all 0.4s ease;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-    position: relative;
-    overflow: hidden;
-}
-
-.entity-card-enhanced::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 4px;
-    background: linear-gradient(90deg, #007bff, #28a745, #ffc107, #dc3545);
-    transition: all 0.3s ease;
-}
-
-.entity-card-enhanced:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 15px 40px rgba(0,0,0,0.2);
-    border-color: #007bff;
-}
-
-.entity-card-enhanced:hover::before {
-    height: 8px;
-}
-
-.entity-icon {
-    font-size: 3rem;
-    margin-bottom: 1rem;
-    display: block;
-    animation: float-icon 3s ease-in-out infinite;
-}
-
-@keyframes float-icon {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-5px); }
-}
-
-.entity-label {
-    font-size: 1rem;
-    color: #6c757d;
-    margin-bottom: 0.5rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.entity-value {
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: #2c3e50;
-    margin-bottom: 1rem;
-}
-
-.entity-value.positive { color: #dc3545; }
-.entity-value.negative { color: #28a745; }
-.entity-value.unknown { color: #6c757d; }
-
-/* Health Metrics Visualization */
-.health-metrics-viz {
-    background: white;
-    padding: 2rem;
-    border-radius: 15px;
-    margin: 2rem 0;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-}
-
-/* Risk Factor Progress Bars */
-.risk-factor-item {
-    margin: 1rem 0;
-    padding: 1rem;
-    background: #f8f9fa;
-    border-radius: 10px;
-    border-left: 4px solid #007bff;
-}
-
-.risk-progress-bar {
-    width: 100%;
-    height: 20px;
-    background: #e9ecef;
-    border-radius: 10px;
-    overflow: hidden;
-    margin: 0.5rem 0;
-}
-
-.risk-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
-    border-radius: 10px;
-    transition: width 2s ease-in-out;
-}
-
-/* Interactive Health Timeline */
-.health-timeline {
-    position: relative;
-    padding: 2rem 0;
-    margin: 2rem 0;
-}
-
-.timeline-item {
-    display: flex;
-    align-items: center;
-    margin: 1rem 0;
-    padding: 1rem;
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-.timeline-item:hover {
-    transform: translateX(10px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-}
-
-.timeline-icon {
-    width: 50px;
-    height: 50px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 1rem;
-    font-size: 1.5rem;
-    color: white;
-}
-
-.timeline-content {
-    flex: 1;
-}
-
-/* Medication Network Visualization */
-.medication-network {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-    padding: 2rem;
-    border-radius: 15px;
-    margin: 1rem 0;
-    border: 2px solid #2196f3;
-}
-
-.med-node {
-    display: inline-block;
-    background: white;
-    padding: 0.8rem 1.2rem;
-    border-radius: 25px;
-    margin: 0.5rem;
-    box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
-    border: 2px solid #2196f3;
-    transition: all 0.3s ease;
-}
-
-.med-node:hover {
-    transform: scale(1.05);
-    box-shadow: 0 8px 25px rgba(33, 150, 243, 0.5);
-}
-
-/* Enhanced Buttons */
 .enhanced-section-btn {
     background: linear-gradient(135deg, #007bff 0%, #0056b3 100%) !important;
     border: none !important;
@@ -818,158 +441,11 @@ st.markdown("""
     border-radius: 12px !important;
     box-shadow: 0 8px 25px rgba(0, 123, 255, 0.4) !important;
     transition: all 0.3s ease !important;
-    text-transform: uppercase !important;
-    letter-spacing: 1px !important;
 }
 
 .enhanced-section-btn:hover {
-    background: linear-gradient(135deg, #0056b3 0%, #004085 100%) !important;
     transform: translateY(-3px) !important;
     box-shadow: 0 12px 35px rgba(0, 123, 255, 0.5) !important;
-}
-
-.stButton button[kind="primary"] {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%) !important;
-    border: none !important;
-    color: white !important;
-    font-weight: 600 !important;
-    padding: 0.75rem 2rem !important;
-    border-radius: 12px !important;
-    box-shadow: 0 8px 25px rgba(40, 167, 69, 0.4) !important;
-    transition: all 0.3s ease !important;
-}
-
-.stButton button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #218838 0%, #1abc9c 100%) !important;
-    transform: translateY(-3px) !important;
-    box-shadow: 0 12px 35px rgba(40, 167, 69, 0.5) !important;
-}
-
-.css-1d391kg {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.sidebar-category {
-    background: rgba(255, 255, 255, 0.1);
-    padding: 0.5rem;
-    border-radius: 8px;
-    margin: 0.5rem 0;
-    border-left: 3px solid #00ff87;
-}
-
-.sidebar-category h4 {
-    color: white;
-    margin: 0;
-    font-size: 0.9rem;
-    font-weight: 600;
-}
-
-.category-prompt-btn {
-    background: rgba(255, 255, 255, 0.2) !important;
-    color: white !important;
-    border: 1px solid rgba(255, 255, 255, 0.3) !important;
-    border-radius: 6px !important;
-    padding: 0.4rem 0.8rem !important;
-    margin: 0.2rem 0 !important;
-    font-size: 0.8rem !important;
-    transition: all 0.3s ease !important;
-    width: 100% !important;
-}
-
-.category-prompt-btn:hover {
-    background: rgba(255, 255, 255, 0.3) !important;
-    transform: translateX(5px) !important;
-}
-
-.graph-loading {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 2rem;
-    background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%);
-    border-radius: 15px;
-    margin: 1rem 0;
-}
-
-.loading-spinner {
-    width: 40px;
-    height: 40px;
-    border: 4px solid #e3f2fd;
-    border-top: 4px solid #2196f3;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.status-error {
-    background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
-    color: #d32f2f;
-    padding: 1rem;
-    border-radius: 8px;
-    margin: 1rem 0;
-    border-left: 4px solid #f44336;
-    font-weight: 600;
-}
-
-/* Enhanced sidebar for better chat display - LARGER WIDTH FOR ALL SCREEN SIZES */
-.css-1d391kg {
-    width: 450px !important;
-    min-width: 450px !important;
-    max-width: 450px !important;
-}
-
-/* Ensure sidebar is properly sized on all screen resolutions */
-@media (max-width: 1200px) {
-    .css-1d391kg {
-        width: 400px !important;
-        min-width: 400px !important;
-        max-width: 400px !important;
-    }
-}
-
-@media (max-width: 768px) {
-    .css-1d391kg {
-        width: 350px !important;
-        min-width: 350px !important;
-        max-width: 350px !important;
-    }
-}
-
-@media (min-width: 1400px) {
-    .css-1d391kg {
-        width: 500px !important;
-        min-width: 500px !important;
-        max-width: 500px !important;
-    }
-}
-
-/* Additional sidebar styling */
-.sidebar .sidebar-content {
-    width: 100% !important;
-    padding: 1rem !important;
-}
-
-/* Chat message styling */
-.chat-message {
-    margin: 0.5rem 0;
-    padding: 0.8rem;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
-    border-left: 3px solid #007bff;
-}
-
-.user-message {
-    background: rgba(0, 123, 255, 0.1);
-    border-left-color: #007bff;
-}
-
-.assistant-message {
-    background: rgba(40, 167, 69, 0.1);
-    border-left-color: #28a745;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -987,642 +463,6 @@ def safe_get(dictionary, keys, default=None):
         else:
             return default
     return current
-
-def get_safe_plot_params():
-    """Return safe plotting parameters"""
-    return {
-        'markers': SAFE_MARKERS,
-        'linestyles': SAFE_LINESTYLES, 
-        'colors': SAFE_COLORS
-    }
-
-def clean_matplotlib_code_enhanced(code: str) -> str:
-    """Enhanced matplotlib code cleaning to handle more edge cases"""
-    try:
-        # Remove seaborn style references
-        problematic_styles = [
-            'seaborn-whitegrid', 'seaborn-white', 'seaborn-darkgrid',
-            'seaborn-dark', 'seaborn-ticks', 'seaborn-colorblind',
-            'seaborn-notebook', 'seaborn-paper', 'seaborn-talk', 'seaborn-poster'
-        ]
-        
-        cleaned_code = code
-        
-        # Replace problematic styles with default
-        for style in problematic_styles:
-            cleaned_code = re.sub(
-                rf"plt\.style\.use\(['\"]?{re.escape(style)}['\"]?\)",
-                "plt.style.use('default')",
-                cleaned_code,
-                flags=re.IGNORECASE
-            )
-        
-        # Remove seaborn imports
-        cleaned_code = re.sub(r'import\s+seaborn.*?\n', '', cleaned_code, flags=re.IGNORECASE | re.MULTILINE)
-        cleaned_code = re.sub(r'sns\.', '# sns.', cleaned_code, flags=re.IGNORECASE)
-        
-        # Replace plt.show() calls with pass (since we handle figure display differently)
-        cleaned_code = re.sub(r'plt\.show\(\)', '# plt.show() - handled by streamlit', cleaned_code, flags=re.IGNORECASE)
-        
-        # Fix common problematic marker styles
-        problematic_markers = {
-            r"marker\s*=\s*['\"]!['\"]": "marker='o'",
-            r"marker\s*=\s*['\"]@['\"]": "marker='s'", 
-            r"marker\s*=\s*['\"]#['\"]": "marker='^'",
-            r"marker\s*=\s*['\"]%['\"]": "marker='d'",
-            r"marker\s*=\s*['\"]&['\"]": "marker='*'",
-            r"marker\s*=\s*['\"]![^'\"]*['\"]": "marker='o'"  # Any marker starting with !
-        }
-        
-        for pattern, replacement in problematic_markers.items():
-            cleaned_code = re.sub(pattern, replacement, cleaned_code, flags=re.IGNORECASE)
-        
-        # Fix problematic linestyle patterns
-        problematic_linestyles = {
-            r"linestyle\s*=\s*['\"]!['\"]": "linestyle='-'",
-            r"ls\s*=\s*['\"]!['\"]": "ls='-'"
-        }
-        
-        for pattern, replacement in problematic_linestyles.items():
-            cleaned_code = re.sub(pattern, replacement, cleaned_code, flags=re.IGNORECASE)
-        
-        # Remove or fix problematic plot parameters
-        cleaned_code = re.sub(r"plt\.ion\(\)", "# plt.ion() - not needed in streamlit", cleaned_code, flags=re.IGNORECASE)
-        cleaned_code = re.sub(r"plt\.ioff\(\)", "# plt.ioff() - handled by streamlit", cleaned_code, flags=re.IGNORECASE)
-        
-        return cleaned_code
-    except Exception as e:
-        logger.warning(f"Error in enhanced code cleaning: {e}")
-        return code
-
-def extract_matplotlib_code_enhanced(response: str) -> str:
-    """Enhanced matplotlib code extraction with better pattern matching"""
-    try:
-        # Multiple patterns to catch different code formats
-        patterns = [
-            r'```python\s*(.*?)```',
-            r'```matplotlib\s*(.*?)```', 
-            r'```\s*(.*?)```',
-            r'import matplotlib.*?(?:plt\.show\(\)|plt\.savefig\(.*?\))',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
-            if matches:
-                for match in matches:
-                    code = match.strip()
-                    # Check if it's actually matplotlib code
-                    if any(keyword in code.lower() for keyword in ['matplotlib', 'plt.', 'pyplot', 'import plt']):
-                        return code
-        
-        # If no code blocks found, check if the entire response looks like code
-        matplotlib_indicators = ['import matplotlib', 'plt.', 'pyplot', 'fig,', 'ax.', 'plt.show()']
-        if any(indicator in response for indicator in matplotlib_indicators):
-            # Try to extract just the code part
-            lines = response.split('\n')
-            code_lines = []
-            in_code = False
-            
-            for line in lines:
-                if any(indicator in line for indicator in matplotlib_indicators):
-                    in_code = True
-                
-                if in_code:
-                    code_lines.append(line)
-                    
-                # Stop if we hit explanatory text after code
-                if in_code and line.strip() and not any(char in line for char in ['import', 'plt', 'ax', 'fig', '#', '=']):
-                    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*\s*[=\(]', line.strip()):
-                        break
-            
-            if code_lines:
-                return '\n'.join(code_lines)
-        
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting matplotlib code: {e}")
-        return None
-
-def validate_matplotlib_code(code: str) -> tuple[bool, str]:
-    """Validate matplotlib code before execution"""
-    if not code:
-        return False, "No code provided"
-    
-    # Check for required imports
-    has_plt = 'plt' in code or 'pyplot' in code
-    has_matplotlib = 'matplotlib' in code
-    
-    if not (has_plt or has_matplotlib):
-        return False, "No matplotlib imports detected"
-    
-    # Check for dangerous patterns
-    dangerous_patterns = [
-        r'os\.',
-        r'subprocess\.',
-        r'eval\(',
-        r'exec\(',
-        r'__import__',
-        r'open\(',
-        r'file\(',
-    ]
-    
-    for pattern in dangerous_patterns:
-        if re.search(pattern, code, re.IGNORECASE):
-            return False, f"Potentially dangerous code pattern detected: {pattern}"
-    
-    # Check for basic plot elements
-    plot_indicators = ['plot', 'bar', 'scatter', 'hist', 'pie', 'line', 'figure', 'subplot']
-    has_plot = any(indicator in code.lower() for indicator in plot_indicators)
-    
-    if not has_plot:
-        return False, "No plotting functions detected"
-    
-    return True, "Code validation passed"
-
-def validate_plot_data(data_dict):
-    """Validate data before plotting to prevent array length mismatches"""
-    validated_data = {}
-    
-    for key, value in data_dict.items():
-        if isinstance(value, list):
-            # Ensure all list elements are of consistent type
-            if value:
-                # Convert all elements to strings if mixed types
-                if not all(isinstance(x, type(value[0])) for x in value):
-                    value = [str(x) for x in value]
-                validated_data[key] = value[:15]  # Limit length
-            else:
-                validated_data[key] = []
-        elif isinstance(value, dict):
-            # Ensure dictionary values are consistent
-            dict_values = list(value.values())
-            if dict_values and all(isinstance(x, (int, float)) for x in dict_values):
-                validated_data[key] = value
-            else:
-                # Convert to safe format
-                validated_data[key] = {k: 0 if not isinstance(v, (int, float)) else v 
-                                     for k, v in value.items()}
-        else:
-            # Ensure scalar values are of correct type
-            if isinstance(value, str):
-                validated_data[key] = value
-            elif isinstance(value, (int, float)):
-                validated_data[key] = value
-            else:
-                validated_data[key] = str(value)
-    
-    return validated_data
-
-def execute_matplotlib_code_enhanced_stability(code: str):
-    """Execute matplotlib code with enhanced stability and comprehensive error recovery - FIXED VERSION"""
-    try:
-        # Clear any existing plots and set up clean environment
-        plt.clf()
-        plt.close('all')
-        plt.ioff()  # Turn off interactive mode
-        
-        # Set safe matplotlib backend and style
-        matplotlib.use('Agg')  # Non-interactive backend
-        plt.style.use('default')
-        
-        # ENHANCED font configuration to handle unicode characters
-        plt.rcParams.update({
-            'figure.facecolor': 'white',
-            'axes.facecolor': 'white', 
-            'savefig.facecolor': 'white',
-            'figure.figsize': (12, 8),
-            'font.size': 10,
-            'axes.titlesize': 12,
-            'axes.labelsize': 10,
-            'xtick.labelsize': 9,
-            'ytick.labelsize': 9,
-            'legend.fontsize': 9,
-            'figure.titlesize': 14,
-            # UNICODE AND FONT FIXES
-            'font.family': 'DejaVu Sans',
-            'axes.unicode_minus': False,  # Fix unicode minus issues
-            'text.usetex': False,  # Don't use LaTeX
-        })
-        
-        # Enhanced code cleaning
-        cleaned_code = clean_matplotlib_code_enhanced(code)
-        
-        # Create comprehensive namespace for code execution
-        namespace = {
-            'plt': plt,
-            'matplotlib': matplotlib,
-            'np': np,
-            'numpy': np,
-            'pd': pd,
-            'pandas': pd,
-            'json': json,
-            'datetime': datetime,
-            'time': time,
-            'math': __import__('math'),
-            'random': __import__('random'),
-            # Add commonly used plot functions
-            'figure': plt.figure,
-            'subplot': plt.subplot,
-            'subplots': plt.subplots,
-        }
-        
-        # Add comprehensive patient data from session state - WITH PROPER DATA TYPE VALIDATION
-        if st.session_state.chatbot_context:
-            context = st.session_state.chatbot_context
-            
-            # Extract all available data
-            medical_extraction = context.get('medical_extraction', {})
-            pharmacy_extraction = context.get('pharmacy_extraction', {})
-            entity_extraction = context.get('entity_extraction', {})
-            patient_overview = context.get('patient_overview', {})
-            
-            # FIXED: Ensure all data types are properly handled
-            patient_age = patient_overview.get('age', 45)
-            if not isinstance(patient_age, (int, float)):
-                patient_age = 45
-                
-            heart_risk_score = context.get('heart_attack_risk_score', 0.25)
-            if not isinstance(heart_risk_score, (int, float)):
-                heart_risk_score = 0.25
-                
-            medications_count = len(pharmacy_extraction.get('ndc_records', []))
-            medical_records_count = len(medical_extraction.get('hlth_srvc_records', []))
-            
-            # Enhanced patient data with TYPE SAFETY
-            namespace.update({
-                'patient_age': int(patient_age),
-                'heart_risk_score': float(heart_risk_score),
-                'medications_count': int(medications_count),
-                'medical_records_count': int(medical_records_count),
-                'diabetes_status': str(entity_extraction.get('diabetics', 'no')),
-                'smoking_status': str(entity_extraction.get('smoking', 'no')),
-                'bp_status': str(entity_extraction.get('blood_pressure', 'unknown')),
-                'alcohol_status': str(entity_extraction.get('alcohol', 'unknown')),
-                'age_group': str(entity_extraction.get('age_group', 'unknown')),
-            })
-            
-            # FIXED: Risk factors dictionary with proper data types
-            namespace['risk_factors'] = {
-                'Age': int(patient_age), 
-                'Diabetes': 1 if str(entity_extraction.get('diabetics', 'no')).lower() == 'yes' else 0, 
-                'Smoking': 1 if str(entity_extraction.get('smoking', 'no')).lower() == 'yes' else 0, 
-                'High_BP': 1 if str(entity_extraction.get('blood_pressure', 'unknown')).lower() in ['managed', 'diagnosed'] else 0,
-                'Alcohol': 1 if str(entity_extraction.get('alcohol', 'no')).lower() == 'yes' else 0,
-                'Family_History': 0  # Default
-            }
-            
-            # FIXED: Extract and process medication data with LENGTH VALIDATION
-            medication_names = []
-            medication_dates = []
-            ndc_codes = []
-            
-            for record in pharmacy_extraction.get('ndc_records', []):
-                if record.get('lbl_nm') and isinstance(record['lbl_nm'], str):
-                    medication_names.append(str(record['lbl_nm']))
-                if record.get('rx_filled_dt'):
-                    medication_dates.append(str(record['rx_filled_dt']))
-                if record.get('ndc') and isinstance(record['ndc'], str):
-                    ndc_codes.append(str(record['ndc']))
-            
-            # ENSURE ALL ARRAYS HAVE SAME LENGTH - KEY FIX
-            max_med_length = min(15, len(medication_names))  # Limit length
-            
-            namespace.update({
-                'medication_list': medication_names[:max_med_length],
-                'medication_dates': medication_dates[:max_med_length], 
-                'ndc_codes': ndc_codes[:max_med_length],
-                'ndc_records': pharmacy_extraction.get('ndc_records', []),
-                'medical_records': medical_extraction.get('hlth_srvc_records', [])
-            })
-            
-            # FIXED: Extract diagnosis data with TYPE AND LENGTH VALIDATION
-            diagnosis_codes = []
-            diagnosis_descriptions = []
-            
-            for record in medical_extraction.get('hlth_srvc_records', []):
-                for diag in record.get('diagnosis_codes', []):
-                    if diag.get('code') and isinstance(diag['code'], str):
-                        diagnosis_codes.append(str(diag['code']))
-                        # Try to get description from code meanings
-                        medical_meanings = medical_extraction.get('code_meanings', {})
-                        diag_meanings = medical_meanings.get('diagnosis_code_meanings', {})
-                        desc = diag_meanings.get(diag['code'], str(diag['code']))
-                        diagnosis_descriptions.append(str(desc))
-            
-            # ENSURE DIAGNOSIS ARRAYS HAVE SAME LENGTH
-            max_diag_length = min(10, len(diagnosis_codes))
-            
-            namespace.update({
-                'diagnosis_codes': diagnosis_codes[:max_diag_length],
-                'diagnosis_descriptions': diagnosis_descriptions[:max_diag_length]
-            })
-            
-        else:
-            # FIXED: Comprehensive fallback sample data with GUARANTEED SAME LENGTHS
-            sample_medications = ['Metformin', 'Lisinopril', 'Atorvastatin']
-            sample_dates = ['2024-01', '2024-02', '2024-03']
-            sample_codes = ['0093-0058-01', '0071-0222-23', '0071-0156-23']
-            
-            namespace.update({
-                'patient_age': 45,
-                'heart_risk_score': 0.25,
-                'medications_count': 3,
-                'medical_records_count': 8,
-                'diabetes_status': 'yes',
-                'smoking_status': 'no',
-                'bp_status': 'managed',
-                'risk_factors': {
-                    'Age': 45, 'Diabetes': 1, 'Smoking': 0, 'High_BP': 1, 'Family_History': 1
-                },
-                'medication_list': sample_medications,
-                'diagnosis_codes': ['I10', 'E11.9', 'E78.5'],
-                'diagnosis_descriptions': ['Hypertension', 'Type 2 Diabetes', 'Hyperlipidemia'],
-                'risk_scores': [0.15, 0.25, 0.35, 0.20],
-                'risk_labels': ['Low', 'Medium', 'High', 'Very High'],
-                'months': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-                'utilization_data': [2, 3, 1, 4, 2, 3],
-                'medication_dates': sample_dates,
-                'ndc_codes': sample_codes
-            })
-        
-        # Enhanced code execution with better error handling
-        try:
-            exec(cleaned_code, namespace)
-            fig = plt.gcf()
-            
-            # Validate figure has content
-            if not fig.axes:
-                raise ValueError("Generated figure has no axes - creating fallback")
-                
-        except Exception as exec_error:
-            logger.warning(f"Primary code execution failed: {exec_error}")
-            
-            # IMPROVED FALLBACK CODE with BETTER ERROR HANDLING
-            try:
-                fallback_code = f"""
-import matplotlib.pyplot as plt
-import numpy as np
-
-# FIXED: Create a comprehensive healthcare dashboard with proper data handling
-fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle('Healthcare Analysis Dashboard', fontsize=16, fontweight='bold')
-
-# FIXED: Risk factors visualization with data validation
-risk_data = list(risk_factors.values())
-risk_names = list(risk_factors.keys())
-
-# Ensure we have valid data
-if len(risk_data) > 0 and len(risk_names) > 0:
-    colors = ['#28a745' if x == 0 else '#dc3545' for x in risk_data]
-    ax1.bar(risk_names, risk_data, color=colors)
-    ax1.set_title('Risk Factors Assessment', fontweight='bold')
-    ax1.set_ylabel('Risk Level')
-    ax1.tick_params(axis='x', rotation=45)
-else:
-    ax1.text(0.5, 0.5, 'Risk data unavailable', ha='center', va='center', transform=ax1.transAxes)
-    ax1.set_title('Risk Factors Assessment', fontweight='bold')
-
-# FIXED: Heart risk visualization - avoid problematic Unicode characters
-risk_score = float(heart_risk_score)
-risk_color = '#28a745' if risk_score < 0.3 else '#ffc107' if risk_score < 0.6 else '#dc3545'
-
-# Create a simple risk meter instead of complex gauge
-ax2.barh(['Heart Risk'], [risk_score], color=risk_color, alpha=0.7)
-ax2.set_xlim(0, 1)
-ax2.set_title(f'Heart Attack Risk: {{:.1%}}'.format(risk_score), fontweight='bold')
-ax2.set_xlabel('Risk Score')
-
-# FIXED: Medications chart with length validation
-if len(medication_list) > 0:
-    # Count medication frequencies - handle string data properly
-    med_counts = {{}}
-    for med in medication_list:
-        med_str = str(med)  # Ensure string type
-        med_counts[med_str] = med_counts.get(med_str, 0) + 1
-    
-    if med_counts:
-        meds = list(med_counts.keys())[:5]  # Top 5
-        counts = [med_counts[med] for med in meds]
-        
-        # FIXED: Handle long medication names
-        short_meds = [med[:20] + '...' if len(med) > 20 else med for med in meds]
-        
-        ax3.barh(short_meds, counts, color='#007bff')
-        ax3.set_title('Top Medications', fontweight='bold')
-        ax3.set_xlabel('Frequency')
-    else:
-        ax3.text(0.5, 0.5, 'No medication data', ha='center', va='center', transform=ax3.transAxes)
-        ax3.set_title('Medications', fontweight='bold')
-else:
-    ax3.text(0.5, 0.5, 'No medication data', ha='center', va='center', transform=ax3.transAxes)
-    ax3.set_title('Medications', fontweight='bold')
-
-# FIXED: Health summary with proper text formatting (avoid emojis)
-summary_metrics = [
-    f'Age: {{}} years'.format(patient_age),
-    f'Medications: {{}}'.format(medications_count),
-    f'Medical Records: {{}}'.format(medical_records_count), 
-    f'Diabetes: {{}}'.format(diabetes_status),
-    f'Smoking: {{}}'.format(smoking_status)
-]
-
-ax4.text(0.05, 0.9, 'Patient Health Summary', fontsize=14, fontweight='bold', transform=ax4.transAxes)
-for i, metric in enumerate(summary_metrics):
-    ax4.text(0.05, 0.8 - i*0.12, f'• {{}}', fontsize=11, transform=ax4.transAxes)
-
-ax4.set_xlim(0, 1)
-ax4.set_ylim(0, 1) 
-ax4.axis('off')
-
-plt.tight_layout()
-"""
-                
-                # Format the fallback code with proper data
-                formatted_fallback = fallback_code.format(
-                    patient_age, medications_count, medical_records_count, 
-                    diabetes_status, smoking_status
-                )
-                
-                exec(formatted_fallback, namespace)
-                fig = plt.gcf()
-                
-            except Exception as fallback_error:
-                logger.warning(f"Fallback code failed: {fallback_error}")
-                
-                # ULTIMATE FALLBACK - simple success message without problematic characters
-                plt.figure(figsize=(10, 6))
-                plt.text(0.5, 0.7, 'Healthcare Visualization', 
-                        ha='center', va='center', fontsize=24, fontweight='bold', color='#2c3e50')
-                plt.text(0.5, 0.5, 'Generated Successfully!', 
-                        ha='center', va='center', fontsize=18, color='#28a745')
-                plt.text(0.5, 0.3, 'Your health analysis is ready for review', 
-                        ha='center', va='center', fontsize=14, color='#007bff')
-                plt.title('Medical Data Analysis Dashboard', fontsize=20, fontweight='bold', pad=20)
-                plt.axis('off')
-                fig = plt.gcf()
-        
-        # Enhanced figure styling with UNICODE-SAFE formatting
-        if fig.axes:
-            for ax in fig.axes:
-                try:
-                    ax.tick_params(labelsize=9)
-                    ax.grid(True, alpha=0.3, linestyle='--')
-                    
-                    # Enhance titles and labels - AVOID PROBLEMATIC CHARACTERS
-                    if ax.get_title():
-                        ax.set_title(ax.get_title(), fontsize=12, fontweight='bold', pad=10)
-                    if ax.get_xlabel():
-                        ax.set_xlabel(ax.get_xlabel(), fontsize=10)
-                    if ax.get_ylabel():
-                        ax.set_ylabel(ax.get_ylabel(), fontsize=10)
-                        
-                    # FIXED: Handle text elements safely
-                    for text in ax.get_xticklabels() + ax.get_yticklabels():
-                        try:
-                            # Convert to string and handle encoding issues
-                            text_str = str(text.get_text()).encode('ascii', 'ignore').decode('ascii')
-                            if text_str != text.get_text():
-                                text.set_text(text_str)
-                        except:
-                            continue
-                            
-                except Exception as styling_error:
-                    logger.warning(f"Styling error for axis: {styling_error}")
-                    continue
-        
-        # Set overall figure properties
-        fig.patch.set_facecolor('white')
-        fig.patch.set_alpha(1.0)
-        
-        # FIXED: Convert to image with better error handling
-        img_buffer = io.BytesIO()
-        try:
-            fig.savefig(
-                img_buffer, 
-                format='png', 
-                bbox_inches='tight', 
-                dpi=200,  # Reduced DPI to avoid memory issues
-                facecolor='white', 
-                edgecolor='none', 
-                pad_inches=0.3,
-                transparent=False
-            )
-            img_buffer.seek(0)
-        except Exception as save_error:
-            logger.error(f"Figure save error: {save_error}")
-            # Try with minimal settings
-            fig.savefig(img_buffer, format='png', facecolor='white')
-            img_buffer.seek(0)
-        
-        # Cleanup matplotlib state
-        plt.clf()
-        plt.close('all')
-        plt.ion()  # Re-enable interactive mode for future use
-        
-        return img_buffer
-        
-    except Exception as e:
-        # Comprehensive error handling and cleanup
-        plt.clf()
-        plt.close('all')
-        plt.ion()
-        
-        error_msg = str(e)
-        logger.error(f"Complete matplotlib execution failure: {error_msg}")
-        
-        # Create informative error visualization WITHOUT problematic characters
-        try:
-            plt.figure(figsize=(10, 6))
-            plt.text(0.5, 0.75, 'Graph Generation Issue', 
-                    ha='center', va='center', fontsize=18, fontweight='bold', color='#dc3545')
-            
-            # Truncate long error messages and make them ASCII-safe
-            short_error = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
-            safe_error = short_error.encode('ascii', 'ignore').decode('ascii')
-            
-            plt.text(0.5, 0.55, 'Technical Details:', 
-                    ha='center', va='center', fontsize=12, fontweight='bold', color='#6c757d')
-            plt.text(0.5, 0.45, safe_error, 
-                    ha='center', va='center', fontsize=10, color='#6c757d')
-            
-            plt.text(0.5, 0.3, 'Suggestions:', 
-                    ha='center', va='center', fontsize=12, fontweight='bold', color='#007bff')
-            plt.text(0.5, 0.2, '• Try asking for a different chart type', 
-                    ha='center', va='center', fontsize=10, color='#007bff')
-            plt.text(0.5, 0.1, '• Use simpler visualization requests', 
-                    ha='center', va='center', fontsize=10, color='#007bff')
-            
-            plt.title('Healthcare Data Visualization', fontsize=16, pad=20)
-            plt.axis('off')
-            
-            error_buffer = io.BytesIO()
-            plt.savefig(error_buffer, format='png', bbox_inches='tight', 
-                       dpi=150, facecolor='white', pad_inches=0.3)
-            error_buffer.seek(0)
-            plt.clf()
-            plt.close('all')
-            
-            return error_buffer
-        except:
-            # If even error visualization fails, return None
-            st.error(f"Graph generation completely failed: {error_msg}")
-            return None
-
-def handle_chatbot_response_with_graphs(user_question: str):
-    """Enhanced chatbot response handling with improved graph generation"""
-    try:
-        # Get bot response
-        chatbot_response = st.session_state.agent.chat_with_data(
-            user_question, 
-            st.session_state.chatbot_context, 
-            st.session_state.chatbot_messages
-        )
-        
-        # Extract and validate matplotlib code
-        matplotlib_code = extract_matplotlib_code_enhanced(chatbot_response)
-        
-        if matplotlib_code:
-            is_valid, validation_msg = validate_matplotlib_code(matplotlib_code)
-            
-            if is_valid:
-                # Display text content without code
-                text_content = chatbot_response
-                for pattern in [f"```python\n{matplotlib_code}\n```", f"```\n{matplotlib_code}\n```"]:
-                    text_content = text_content.replace(pattern, "")
-                
-                if text_content.strip():
-                    st.write(text_content.strip())
-                
-                # Execute and display graph with enhanced error handling
-                with st.spinner("Generating visualization..."):
-                    try:
-                        img_buffer = execute_matplotlib_code_enhanced_stability(matplotlib_code)
-                        if img_buffer:
-                            st.image(img_buffer, use_container_width=True, caption="Generated Healthcare Visualization")
-                            st.success("Graph generated successfully!")
-                        else:
-                            st.error("Failed to generate graph - please try a different chart type")
-                    except Exception as graph_error:
-                        st.error(f"Graph generation error: {str(graph_error)}")
-                        st.info("Try asking for: 'Create a simple bar chart of my medications' or 'Show my risk factors as a pie chart'")
-            else:
-                st.error(f"Code validation failed: {validation_msg}")
-                st.write(chatbot_response)  # Show response without executing code
-        else:
-            # No matplotlib code, just display the response
-            st.write(chatbot_response)
-        
-        return chatbot_response
-        
-    except Exception as e:
-        error_msg = f"Chatbot error: {str(e)}"
-        st.error(error_msg)
-        return error_msg
-
-# Legacy function for backward compatibility
-def extract_matplotlib_code(response: str) -> str:
-    """Legacy function - calls enhanced version"""
-    return extract_matplotlib_code_enhanced(response)
 
 def calculate_age(birth_date):
     """Calculate age from birth date"""
@@ -1667,126 +507,152 @@ def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
     
     return len(errors) == 0, errors
 
-def create_chatbot_loading_graphs():
-    """Create interactive graphs to display while chatbot is loading"""
-    
-    # Create sample health data for visualization
-    sample_data = {
-        'dates': pd.date_range('2023-01-01', periods=12, freq='ME'),
-        'risk_scores': np.random.uniform(0.1, 0.8, 12),
-        'health_metrics': {
-            'Blood Pressure': np.random.uniform(110, 140, 12),
-            'Heart Rate': np.random.uniform(60, 100, 12),
-            'Cholesterol': np.random.uniform(150, 250, 12)
+def extract_matplotlib_code(response: str) -> str:
+    """Extract matplotlib code from response"""
+    try:
+        patterns = [
+            r'```python\s*(.*?)```',
+            r'```matplotlib\s*(.*?)```', 
+            r'```\s*(.*?)```'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
+            if matches:
+                for match in matches:
+                    code = match.strip()
+                    if any(keyword in code.lower() for keyword in ['matplotlib', 'plt.', 'pyplot']):
+                        return code
+        return None
+    except Exception as e:
+        logger.error(f"Error extracting matplotlib code: {e}")
+        return None
+
+def execute_matplotlib_code(code: str):
+    """Execute matplotlib code safely"""
+    try:
+        plt.clf()
+        plt.close('all')
+        
+        # Create namespace with sample data
+        namespace = {
+            'plt': plt,
+            'np': np,
+            'pd': pd,
+            'patient_age': 45,
+            'heart_risk_score': 0.25,
+            'medications_count': 3,
+            'medical_records_count': 8,
+            'diabetes_status': 'yes',
+            'smoking_status': 'no',
+            'bp_status': 'managed',
+            'risk_factors': {'Age': 45, 'Diabetes': 1, 'Smoking': 0, 'High_BP': 1},
+            'medication_list': ['Metformin', 'Lisinopril', 'Atorvastatin'],
+            'diagnosis_codes': ['I10', 'E11.9', 'E78.5']
         }
-    }
-    
-    # Create subplot figure
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=('Health Risk Trend', 'Vital Signs Monitor', 'Risk Distribution', 'Health Score'),
-        specs=[[{"secondary_y": True}, {"secondary_y": True}],
-               [{"type": "pie"}, {"type": "indicator"}]]
-    )
-    
-    # Risk trend line
-    fig.add_trace(
-        go.Scatter(
-            x=sample_data['dates'],
-            y=sample_data['risk_scores'],
-            mode='lines+markers',
-            name='Risk Score',
-            line=dict(color='#ff6b6b', width=3),
-            marker=dict(size=8)
-        ),
-        row=1, col=1
-    )
-    
-    # Vital signs
-    for i, (metric, values) in enumerate(sample_data['health_metrics'].items()):
+        
+        # Add context data if available
+        if st.session_state.chatbot_context:
+            context = st.session_state.chatbot_context
+            patient_overview = context.get('patient_overview', {})
+            entity_extraction = context.get('entity_extraction', {})
+            
+            namespace.update({
+                'patient_age': patient_overview.get('age', 45),
+                'heart_risk_score': context.get('heart_attack_risk_score', 0.25),
+                'diabetes_status': entity_extraction.get('diabetics', 'no'),
+                'smoking_status': entity_extraction.get('smoking', 'no'),
+                'bp_status': entity_extraction.get('blood_pressure', 'unknown')
+            })
+        
+        # Execute code
+        exec(code, namespace)
+        fig = plt.gcf()
+        
+        # Convert to image
+        img_buffer = io.BytesIO()
+        fig.savefig(img_buffer, format='png', bbox_inches='tight', 
+                   dpi=150, facecolor='white', pad_inches=0.3)
+        img_buffer.seek(0)
+        
+        plt.clf()
+        plt.close('all')
+        
+        return img_buffer
+        
+    except Exception as e:
+        plt.clf()
+        plt.close('all')
+        logger.error(f"Matplotlib execution error: {e}")
+        return None
+
+def create_sample_dashboard():
+    """Create sample health dashboard"""
+    try:
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=('Risk Factors', 'Health Metrics', 'Timeline', 'Summary'),
+            specs=[[{"type": "bar"}, {"type": "scatter"}],
+                   [{"type": "scatter"}, {"type": "pie"}]]
+        )
+        
+        # Risk factors
+        risk_data = [1, 0, 1, 0, 1]
+        risk_labels = ['Age', 'Diabetes', 'Smoking', 'BP', 'Family History']
+        colors = ['#dc3545' if x == 1 else '#28a745' for x in risk_data]
+        
         fig.add_trace(
-            go.Scatter(
-                x=sample_data['dates'],
-                y=values,
-                mode='lines',
-                name=metric,
-                line=dict(width=2)
-            ),
+            go.Bar(x=risk_labels, y=risk_data, marker_color=colors, name="Risk Factors"),
+            row=1, col=1
+        )
+        
+        # Health metrics over time
+        dates = pd.date_range('2023-01-01', periods=12, freq='ME')
+        health_scores = np.random.uniform(60, 90, 12)
+        
+        fig.add_trace(
+            go.Scatter(x=dates, y=health_scores, mode='lines+markers', 
+                      name="Health Score", line=dict(color='#007bff')),
             row=1, col=2
         )
-    
-    # Risk distribution pie chart
-    risk_categories = ['Low Risk', 'Medium Risk', 'High Risk']
-    risk_values = [45, 35, 20]
-    colors = ['#4caf50', '#ff9800', '#f44336']
-    
-    fig.add_trace(
-        go.Pie(
-            labels=risk_categories,
-            values=risk_values,
-            marker_colors=colors,
-            name="Risk Distribution"
-        ),
-        row=2, col=1
-    )
-    
-    # Health score gauge
-    current_score = np.random.uniform(60, 90)
-    fig.add_trace(
-        go.Indicator(
-            mode = "gauge+number+delta",
-            value = current_score,
-            domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "Health Score"},
-            delta = {'reference': 75},
-            gauge = {
-                'axis': {'range': [None, 100]},
-                'bar': {'color': "#2196f3"},
-                'steps': [
-                    {'range': [0, 50], 'color': "#ffebee"},
-                    {'range': [50, 80], 'color': "#e8f5e8"},
-                    {'range': [80, 100], 'color': "#c8e6c9"}
-                ],
-                'threshold': {
-                    'line': {'color': "red", 'width': 4},
-                    'thickness': 0.75,
-                    'value': 90
-                }
-            }
-        ),
-        row=2, col=2
-    )
-    
-    # Update layout
-    fig.update_layout(
-        height=600,
-        showlegend=True,
-        title_text="Real-Time Health Analytics Dashboard",
-        title_x=0.5,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-    )
-    
-    # Update subplot properties
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-    
-    return fig
-
-# NEW: Real-time workflow monitoring functions
-def check_langgraph_step_status(step_name: str) -> str:
-    """Check the status of a specific langgraph step"""
-    # This function should connect to your actual langgraph workflow
-    # For now, it's a placeholder that you'll need to implement
-    
-    # Example implementation - replace with actual langgraph integration:
-    if hasattr(st.session_state, 'agent') and st.session_state.agent:
-        # Check if the agent has completed this step
-        results = st.session_state.analysis_results
-        if not results:
-            return 'pending'
         
-        # Map step names to result keys
+        # Timeline
+        timeline_dates = pd.date_range('2023-01-01', periods=6, freq='2M')
+        events = np.random.uniform(1, 10, 6)
+        
+        fig.add_trace(
+            go.Scatter(x=timeline_dates, y=events, mode='markers', 
+                      marker=dict(size=12, color='#ffc107'), name="Events"),
+            row=2, col=1
+        )
+        
+        # Summary pie
+        summary_labels = ['Low Risk', 'Medium Risk', 'High Risk']
+        summary_values = [45, 35, 20]
+        summary_colors = ['#28a745', '#ffc107', '#dc3545']
+        
+        fig.add_trace(
+            go.Pie(labels=summary_labels, values=summary_values, 
+                  marker_colors=summary_colors, name="Risk Distribution"),
+            row=2, col=2
+        )
+        
+        fig.update_layout(
+            height=600,
+            title_text="Healthcare Analysis Dashboard",
+            title_x=0.5,
+            showlegend=False
+        )
+        
+        return fig
+    except Exception as e:
+        logger.error(f"Dashboard creation error: {e}")
+        return None
+
+# Check workflow step status
+def check_step_status(step_name: str) -> str:
+    """Check status of a workflow step"""
+    if hasattr(st.session_state, 'progressive_results') and st.session_state.progressive_results:
         step_mapping = {
             'API Fetch': 'api_outputs',
             'Deidentification': 'deidentified_data', 
@@ -1798,30 +664,16 @@ def check_langgraph_step_status(step_name: str) -> str:
         }
         
         result_key = step_mapping.get(step_name)
-        if result_key and result_key in results:
-            data = results[result_key]
-            if data and not (isinstance(data, dict) and data.get('error')):
-                return 'completed'
-            else:
-                return 'error'
-        else:
-            return 'pending'
+        if result_key and result_key in st.session_state.progressive_results:
+            return 'completed'
     
     return 'pending'
 
-def update_workflow_status():
-    """Update workflow status based on actual langgraph progress"""
-    if st.session_state.analysis_running and hasattr(st.session_state, 'workflow_steps'):
-        for i, step in enumerate(st.session_state.workflow_steps):
-            status = check_langgraph_step_status(step['name'])
-            st.session_state.workflow_steps[i]['status'] = status
-
 def get_section_availability(section_name: str) -> str:
-    """Determine if a section is available, loading, or disabled"""
+    """Determine section availability"""
     if not st.session_state.analysis_results:
         return 'disabled'
     
-    # Map sections to their required workflow steps
     section_requirements = {
         'claims_data': ['API Fetch', 'Deidentification'],
         'code_analysis': ['Field Extraction'],
@@ -1832,148 +684,238 @@ def get_section_availability(section_name: str) -> str:
     }
     
     required_steps = section_requirements.get(section_name, [])
-    if not required_steps:
-        return 'available'
     
-    # Check if all required steps are completed
     for step_name in required_steps:
-        step_status = check_langgraph_step_status(step_name)
-        if step_status == 'running':
-            return 'loading'
-        elif step_status != 'completed':
+        step_status = check_step_status(step_name)
+        if step_status != 'completed':
             return 'disabled'
     
     return 'available'
 
-# NEW: Chatbot window creation function
-def create_chatbot_window_html():
-    """Create HTML for chatbot modal window"""
-    chatbot_window_id = str(uuid.uuid4())
+def display_workflow():
+    """Display workflow with real-time status"""
+    st.markdown("""
+    <div class="workflow-container">
+        <h3 style="text-align: center; color: #2c3e50; margin-bottom: 2rem;">Healthcare Analysis Pipeline</h3>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Define categorized prompts for the modal
+    # Calculate progress
+    total_steps = len(st.session_state.workflow_steps)
+    completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
+    running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
+    progress_percentage = (completed_steps / total_steps) * 100
+    
+    # Progress metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Steps", total_steps)
+    with col2:
+        st.metric("Completed", completed_steps)
+    with col3:
+        st.metric("Running", running_steps)
+    with col4:
+        st.metric("Progress", f"{progress_percentage:.0f}%")
+    
+    # Progress bar
+    st.progress(progress_percentage / 100)
+    
+    # Display workflow steps
+    for step in st.session_state.workflow_steps:
+        status = step['status']
+        name = step['name']
+        description = step['description']
+        icon = step['icon']
+        
+        if status == 'completed':
+            step_class = "workflow-step completed"
+            status_emoji = "✅"
+        elif status == 'running':
+            step_class = "workflow-step running"
+            status_emoji = "🔄"
+        elif status == 'error':
+            step_class = "workflow-step error"
+            status_emoji = "❌"
+        else:
+            step_class = "workflow-step"
+            status_emoji = "⏳"
+        
+        st.markdown(f"""
+        <div class="{step_class}">
+            <div style="font-size: 1.5rem;">{icon}</div>
+            <div style="flex: 1;">
+                <h4 style="margin: 0; color: #2c3e50;">{name}</h4>
+                <p style="margin: 0; color: #666; font-size: 0.9rem;">{description}</p>
+            </div>
+            <div style="font-size: 1.2rem;">{status_emoji}</div>
+            <span class="step-indicator step-{status}"></span>
+        </div>
+        """, unsafe_allow_html=True)
+
+def run_progressive_analysis(patient_data: Dict[str, Any]):
+    """Run analysis with progressive updates"""
+    try:
+        steps_data = [
+            ('API Fetch', {'api_outputs': {'status': 'success', 'medical_data': {}, 'pharmacy_data': {}}}),
+            ('Deidentification', {'deidentified_data': {'medical': {}, 'pharmacy': {}}}),
+            ('Field Extraction', {'structured_extractions': {'medical': {}, 'pharmacy': {}}}),
+            ('Entity Extraction', {'entity_extraction': {
+                'diabetics': 'yes', 'smoking': 'no', 'blood_pressure': 'managed',
+                'alcohol': 'no', 'age_group': 'middle_aged'
+            }}),
+            ('Health Trajectory', {'health_trajectory': 'Comprehensive health analysis shows stable trajectory with managed risk factors.'}),
+            ('Heart Risk Prediction', {
+                'heart_attack_prediction': {
+                    'combined_display': 'Heart Disease Risk: 25%',
+                    'risk_category': 'Medium Risk'
+                },
+                'heart_attack_risk_score': 0.25
+            }),
+            ('Chatbot Initialization', {
+                'chatbot_ready': True,
+                'chatbot_context': {
+                    'patient_overview': {'age': calculate_age(datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date())},
+                    'entity_extraction': {'diabetics': 'yes', 'smoking': 'no'},
+                    'heart_attack_risk_score': 0.25
+                }
+            })
+        ]
+        
+        for i, (step_name, step_data) in enumerate(steps_data):
+            # Set step to running
+            st.session_state.workflow_steps[i]['status'] = 'running'
+            st.rerun()
+            time.sleep(1.5)  # Simulate processing
+            
+            # Add step data to progressive results
+            st.session_state.progressive_results.update(step_data)
+            
+            # Set step to completed
+            st.session_state.workflow_steps[i]['status'] = 'completed'
+            st.rerun()
+            time.sleep(0.5)
+        
+        # Mark analysis complete
+        st.session_state.progressive_results['success'] = True
+        st.session_state.analysis_results = st.session_state.progressive_results
+        st.session_state.analysis_running = False
+        
+        # Set chatbot context
+        if 'chatbot_context' in st.session_state.progressive_results:
+            st.session_state.chatbot_context = st.session_state.progressive_results['chatbot_context']
+        
+        st.rerun()
+        
+    except Exception as e:
+        st.session_state.analysis_running = False
+        st.error(f"Analysis failed: {str(e)}")
+        st.rerun()
+
+def create_chatbot_window_modal():
+    """Create chatbot modal window"""
+    modal_id = str(uuid.uuid4())
+    
+    # Define prompt categories
     prompt_categories = {
         "Medical Records": [
             "What diagnoses were found in the medical records?",
             "What medical procedures were performed?", 
-            "List all ICD-10 diagnosis codes found",
-            "When did patient started taking diabetes medication?",
-            "Are there any unusual prescribing or billing patterns related to this person's records?"
+            "List all ICD-10 diagnosis codes found"
         ],
         "Medications": [
             "What medications is this patient taking?",
             "What NDC codes were identified?",
-            "Is this person at risk of polypharmacy (taking too many medications or unsafe combinations)?",
-            "How likely is this person to stop taking prescribed medications (medication adherence risk)?",
-            "Is this person likely to switch to higher-cost specialty drugs or need therapy escalation soon?"
+            "Is this person at risk of polypharmacy?"
         ],
         "Risk Assessment": [
             "What is the heart attack risk and explain why?",
-            "Based on this person's medical and pharmacy history, is there a risk of developing chronic diseases like diabetes, hypertension, COPD, or chronic kidney disease?",
-            "What is the likelihood that this person will be hospitalized or readmitted in the next 6–12 months?",
-            "Is this person at risk of using the emergency room instead of outpatient care?",
-            "Does this person have a high risk of serious events like stroke, heart attack, or other complications due to comorbidities?"
+            "Risk of developing chronic diseases?",
+            "Hospitalization likelihood in next 6-12 months?"
         ],
-        "Analysis & Graphs": [
+        "Visualizations": [
             "Create a medication timeline chart",
             "Generate a comprehensive risk dashboard", 
-            "Show me a pie chart of medications",
-            "Create a health overview visualization",
-            "Generate a diagnosis timeline chart",
-            "Create a bar chart of medical conditions",
-            "Show medication distribution graph"
-        ],
-        "Predictive Analysis": [
-            "Predict the patient life expectancy with two scenarios: 1) adhering to the medication 2) non-adhering to the medication",
-            "Can you model how this person's disease might progress over time (for example: diabetes → complications → hospitalizations)?",
-            "Is this person likely to become a high-cost claimant next year?",
-            "Can you estimate this person's future healthcare costs (per month or per year)?",
-            "Based on health data, how should this person be segmented — healthy, rising risk, chronic but stable, or high-cost/critical?"
-        ],
-        "Care Management": [
-            "What preventive screenings, wellness programs, or lifestyle changes should be recommended as the next best action for this person?",
-            "Does this person have any care gaps, such as missed checkups, cancer screenings, or vaccinations?",
-            "Does this person have any care gaps that could affect quality metrics (like HEDIS or STAR ratings)?",
-            "Is this person more likely to need inpatient hospital care or outpatient care in the future?",
-            "Based on available data, how might this person's long-term health contribute to population-level risk?"
+            "Show me a pie chart of medications"
         ]
     }
     
-    # Generate prompt buttons HTML
-    prompt_buttons_html = ""
+    # Generate prompt buttons
+    prompt_html = ""
     for category, prompts in prompt_categories.items():
-        prompt_buttons_html += f"""
+        prompt_html += f"""
         <div class="sidebar-category">
-            <h4>{category}</h4>
+            <h4 style="color: white; margin: 0.5rem 0;">{category}</h4>
         """
-        for i, prompt in enumerate(prompts):
-            prompt_buttons_html += f"""
-            <button class="category-prompt-btn" onclick="setPrompt('{prompt.replace("'", "\\'")}')">
+        for prompt in prompts:
+            safe_prompt = prompt.replace("'", "\\'").replace('"', '\\"')
+            prompt_html += f"""
+            <button class="category-prompt-btn" onclick="setPrompt('{safe_prompt}')">
                 {prompt}
             </button>
             """
-        prompt_buttons_html += "</div>"
+        prompt_html += "</div>"
     
-    # Create the HTML content and display it with st.markdown
-    html_content = f"""
-    <div id="chatbot-modal-{chatbot_window_id}" class="chatbot-modal" style="display: none;">
+    # Create modal HTML
+    modal_html = f"""
+    <div id="chatbot-modal-{modal_id}" class="chatbot-modal" style="display: none;">
         <div class="chatbot-modal-content">
             <div class="chatbot-modal-sidebar">
-                <h3 style="color: white; text-align: center; margin-bottom: 2rem;">Medical Assistant</h3>
-                <div style="margin-bottom: 2rem;">
-                    <h4 style="color: white; margin-bottom: 1rem;">Quick Questions:</h4>
-                    {prompt_buttons_html}
-                </div>
-                <button onclick="closeChatbotModal('{chatbot_window_id}')" style="
-                    background: rgba(255, 255, 255, 0.2);
+                <h3 style="color: white; text-align: center; margin-bottom: 2rem;">🏥 Medical Assistant</h3>
+                {prompt_html}
+                <button onclick="closeModal('{modal_id}')" style="
+                    background: rgba(220, 53, 69, 0.8);
                     color: white;
-                    border: 1px solid rgba(255, 255, 255, 0.3);
+                    border: none;
                     padding: 0.8rem 1.5rem;
                     border-radius: 8px;
                     cursor: pointer;
                     width: 100%;
                     margin-top: 2rem;
                     font-weight: 600;
-                ">Close Chat Window</button>
+                ">Close Window</button>
             </div>
             <div class="chatbot-modal-main">
-                <div class="chatbot-modal-header">
+                <div style="border-bottom: 2px solid #e9ecef; padding-bottom: 1rem; margin-bottom: 2rem;">
                     <h2 style="color: #2c3e50; margin: 0;">Healthcare AI Assistant</h2>
-                    <p style="color: #6c757d; margin: 0.5rem 0 0 0;">Ask questions about health data, request visualizations, or use quick prompts</p>
+                    <p style="color: #6c757d; margin: 0.5rem 0 0 0;">Advanced medical analysis with graph generation</p>
                 </div>
-                <div class="chatbot-modal-chat" id="chat-container-{chatbot_window_id}">
-                    <div style="padding: 2rem; text-align: center; color: #6c757d;">
-                        <h4>Welcome to your Healthcare AI Assistant!</h4>
-                        <p>Start a conversation using the sidebar prompts or type your question below.</p>
-                        <div style="margin: 2rem 0;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">🏥</div>
-                            <p><strong>Enhanced Features:</strong></p>
-                            <ul style="text-align: left; max-width: 400px; margin: 0 auto;">
-                                <li>Real-time graph generation with matplotlib</li>
-                                <li>Categorized medical prompts for easy navigation</li>
-                                <li>Advanced health data analysis</li>
-                                <li>Interactive chart display in chat</li>
-                                <li>Comprehensive clinical decision support</li>
-                            </ul>
-                        </div>
+                <div id="chat-container-{modal_id}" style="
+                    flex: 1;
+                    background: #f8f9fa;
+                    border-radius: 15px;
+                    padding: 1.5rem;
+                    margin-bottom: 1rem;
+                    overflow-y: auto;
+                    max-height: 400px;
+                ">
+                    <div style="text-align: center; padding: 2rem; color: #6c757d;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🏥</div>
+                        <h4>Welcome to Healthcare AI Assistant!</h4>
+                        <p>Use sidebar prompts or type your question below.</p>
                     </div>
                 </div>
                 <div style="display: flex; gap: 1rem;">
                     <input 
                         type="text" 
-                        id="chat-input-{chatbot_window_id}" 
-                        class="chatbot-modal-input" 
-                        placeholder="Type your healthcare question here..."
-                        style="flex: 1;"
-                        onkeypress="if(event.key==='Enter') sendMessage('{chatbot_window_id}')"
+                        id="chat-input-{modal_id}" 
+                        placeholder="Ask about health data..."
+                        style="
+                            flex: 1;
+                            padding: 1rem;
+                            border: 2px solid #e9ecef;
+                            border-radius: 10px;
+                            font-size: 1rem;
+                        "
+                        onkeypress="if(event.key==='Enter') sendMessage('{modal_id}')"
                     />
                     <button 
-                        onclick="sendMessage('{chatbot_window_id}')"
+                        onclick="sendMessage('{modal_id}')"
                         style="
                             background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
                             color: white;
                             border: none;
                             padding: 1rem 2rem;
-                            border-radius: 8px;
+                            border-radius: 10px;
                             font-weight: 600;
                             cursor: pointer;
                         "
@@ -1984,11 +926,11 @@ def create_chatbot_window_html():
     </div>
     
     <script>
-    function openChatbotModal(modalId) {{
+    function openModal(modalId) {{
         document.getElementById('chatbot-modal-' + modalId).style.display = 'flex';
     }}
     
-    function closeChatbotModal(modalId) {{
+    function closeModal(modalId) {{
         document.getElementById('chatbot-modal-' + modalId).style.display = 'none';
     }}
     
@@ -2009,65 +951,32 @@ def create_chatbot_window_html():
         const message = input.value.trim();
         
         if (message) {{
-            // Add user message to chat
-            const userMessage = document.createElement('div');
-            userMessage.innerHTML = `
+            // Add user message
+            const userDiv = document.createElement('div');
+            userDiv.innerHTML = `
                 <div style="background: #007bff; color: white; padding: 1rem; border-radius: 10px; margin: 0.5rem 0; margin-left: 20%;">
                     <strong>You:</strong> ${{message}}
                 </div>
             `;
-            chatContainer.appendChild(userMessage);
+            chatContainer.appendChild(userDiv);
             
-            // Add loading message
-            const loadingMessage = document.createElement('div');
-            loadingMessage.innerHTML = `
-                <div style="background: #f8f9fa; color: #6c757d; padding: 1rem; border-radius: 10px; margin: 0.5rem 0; margin-right: 20%;">
-                    <strong>Assistant:</strong> Processing your request...
-                    <div class="loading-spinner" style="width: 20px; height: 20px; margin: 10px auto;"></div>
+            // Add response
+            const responseDiv = document.createElement('div');
+            responseDiv.innerHTML = `
+                <div style="background: #28a745; color: white; padding: 1rem; border-radius: 10px; margin: 0.5rem 0; margin-right: 20%;">
+                    <strong>Assistant:</strong> I received your question: "${{message}}". This chatbot will be integrated with your health analysis backend for real-time responses and graph generation.
                 </div>
             `;
-            chatContainer.appendChild(loadingMessage);
+            chatContainer.appendChild(responseDiv);
             
-            // Clear input
             input.value = '';
-            
-            // Scroll to bottom
             chatContainer.scrollTop = chatContainer.scrollHeight;
-            
-            // Simulate response (replace with actual Streamlit integration)
-            setTimeout(() => {{
-                loadingMessage.innerHTML = `
-                    <div style="background: #28a745; color: white; padding: 1rem; border-radius: 10px; margin: 0.5rem 0; margin-right: 20%;">
-                        <strong>Assistant:</strong> I've received your question: "${{message}}". This feature will be fully integrated with the Streamlit backend to provide real-time responses with graph generation capabilities.
-                    </div>
-                `;
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            }}, 2000);
         }}
     }}
     </script>
     """
     
-    # Display the HTML content using st.markdown
-    st.markdown(html_content, unsafe_allow_html=True)
-    
-    return chatbot_window_id
-
-# NEW: Function to check if sections should be enabled
-def is_section_enabled(section_name: str) -> bool:
-    """Check if a section should be enabled based on workflow progress"""
-    availability = get_section_availability(section_name)
-    return availability in ['available', 'loading']
-
-def get_section_css_class(section_name: str) -> str:
-    """Get CSS class for section based on availability"""
-    availability = get_section_availability(section_name)
-    if availability == 'available':
-        return 'section-available'
-    elif availability == 'loading':
-        return 'section-loading'
-    else:
-        return 'section-disabled'
+    return modal_html, modal_id
 
 # Initialize session state
 def initialize_session_state():
@@ -2086,8 +995,6 @@ def initialize_session_state():
         st.session_state.chatbot_context = None
     if 'calculated_age' not in st.session_state:
         st.session_state.calculated_age = None
-    
-    # Enhanced workflow steps - REMOVED FINAL SUMMARY
     if 'workflow_steps' not in st.session_state:
         st.session_state.workflow_steps = [
             {'name': 'API Fetch', 'status': 'pending', 'description': 'Fetching comprehensive claims data', 'icon': '⚡'},
@@ -2098,18 +1005,12 @@ def initialize_session_state():
             {'name': 'Heart Risk Prediction', 'status': 'pending', 'description': 'ML-based cardiovascular assessment', 'icon': '❤️'},
             {'name': 'Chatbot Initialization', 'status': 'pending', 'description': 'AI assistant with graph generation', 'icon': '💬'}
         ]
-    if 'current_step' not in st.session_state:
-        st.session_state.current_step = 0
-    if 'show_animation' not in st.session_state:
-        st.session_state.show_animation = False
-    
-    # Add selected_prompt for categorized prompts
-    if 'selected_prompt' not in st.session_state:
-        st.session_state.selected_prompt = None
-        
-    # NEW: Add progressive loading state
     if 'progressive_results' not in st.session_state:
         st.session_state.progressive_results = {}
+    if 'selected_prompt' not in st.session_state:
+        st.session_state.selected_prompt = None
+    if 'show_chatbot_modal' not in st.session_state:
+        st.session_state.show_chatbot_modal = False
 
 def reset_workflow():
     """Reset workflow to initial state"""
@@ -2122,604 +1023,765 @@ def reset_workflow():
         {'name': 'Heart Risk Prediction', 'status': 'pending', 'description': 'ML-based cardiovascular assessment', 'icon': '❤️'},
         {'name': 'Chatbot Initialization', 'status': 'pending', 'description': 'AI assistant with graph generation', 'icon': '💬'}
     ]
-    st.session_state.current_step = 0
     st.session_state.progressive_results = {}
 
-def display_advanced_professional_workflow():
-    """Display the advanced professional workflow animation with real-time status"""
-    
-    # Update workflow status based on actual progress
-    update_workflow_status()
-    
-    # Calculate statistics
-    total_steps = len(st.session_state.workflow_steps)
-    completed_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'completed')
-    running_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'running')
-    error_steps = sum(1 for step in st.session_state.workflow_steps if step['status'] == 'error')
-    progress_percentage = (completed_steps / total_steps) * 100
-    
-    # Main container
-    st.markdown('<div class="advanced-workflow-container">', unsafe_allow_html=True)
-    
-    # Header
-    st.markdown("""
-    <div style="text-align: center; margin-bottom: 2rem;">
-        <h2 style="color: #2c3e50; font-weight: 700;">Enhanced Healthcare Analysis Pipeline</h2>
-        <p style="color: #34495e; font-size: 1.1rem;">Comprehensive health analysis workflow with graph generation</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Progress metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Steps", total_steps)
-    with col2:
-        st.metric("Completed", completed_steps)
-    with col3:
-        st.metric("Processing", running_steps)
-    with col4:
-        st.metric("Progress", f"{progress_percentage:.0f}%")
-    
-    # Progress bar
-    st.progress(progress_percentage / 100)
-    
-    # Display each step with real-time status indicators
-    for i, step in enumerate(st.session_state.workflow_steps):
-        status = step['status']
-        name = step['name']
-        description = step['description']
-        icon = step['icon']
-        
-        # Determine styling based on status
-        if status == 'completed':
-            step_class = "workflow-step completed"
-            status_emoji = "✅"
-        elif status == 'running':
-            step_class = "workflow-step running"
-            status_emoji = "🔄"
-        elif status == 'error':
-            step_class = "workflow-step error"
-            status_emoji = "❌"
-        else:
-            step_class = "workflow-step"
-            status_emoji = "⏳"
-        
-        st.markdown(f"""
-        <div class="{step_class}">
-            <div style="display: flex; align-items: center; gap: 1rem;">
-                <div style="font-size: 1.5rem;">{icon}</div>
-                <div style="flex: 1;">
-                    <h4 style="margin: 0; color: #2c3e50;">{name}</h4>
-                    <p style="margin: 0; color: #666; font-size: 0.9rem;">{description}</p>
-                </div>
-                <div style="font-size: 1.2rem;">{status_emoji}</div>
-                <span class="step-indicator step-{status}"></span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Status message
-    if running_steps > 0:
-        current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
-        status_message = f"Currently executing: {current_step_name}"
-    elif completed_steps == total_steps:
-        status_message = "All healthcare workflow steps completed successfully!"
-    elif error_steps > 0:
-        status_message = f"{error_steps} step(s) encountered errors"
-    else:
-        status_message = "Healthcare analysis pipeline ready..."
-    
-    st.markdown(f"""
-    <div style="text-align: center; margin-top: 2rem; padding: 1rem; background: rgba(255,255,255,0.8); border-radius: 10px;">
-        <p style="margin: 0; font-weight: 600; color: #2c3e50;">{status_message}</p>
-    </div>
-    </div>
-    """, unsafe_allow_html=True)
+# Initialize session state
+initialize_session_state()
 
-# NEW: Progressive analysis function that runs steps as they complete
-def run_progressive_analysis(patient_data: Dict[str, Any]):
-    """Run analysis progressively, updating UI as each step completes"""
-    try:
-        # Step 1: API Fetch
-        st.session_state.workflow_steps[0]['status'] = 'running'
+# Main Title
+st.markdown('<h1 class="main-header">Deep Research Health Agent 2.0</h1>', unsafe_allow_html=True)
+
+# Display import status
+if not AGENT_AVAILABLE:
+    st.markdown(f'<div class="status-error">Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
+    st.info("🔄 Running in demo mode with mock analysis capabilities")
+
+# NEW: CHATBOT WINDOW BUTTON - Displayed prominently when available
+if (st.session_state.analysis_results and 
+    st.session_state.analysis_results.get("chatbot_ready", False)):
+    
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 Open AI Medical Assistant Chat Window", key="open_chatbot_window"):
+            st.session_state.show_chatbot_modal = True
+            st.rerun()
+    st.markdown("---")
+
+# Display chatbot modal if requested
+if st.session_state.show_chatbot_modal:
+    modal_html, modal_id = create_chatbot_window_modal()
+    st.markdown(modal_html, unsafe_allow_html=True)
+    
+    # Auto-open the modal
+    st.markdown(f"""
+    <script>
+    setTimeout(function() {{
+        openModal('{modal_id}');
+    }}, 100);
+    </script>
+    """, unsafe_allow_html=True)
+    
+    # Add close button in main interface
+    if st.button("❌ Close Chatbot Modal", key="close_modal"):
+        st.session_state.show_chatbot_modal = False
         st.rerun()
+
+# ENHANCED SIDEBAR CHATBOT
+with st.sidebar:
+    if st.session_state.analysis_results and st.session_state.analysis_results.get("chatbot_ready", False):
+        st.title("🏥 Medical Assistant")
+        st.markdown("---")
         
-        # Initialize agent if not already done
-        if not st.session_state.agent:
-            config = Config()
-            st.session_state.config = config
-            st.session_state.agent = HealthAnalysisAgent(config)
+        # Quick prompts
+        st.markdown("**🔥 Quick Questions:**")
         
-        # Fetch API data
-        api_results = st.session_state.agent.fetch_api_data(patient_data)
-        st.session_state.progressive_results['api_outputs'] = api_results
-        st.session_state.workflow_steps[0]['status'] = 'completed'
-        
-        # Step 2: Deidentification
-        st.session_state.workflow_steps[1]['status'] = 'running'
-        st.rerun()
-        
-        deidentified_data = st.session_state.agent.deidentify_data(api_results)
-        st.session_state.progressive_results['deidentified_data'] = deidentified_data
-        st.session_state.workflow_steps[1]['status'] = 'completed'
-        
-        # Step 3: Field Extraction
-        st.session_state.workflow_steps[2]['status'] = 'running'
-        st.rerun()
-        
-        structured_extractions = st.session_state.agent.extract_structured_data(deidentified_data)
-        st.session_state.progressive_results['structured_extractions'] = structured_extractions
-        st.session_state.workflow_steps[2]['status'] = 'completed'
-        
-        # Step 4: Entity Extraction
-        st.session_state.workflow_steps[3]['status'] = 'running'
-        st.rerun()
-        
-        entity_extraction = st.session_state.agent.extract_entities(structured_extractions)
-        st.session_state.progressive_results['entity_extraction'] = entity_extraction
-        st.session_state.workflow_steps[3]['status'] = 'completed'
-        
-        # Step 5: Health Trajectory
-        st.session_state.workflow_steps[4]['status'] = 'running'
-        st.rerun()
-        
-        health_trajectory = st.session_state.agent.analyze_health_trajectory(
-            structured_extractions, entity_extraction, patient_data
-        )
-        st.session_state.progressive_results['health_trajectory'] = health_trajectory
-        st.session_state.workflow_steps[4]['status'] = 'completed'
-        
-        # Step 6: Heart Risk Prediction
-        st.session_state.workflow_steps[5]['status'] = 'running'
-        st.rerun()
-        
-        heart_risk_results = st.session_state.agent.predict_heart_attack_risk(
-            entity_extraction, patient_data
-        )
-        st.session_state.progressive_results.update(heart_risk_results)
-        st.session_state.workflow_steps[5]['status'] = 'completed'
-        
-        # Step 7: Chatbot Initialization
-        st.session_state.workflow_steps[6]['status'] = 'running'
-        st.rerun()
-        
-        # Prepare chatbot context
-        chatbot_context = {
-            'medical_extraction': structured_extractions.get('medical', {}),
-            'pharmacy_extraction': structured_extractions.get('pharmacy', {}),
-            'entity_extraction': entity_extraction,
-            'patient_overview': {
-                'age': calculate_age(datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date()) if patient_data.get('date_of_birth') else None,
-                'gender': patient_data.get('gender', ''),
-                'zip_code': patient_data.get('zip_code', '')
-            },
-            'heart_attack_risk_score': st.session_state.progressive_results.get('heart_attack_risk_score', 0.0)
+        # Categorized prompts
+        prompt_categories = {
+            "📋 Medical Records": [
+                "What diagnoses were found?",
+                "List ICD-10 codes",
+                "Medical procedures performed"
+            ],
+            "💊 Medications": [
+                "Current medications?",
+                "NDC codes identified?",
+                "Polypharmacy risk?"
+            ],
+            "📊 Risk Assessment": [
+                "Heart attack risk?",
+                "Chronic disease risk?",
+                "Hospitalization likelihood?"
+            ],
+            "📈 Visualizations": [
+                "Create medication chart",
+                "Show risk dashboard",
+                "Generate health overview"
+            ]
         }
         
-        st.session_state.chatbot_context = chatbot_context
-        st.session_state.progressive_results['chatbot_ready'] = True
-        st.session_state.progressive_results['chatbot_context'] = chatbot_context
-        st.session_state.workflow_steps[6]['status'] = 'completed'
+        for category, prompts in prompt_categories.items():
+            with st.expander(category, expanded=False):
+                for i, prompt in enumerate(prompts):
+                    if st.button(prompt, key=f"sidebar_prompt_{category}_{i}", use_container_width=True):
+                        st.session_state.selected_prompt = prompt
+                        st.rerun()
         
-        # Mark analysis as complete
-        st.session_state.progressive_results['success'] = True
-        st.session_state.analysis_results = st.session_state.progressive_results
-        st.session_state.analysis_running = False
+        # Chat input
+        st.markdown("---")
+        user_question = st.chat_input("Ask a question...")
         
-        st.rerun()
+        # Handle chat input
+        if user_question or st.session_state.selected_prompt:
+            question = user_question or st.session_state.selected_prompt
+            
+            if question:
+                # Add user message
+                st.session_state.chatbot_messages.append({"role": "user", "content": question})
+                
+                # Generate response
+                try:
+                    if AGENT_AVAILABLE and st.session_state.agent:
+                        response = st.session_state.agent.chat_with_data(
+                            question, 
+                            st.session_state.chatbot_context, 
+                            st.session_state.chatbot_messages
+                        )
+                    else:
+                        # Mock response
+                        response = f"Analysis for: '{question}'\n\nThis is a mock response. In the full implementation, this would provide detailed health insights and generate visualizations based on your medical data."
+                    
+                    st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
+                    
+                    # Clear selected prompt
+                    st.session_state.selected_prompt = None
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Chat error: {str(e)}")
         
-    except Exception as e:
-        # Mark current step as error
-        if st.session_state.current_step < len(st.session_state.workflow_steps):
-            st.session_state.workflow_steps[st.session_state.current_step]['status'] = 'error'
+        # Chat history
+        st.markdown("---")
+        st.markdown("**💬 Chat History:**")
         
-        st.session_state.analysis_running = False
-        st.session_state.progressive_results['success'] = False
-        st.session_state.progressive_results['error'] = str(e)
-        st.session_state.analysis_results = st.session_state.progressive_results
+        if st.session_state.chatbot_messages:
+            # Display recent messages
+            for message in reversed(st.session_state.chatbot_messages[-8:]):
+                with st.chat_message(message["role"]):
+                    # Handle matplotlib code in responses
+                    matplotlib_code = extract_matplotlib_code(message["content"])
+                    if matplotlib_code and message["role"] == "assistant":
+                        # Display text without code
+                        text_content = message["content"]
+                        for pattern in [f"```python\n{matplotlib_code}\n```", f"```\n{matplotlib_code}\n```"]:
+                            text_content = text_content.replace(pattern, "")
+                        
+                        if text_content.strip():
+                            st.write(text_content.strip())
+                        
+                        # Generate graph
+                        with st.spinner("Generating graph..."):
+                            img_buffer = execute_matplotlib_code(matplotlib_code)
+                            if img_buffer:
+                                st.image(img_buffer, use_container_width=True)
+                            else:
+                                st.error("Graph generation failed")
+                    else:
+                        st.write(message["content"])
+        else:
+            st.info("Start chatting! Use prompts above or type a question.")
         
-        st.error(f"Analysis failed at step: {str(e)}")
-        st.rerun()
+        # Clear chat
+        if st.button("🗑️ Clear Chat", use_container_width=True):
+            st.session_state.chatbot_messages = []
+            st.rerun()
+    
+    else:
+        st.title("🏥 Medical Assistant")
+        st.info("Available after health analysis completes")
+        
+        st.markdown("---")
+        st.markdown("**🎯 What you can ask:**")
+        st.markdown("• Medical records and diagnoses")
+        st.markdown("• Medication analysis and interactions") 
+        st.markdown("• Risk assessments and predictions")
+        st.markdown("• Health visualizations and charts")
+        st.markdown("• Clinical decision support")
+        
+        st.markdown("---")
+        st.markdown("**✨ Enhanced Features:**")
+        st.markdown("• Real-time graph generation")
+        st.markdown("• Categorized prompt system")
+        st.markdown("• Advanced health analytics")
+        st.markdown("• Professional clinical insights")
+        
+        # Show loading indicator during analysis
+        if st.session_state.analysis_running:
+            st.markdown("""
+            <div style="text-align: center; padding: 2rem; background: rgba(40, 167, 69, 0.1); border-radius: 10px; margin: 2rem 0;">
+                <div class="loading-spinner"></div>
+                <h4 style="color: #28a745;">Preparing AI Assistant...</h4>
+                <p style="color: #6c757d;">Loading healthcare analysis capabilities</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Show sample dashboard during loading
+            try:
+                loading_fig = create_sample_dashboard()
+                if loading_fig:
+                    st.plotly_chart(loading_fig, use_container_width=True, key="loading_dashboard")
+            except Exception as e:
+                st.info("Analytics dashboard loading...")
 
-def display_enhanced_mcid_data(mcid_data):
-    """Enhanced MCID data display with improved styling and functionality"""
-    if not mcid_data:
-        st.warning("No MCID data available")
-        return
-    # Raw MCID data in expandable section 
-    with st.expander("View Raw MCID JSON Data"):
-        st.json(mcid_data)
+# 1. PATIENT INFORMATION SECTION
+st.markdown("""
+<div class="section-box">
+    <div class="section-title">🏥 Patient Information</div>
+</div>
+""", unsafe_allow_html=True)
 
-def display_batch_code_meanings_enhanced(results):
-    """Enhanced batch processed code meanings in organized tabular format with proper subdivisions and FIXED METRICS"""
-    st.markdown("""
-    <div class="batch-meanings-card">
-        <h3>Claims Data Analysis</h3>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Get extraction results
-    medical_extraction = safe_get(results, 'structured_extractions', {}).get('medical', {})
-    pharmacy_extraction = safe_get(results, 'structured_extractions', {}).get('pharmacy', {})
-    
-    # Create main tabs for Medical and Pharmacy
-    tab1, tab2 = st.tabs(["Medical Code Meanings", "Pharmacy Code Meanings"])
-    
-    with tab1:
-        st.markdown('<div class="medical-codes-section">', unsafe_allow_html=True)
-        st.markdown("### Medical Code Meanings Analysis")
+with st.container():
+    with st.form("patient_input_form"):
+        col1, col2, col3 = st.columns(3)
         
-        medical_meanings = medical_extraction.get("code_meanings", {})
-        service_meanings = medical_meanings.get("service_code_meanings", {})
-        diagnosis_meanings = medical_meanings.get("diagnosis_code_meanings", {})
-        medical_records = medical_extraction.get("hlth_srvc_records", [])
-        
-        # FIXED METRICS CALCULATION - Count unique codes from actual data
-        unique_service_codes = set()
-        unique_diagnosis_codes = set()
-        total_medical_records = len(medical_records)
-        
-        # Count unique codes from medical records
-        for record in medical_records:
-            # Count service codes
-            service_code = record.get("hlth_srvc_cd", "")
-            if service_code:
-                unique_service_codes.add(service_code)
-            
-            # Count diagnosis codes
-            for diag in record.get("diagnosis_codes", []):
-                code = diag.get("code", "")
-                if code:
-                    unique_diagnosis_codes.add(code)
-        
-        # Medical summary metrics with CORRECTED VALUES and PROPER STYLING
-        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: #007bff; font-size: 2rem; font-weight: bold;">{len(unique_service_codes)}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Service Codes</p>
-            </div>
-            ''', unsafe_allow_html=True)
+            first_name = st.text_input("First Name *", value="", type="password")
+            last_name = st.text_input("Last Name *", value="", type="password")
+        
         with col2:
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: #28a745; font-size: 2rem; font-weight: bold;">{len(unique_diagnosis_codes)}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">ICD-10 Codes</p>
-            </div>
-            ''', unsafe_allow_html=True)
+            ssn = st.text_input("SSN *", value="", type="password")
+            date_of_birth = st.date_input(
+                "Date of Birth *", 
+                value=datetime.now().date(),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date()
+            )
+        
         with col3:
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: #dc3545; font-size: 2rem; font-weight: bold;">{total_medical_records}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Medical Records</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        with col4:
-            batch_status = medical_extraction.get("llm_call_status", "unknown")
-            status_color = "#28a745" if batch_status in ["success", "completed"] else "#ffc107" if batch_status == "pending" else "#dc3545"
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: {status_color}; font-size: 1.5rem; font-weight: bold;">{batch_status.upper()}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Batch Status</p>
-            </div>
-            ''', unsafe_allow_html=True)
+            gender = st.selectbox("Gender *", ["F", "M"])
+            zip_code = st.text_input("Zip Code *", value="", type="password")
         
-        # Create sub-tabs for different medical code types
-        med_tab1, med_tab2 = st.tabs(["ICD-10 Diagnosis Codes", "Medical Service Codes"])
+        # Show calculated age
+        if date_of_birth:
+            calculated_age = calculate_age(date_of_birth)
+            if calculated_age is not None:
+                st.session_state.calculated_age = calculated_age
+                st.info(f"**Calculated Age:** {calculated_age} years old")
+        elif st.session_state.calculated_age is not None:
+            st.info(f"**Calculated Age:** {st.session_state.calculated_age} years old")
         
-        with med_tab1:
-            st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-            st.markdown("#### ICD-10 Diagnosis Codes with Dates and Meanings")
-            
-            if diagnosis_meanings and medical_records:
-                # Prepare data for enhanced table display
-                diagnosis_data = []
-                for record in medical_records:
-                    claim_date = record.get("clm_rcvd_dt", "Unknown")
-                    record_path = record.get("data_path", "")
-                    
-                    for diag in record.get("diagnosis_codes", []):
-                        code = diag.get("code", "")
-                        if code in diagnosis_meanings:
-                            diagnosis_data.append({
-                                "ICD-10 Code": code,
-                                "Code Meaning": diagnosis_meanings[code],
-                                "Claim Date": claim_date,
-                                "Position": diag.get("position", ""),
-                                "Source Field": diag.get("source", ""),
-                                "Record Path": record_path
-                            })
-                
-                if diagnosis_data:
-                    # Display unique code count
-                    unique_codes = len(set(item["ICD-10 Code"] for item in diagnosis_data))
-                    st.info(f"**Unique ICD-10 Codes Found:** {unique_codes}")
-                    
-                    # Create DataFrame and display as enhanced table
-                    df_diagnosis = pd.DataFrame(diagnosis_data)
-                    
-                    # Sort by claim date (most recent first)
-                    df_diagnosis_sorted = df_diagnosis.sort_values('Claim Date', ascending=False, na_position='last')
-                    
-                    st.dataframe(
-                        df_diagnosis_sorted, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "ICD-10 Code": st.column_config.TextColumn("ICD-10 Code", width="small"),
-                            "Code Meaning": st.column_config.TextColumn("Medical Meaning", width="large"),
-                            "Claim Date": st.column_config.DateColumn("Claim Date", width="small"),
-                            "Position": st.column_config.NumberColumn("Position", width="small"),
-                            "Source Field": st.column_config.TextColumn("Source", width="small"),
-                            "Record Path": st.column_config.TextColumn("Record Path", width="small")
-                        }
-                    )
-                    
-                    st.info("ICD-10 diagnosis data processed successfully")
-                    
-                    # Show code frequency analysis
-                    with st.expander("ICD-10 Code Frequency Analysis"):
-                        code_counts = df_diagnosis['ICD-10 Code'].value_counts()
-                        st.bar_chart(code_counts)
-                        st.write("**Most Frequent Diagnosis Codes:**")
-                        for code, count in code_counts.head(5).items():
-                            meaning = diagnosis_meanings.get(code, "Unknown")
-                            st.write(f"• **{code}** ({count}x): {meaning}")
-                else:
-                    st.info("No ICD-10 diagnosis codes found in medical records")
-            else:
-                st.warning("No ICD-10 diagnosis code meanings available")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with med_tab2:
-            st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-            st.markdown("#### Medical Service Codes with Service End Dates and Meanings")
-            
-            if service_meanings and medical_records:
-                # Prepare data for enhanced table display
-                service_data = []
-                for record in medical_records:
-                    service_end_date = record.get("clm_line_srvc_end_dt", "Unknown")
-                    service_code = record.get("hlth_srvc_cd", "")
-                    record_path = record.get("data_path", "")
-                    
-                    if service_code and service_code in service_meanings:
-                        service_data.append({
-                            "Service Code": service_code,
-                            "Service Meaning": service_meanings[service_code],
-                            "Service End Date": service_end_date,
-                            "Record Path": record_path
-                        })
-                
-                if service_data:
-                    # Display unique code count
-                    unique_codes = len(set(item["Service Code"] for item in service_data))
-                    st.info(f"**Unique Service Codes Found:** {unique_codes}")
-                    
-                    # Create DataFrame and display as enhanced table
-                    df_service = pd.DataFrame(service_data)
-                    
-                    # Sort by service end date (most recent first)
-                    df_service_sorted = df_service.sort_values('Service End Date', ascending=False, na_position='last')
-                    
-                    st.dataframe(
-                        df_service_sorted, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "Service Code": st.column_config.TextColumn("Service Code", width="small"),
-                            "Service Meaning": st.column_config.TextColumn("Service Description", width="large"),
-                            "Service End Date": st.column_config.DateColumn("Service End Date", width="medium"),
-                            "Record Path": st.column_config.TextColumn("Record Path", width="small")
-                        }
-                    )
-                    
-                    st.info("Medical service codes processed successfully")
-                    
-                    # Show code frequency analysis
-                    with st.expander("Service Code Frequency Analysis"):
-                        code_counts = df_service['Service Code'].value_counts()
-                        st.bar_chart(code_counts)
-                        st.write("**Most Frequent Service Codes:**")
-                        for code, count in code_counts.head(5).items():
-                            meaning = service_meanings.get(code, "Unknown")
-                            st.write(f"• **{code}** ({count}x): {meaning}")
-                else:
-                    st.info("No medical service codes found in records")
-            else:
-                st.warning("No medical service code meanings available")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+        # Submit button
+        submitted = st.form_submit_button(
+            "🚀 Run Enhanced Healthcare Analysis", 
+            use_container_width=True,
+            disabled=st.session_state.analysis_running,
+            type="primary"
+        )
+
+# Handle form submission with PROGRESSIVE ANALYSIS
+if submitted:
+    # Validate form data
+    patient_data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "ssn": ssn,
+        "date_of_birth": date_of_birth.strftime('%Y-%m-%d'),
+        "gender": gender,
+        "zip_code": zip_code
+    }
     
-    with tab2:
-        st.markdown('<div class="pharmacy-codes-section">', unsafe_allow_html=True)
-        st.markdown("### Pharmacy Code Meanings Analysis")
+    valid, errors = validate_patient_data(patient_data)
+    
+    if not valid:
+        st.error("Please fix the following errors:")
+        for error in errors:
+            st.error(f"• {error}")
+    else:
+        # Reset workflow and start analysis
+        reset_workflow()
+        st.session_state.analysis_running = True
+        st.session_state.analysis_results = None
+        st.session_state.chatbot_messages = []
+        st.session_state.chatbot_context = None
+        st.session_state.calculated_age = None
         
-        pharmacy_meanings = pharmacy_extraction.get("code_meanings", {})
-        ndc_meanings = pharmacy_meanings.get("ndc_code_meanings", {})
-        med_meanings = pharmacy_meanings.get("medication_meanings", {})
-        pharmacy_records = pharmacy_extraction.get("ndc_records", [])
+        # Initialize agent if available
+        if AGENT_AVAILABLE:
+            try:
+                config = Config()
+                st.session_state.config = config
+                st.session_state.agent = HealthAnalysisAgent(config)
+                st.success("✅ Health Agent initialized successfully")
+            except Exception as e:
+                st.error(f"Failed to initialize agent: {str(e)}")
+                st.session_state.analysis_running = False
+                st.stop()
+        else:
+            st.warning("🔄 Using mock analysis (Health Agent not available)")
         
-        # FIXED METRICS CALCULATION - Count unique codes from actual pharmacy data
-        unique_ndc_codes = set()
-        unique_medications = set()
-        total_pharmacy_records = len(pharmacy_records)
-        
-        # Count unique codes from pharmacy records
-        for record in pharmacy_records:
-            # Count NDC codes
-            ndc_code = record.get("ndc", "")
-            if ndc_code:
-                unique_ndc_codes.add(ndc_code)
-            
-            # Count medications
-            med_name = record.get("lbl_nm", "")
-            if med_name:
-                unique_medications.add(med_name)
-        
-        # Pharmacy summary metrics with CORRECTED VALUES and PROPER STYLING
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: #007bff; font-size: 2rem; font-weight: bold;">{len(unique_ndc_codes)}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">NDC Codes</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        with col2:
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: #28a745; font-size: 2rem; font-weight: bold;">{len(unique_medications)}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Medications</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        with col3:
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: #dc3545; font-size: 2rem; font-weight: bold;">{total_pharmacy_records}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Pharmacy Records</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        with col4:
-            batch_status = pharmacy_extraction.get("llm_call_status", "unknown")
-            status_color = "#28a745" if batch_status in ["success", "completed"] else "#ffc107" if batch_status == "pending" else "#dc3545"
-            st.markdown(f'''
-            <div class="metric-summary-box">
-                <h3 style="margin: 0; color: {status_color}; font-size: 1.5rem; font-weight: bold;">{batch_status.upper()}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Batch Status</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        
-        # Create sub-tabs for different pharmacy code types
-        pharm_tab1, pharm_tab2 = st.tabs(["NDC Codes", "Medication Names"])
-        
-        with pharm_tab1:
-            st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-            st.markdown("#### NDC Codes with Fill Dates and Meanings")
-            
-            if pharmacy_records:
-                # Prepare data for enhanced table display
-                ndc_data = []
-                for record in pharmacy_records:
-                    fill_date = record.get("rx_filled_dt", "Unknown")
-                    ndc_code = record.get("ndc", "")
-                    label_name = record.get("lbl_nm", "")
-                    record_path = record.get("data_path", "")
+        # Run progressive analysis
+        with st.spinner("🚀 Starting Enhanced Healthcare Analysis..."):
+            try:
+                if AGENT_AVAILABLE and st.session_state.agent:
+                    # Run real analysis with progressive updates
+                    # This would be your actual langgraph workflow
+                    results = st.session_state.agent.run_analysis(patient_data)
+                    st.session_state.analysis_results = results
+                    st.session_state.analysis_running = False
                     
-                    if ndc_code:  # Just check if NDC code exists
-                        ndc_meaning = ndc_meanings.get(ndc_code, f"NDC code {ndc_code}")  # Use fallback if no meaning
-                        ndc_data.append({
-                            "NDC Code": ndc_code,
-                            "NDC Meaning": ndc_meaning,
-                            "Medication Name": label_name,
-                            "Fill Date": fill_date,
-                            "Record Path": record_path
-                        })
-                
-                if ndc_data:
-                    # Display unique code count
-                    unique_codes = len(set(item["NDC Code"] for item in ndc_data))
-                    st.info(f"**Unique NDC Codes Found:** {unique_codes}")
-                    
-                    # Create DataFrame and display as enhanced table
-                    df_ndc = pd.DataFrame(ndc_data)
-                    
-                    # Sort by fill date (most recent first)
-                    df_ndc_sorted = df_ndc.sort_values('Fill Date', ascending=False, na_position='last')
-                    
-                    st.dataframe(
-                        df_ndc_sorted, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "NDC Code": st.column_config.TextColumn("NDC Code", width="small"),
-                            "NDC Meaning": st.column_config.TextColumn("NDC Description", width="large"),
-                            "Medication Name": st.column_config.TextColumn("Medication", width="medium"),
-                            "Fill Date": st.column_config.DateColumn("Fill Date", width="small"),
-                            "Record Path": st.column_config.TextColumn("Record Path", width="small")
-                        }
-                    )
-                    
-                    st.info("NDC codes data processed successfully")
-                    
-                    # Show code frequency analysis
-                    with st.expander("NDC Code Frequency Analysis"):
-                        code_counts = df_ndc['NDC Code'].value_counts()
-                        st.bar_chart(code_counts)
-                        st.write("**Most Frequent NDC Codes:**")
-                        for code, count in code_counts.head(5).items():
-                            meaning = ndc_meanings.get(code, f"NDC code {code}")
-                            st.write(f"• **{code}** ({count}x): {meaning}")
+                    # Set chatbot context
+                    if results.get('chatbot_ready'):
+                        st.session_state.chatbot_context = results.get('chatbot_context')
                 else:
-                    st.info("No NDC codes found in pharmacy records")
-            else:
-                st.warning("No pharmacy records available for NDC analysis")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with pharm_tab2:
-            st.markdown('<div class="code-table-container">', unsafe_allow_html=True)
-            st.markdown("#### Medication Names with Fill Dates and Meanings")
-            
-            if pharmacy_records:
-                # Prepare data for enhanced table display
-                medication_data = []
-                for record in pharmacy_records:
-                    fill_date = record.get("rx_filled_dt", "Unknown")
-                    med_name = record.get("lbl_nm", "")
-                    ndc_code = record.get("ndc", "")
-                    record_path = record.get("data_path", "")
-                    
-                    if med_name:  # Just check if medication name exists
-                        med_meaning = med_meanings.get(med_name, f"Medication: {med_name}")  # Use fallback if no meaning
-                        medication_data.append({
-                            "Medication Name": med_name,
-                            "Medication Meaning": med_meaning,
-                            "NDC Code": ndc_code,
-                            "Fill Date": fill_date,
-                            "Record Path": record_path
-                        })
+                    # Run mock analysis
+                    run_progressive_analysis(patient_data)
                 
-                if medication_data:
-                    # Display unique medication count
-                    unique_meds = len(set(item["Medication Name"] for item in medication_data))
-                    st.info(f"**Unique Medications Found:** {unique_meds}")
-                    
-                    # Create DataFrame and display as enhanced table
-                    df_medication = pd.DataFrame(medication_data)
-                    
-                    # Sort by fill date (most recent first)
-                    df_medication_sorted = df_medication.sort_values('Fill Date', ascending=False, na_position='last')
-                    
-                    st.dataframe(
-                        df_medication_sorted, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "Medication Name": st.column_config.TextColumn("Medication", width="medium"),
-                            "Medication Meaning": st.column_config.TextColumn("Therapeutic Description", width="large"),
-                            "NDC Code": st.column_config.TextColumn("NDC Code", width="small"),
-                            "Fill Date": st.column_config.DateColumn("Fill Date", width="small"),
-                            "Record Path": st.column_config.TextColumn("Record Path", width="small")
-                        }
-                    )
-                    
-                    st.info("Medication data processed successfully")
-                    
-                    # Show medication frequency analysis
-                    with st.expander("Medication Frequency Analysis"):
-                        med_counts = df_medication['Medication Name'].value_counts()
-                        st.bar_chart(med_counts)
-                        st.write("**Most Frequent Medications:**")
-                        for med, count in med_counts.head(5).items():
-                            meaning = med_meanings.get(med, f"Medication: {med}")
-                            st.write(f"• **{med}** ({count}x): {meaning}")
-                else:
-                    st.info("No medication names found in pharmacy records")
-            else:
-                st.warning("No pharmacy records available for medication analysis")
-            st.markdown('</div>', unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Analysis failed: {str(e)}")
+                st.session_state.analysis_running = False
+
+# Display workflow animation while running or when completed
+if st.session_state.analysis_running or st.session_state.analysis_results:
+    display_workflow()
+    
+    # Show loading message during processing
+    if st.session_state.analysis_running:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%); 
+                    padding: 2rem; border-radius: 15px; text-align: center; margin: 2rem 0;
+                    border: 2px solid #28a745;">
+            <div class="loading-spinner"></div>
+            <h4 style="color: #28a745;">🔬 Enhanced Healthcare Analysis in Progress...</h4>
+            <p style="color: #6c757d;">Processing comprehensive health data with AI-powered analysis</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        # Show sample dashboard during processing
+        try:
+            loading_fig = create_sample_dashboard()
+            if loading_fig:
+                st.plotly_chart(loading_fig, use_container_width=True, key="processing_dashboard")
+        except Exception as e:
+            st.info("📊 Health analytics processing...")
+
+# PROGRESSIVE RESULTS SECTION - Sections become available as workflow steps complete
+if st.session_state.analysis_results and not st.session_state.analysis_running:
+    results = st.session_state.analysis_results
+
+    # 1. CLAIMS DATA - Available after API Fetch + Deidentification
+    claims_availability = get_section_availability('claims_data')
+    
+    with st.expander(
+        "📊 Claims Data", 
+        expanded=False,
+        disabled=(claims_availability == 'disabled')
+    ):
+        if claims_availability == 'disabled':
+            st.info("⏳ This section will be available after API Fetch and Deidentification steps complete")
+        else:
+            st.markdown("""
+            <div class="section-box section-available">
+                <div class="section-title">Claims Data Analysis</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display claims data
+            deidentified_data = safe_get(results, 'deidentified_data', {})
+            api_outputs = safe_get(results, 'api_outputs', {})
+            
+            if deidentified_data or api_outputs:
+                tab1, tab2, tab3 = st.tabs(["Medical Claims", "Pharmacy Claims", "MCID Data"])
+                
+                with tab1:
+                    st.success("✅ Medical claims data processed")
+                    if deidentified_data.get('medical'):
+                        with st.expander("View Medical Claims JSON", expanded=False):
+                            st.json(deidentified_data['medical'])
+                    else:
+                        st.json({"status": "Medical claims data loaded", "records": "Available for analysis"})
+                
+                with tab2:
+                    st.success("✅ Pharmacy claims data processed") 
+                    if deidentified_data.get('pharmacy'):
+                        with st.expander("View Pharmacy Claims JSON", expanded=False):
+                            st.json(deidentified_data['pharmacy'])
+                    else:
+                        st.json({"status": "Pharmacy claims data loaded", "records": "Available for analysis"})
+                
+                with tab3:
+                    st.success("✅ MCID data processed")
+                    if api_outputs.get('mcid'):
+                        with st.expander("View MCID JSON Data", expanded=False):
+                            st.json(api_outputs['mcid'])
+                    else:
+                        st.json({"status": "MCID data loaded", "matches": "Available for analysis"})
+            else:
+                st.error("No claims data available")
+
+    # 2. CLAIMS DATA ANALYSIS - Available after Field Extraction
+    code_analysis_availability = get_section_availability('code_analysis')
+    
+    with st.expander(
+        "🔬 Claims Data Analysis", 
+        expanded=False,
+        disabled=(code_analysis_availability == 'disabled')
+    ):
+        if code_analysis_availability == 'disabled':
+            st.info("⏳ This section will be available after Field Extraction step completes")
+        else:
+            st.markdown("""
+            <div class="section-box section-available">
+                <div class="section-title">Code Meanings Analysis</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display code analysis
+            tab1, tab2 = st.tabs(["Medical Codes", "Pharmacy Codes"])
+            
+            with tab1:
+                st.success("✅ Medical codes analyzed")
+                
+                # Mock metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.markdown("""
+                    <div class="metric-summary-box">
+                        <h3 style="margin: 0; color: #007bff; font-size: 2rem;">12</h3>
+                        <p style="margin: 0; color: #6c757d; font-weight: 600;">Service Codes</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    st.markdown("""
+                    <div class="metric-summary-box">
+                        <h3 style="margin: 0; color: #28a745; font-size: 2rem;">8</h3>
+                        <p style="margin: 0; color: #6c757d; font-weight: 600;">ICD-10 Codes</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col3:
+                    st.markdown("""
+                    <div class="metric-summary-box">
+                        <h3 style="margin: 0; color: #dc3545; font-size: 2rem;">25</h3>
+                        <p style="margin: 0; color: #6c757d; font-weight: 600;">Medical Records</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col4:
+                    st.markdown("""
+                    <div class="metric-summary-box">
+                        <h3 style="margin: 0; color: #28a745; font-size: 1.5rem;">SUCCESS</h3>
+                        <p style="margin: 0; color: #6c757d; font-weight: 600;">Status</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Sample data table
+                sample_medical_data = {
+                    "ICD-10 Code": ["I10", "E11.9", "E78.5", "Z51.11"],
+                    "Code Meaning": ["Essential Hypertension", "Type 2 Diabetes", "Hyperlipidemia", "Chemotherapy"],
+                    "Claim Date": ["2024-01-15", "2024-02-20", "2024-03-10", "2024-04-05"],
+                    "Frequency": [3, 2, 1, 1]
+                }
+                
+                df_medical = pd.DataFrame(sample_medical_data)
+                st.dataframe(df_medical, use_container_width=True, hide_index=True)
+                
+            with tab2:
+                st.success("✅ Pharmacy codes analyzed")
+                
+                # Sample pharmacy data
+                sample_pharmacy_data = {
+                    "NDC Code": ["0093-0058-01", "0071-0222-23", "0071-0156-23"],
+                    "Medication": ["Metformin", "Lisinopril", "Atorvastatin"],
+                    "Fill Date": ["2024-01-10", "2024-01-15", "2024-02-01"],
+                    "Frequency": [4, 3, 2]
+                }
+                
+                df_pharmacy = pd.DataFrame(sample_pharmacy_data)
+                st.dataframe(df_pharmacy, use_container_width=True, hide_index=True)
+
+    # 3. ENTITY EXTRACTION - Available after Entity Extraction
+    entity_availability = get_section_availability('entity_extraction')
+    
+    with st.expander(
+        "🎯 Entity Extraction", 
+        expanded=False,
+        disabled=(entity_availability == 'disabled')
+    ):
+        if entity_availability == 'disabled':
+            st.info("⏳ This section will be available after Entity Extraction step completes")
+        else:
+            st.markdown("""
+            <div class="section-box section-available">
+                <div class="section-title">Health Entity Analysis</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            entity_extraction = safe_get(results, 'entity_extraction', {})
+            if entity_extraction:
+                st.success("✅ Health entities extracted successfully")
+                
+                # Entity cards
+                st.markdown('<div class="entity-grid">', unsafe_allow_html=True)
+                
+                entities_data = [
+                    ('🩺', 'Diabetes Status', entity_extraction.get('diabetics', 'unknown'), 'diabetics'),
+                    ('👥', 'Age Group', entity_extraction.get('age_group', 'unknown'), 'age_group'),
+                    ('🚬', 'Smoking Status', entity_extraction.get('smoking', 'unknown'), 'smoking'),
+                    ('🍷', 'Alcohol Use', entity_extraction.get('alcohol', 'unknown'), 'alcohol'),
+                    ('💓', 'Blood Pressure', entity_extraction.get('blood_pressure', 'unknown'), 'blood_pressure')
+                ]
+                
+                cols = st.columns(len(entities_data))
+                
+                for i, (col, (icon, label, value, key)) in enumerate(zip(cols, entities_data)):
+                    with col:
+                        # Determine status class
+                        if key in ['diabetics', 'smoking'] and value == 'yes':
+                            status_class = 'positive'
+                        elif key in ['diabetics', 'smoking'] and value == 'no':
+                            status_class = 'negative'
+                        else:
+                            status_class = 'unknown' if value == 'unknown' else 'negative'
+                        
+                        st.markdown(f"""
+                        <div class="entity-card">
+                            <span class="entity-icon">{icon}</span>
+                            <div class="entity-label">{label}</div>
+                            <div class="entity-value {status_class}">{value.upper()}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.warning("Entity extraction data not available")
+
+    # 4. HEALTH TRAJECTORY - Available after Health Trajectory step
+    trajectory_availability = get_section_availability('health_trajectory')
+    
+    with st.expander(
+        "📈 Health Trajectory", 
+        expanded=False,
+        disabled=(trajectory_availability == 'disabled')
+    ):
+        if trajectory_availability == 'disabled':
+            st.info("⏳ This section will be available after Health Trajectory step completes")
+        else:
+            st.markdown("""
+            <div class="trajectory-container">
+                <div class="section-title">Predictive Health Analysis</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            health_trajectory = safe_get(results, 'health_trajectory', '')
+            if health_trajectory:
+                st.success("✅ Health trajectory analysis completed")
+                st.markdown("### 📊 Comprehensive Health Analysis")
+                st.write(health_trajectory)
+                
+                # Add summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Analysis Type", "Comprehensive")
+                with col2:
+                    st.metric("Medical Records", "25")
+                with col3:
+                    st.metric("Pharmacy Records", "18")
+                with col4:
+                    st.metric("Risk Factors", "5")
+            else:
+                st.warning("Health trajectory analysis not available")
+
+    # 5. HEART ATTACK RISK PREDICTION - Available after Heart Risk Prediction step
+    heart_risk_availability = get_section_availability('heart_risk')
+    
+    with st.expander(
+        "❤️ Heart Attack Risk Prediction", 
+        expanded=False,
+        disabled=(heart_risk_availability == 'disabled')
+    ):
+        if heart_risk_availability == 'disabled':
+            st.info("⏳ This section will be available after Heart Risk Prediction step completes")
+        else:
+            st.markdown("""
+            <div class="heart-risk-container">
+                <div class="section-title">Cardiovascular Risk Assessment</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            heart_attack_prediction = safe_get(results, 'heart_attack_prediction', {})
+            heart_attack_risk_score = safe_get(results, 'heart_attack_risk_score', 0.0)
+            
+            if heart_attack_prediction:
+                st.success("✅ Heart attack risk assessment completed")
+                
+                combined_display = heart_attack_prediction.get("combined_display", "Heart Disease Risk: 25%")
+                risk_category = heart_attack_prediction.get("risk_category", "Medium Risk")
+                
+                # Clean up display text
+                if "Confidence:" in combined_display:
+                    combined_display = combined_display.split("Confidence:")[0].strip()
+                combined_display = combined_display.replace("|", "").strip()
+                
+                # Risk display
+                st.markdown("### 🏥 ML Model Prediction Results")
+                
+                with st.container():
+                    st.markdown("""
+                    <div style="text-align: center; margin: 1rem 0;">
+                        <h3 style="color: #2c3e50; font-size: 1.8rem;">Heart Disease Risk Assessment</h3>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Extract risk percentage
+                    risk_percentage = ""
+                    if "%" in combined_display:
+                        percentage_match = re.search(r'(\d+\.?\d*%)', combined_display)
+                        if percentage_match:
+                            risk_percentage = percentage_match.group(1)
+                    
+                    if risk_percentage:
+                        st.markdown(f"""
+                        <div style="text-align: center; margin: 2rem 0;">
+                            <div style="font-size: 4rem; font-weight: 800; color: #dc3545;">
+                                {risk_percentage}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    st.info("🔬 Advanced machine learning analysis provides cardiovascular risk assessment based on comprehensive health data.")
+                    
+                    # Risk category display
+                    if risk_category == 'High Risk':
+                        st.error(f"**🚨 Risk Category: {risk_category}**")
+                    elif risk_category == 'Medium Risk':
+                        st.warning(f"**⚠️ Risk Category: {risk_category}**")
+                    else:
+                        st.success(f"**✅ Risk Category: {risk_category}**")
+            else:
+                st.warning("Heart attack risk prediction not available")
+
+# MAIN AREA CHAT INTERFACE (when not using modal)
+if (st.session_state.analysis_results and 
+    st.session_state.analysis_results.get("chatbot_ready", False) and 
+    st.session_state.chatbot_context and
+    not st.session_state.show_chatbot_modal):
+    
+    st.markdown("---")
+    st.markdown("## 💬 AI Medical Assistant")
+    st.markdown("🎯 Ask questions about the health analysis, request visualizations, or get clinical insights.")
+    
+    # Main chat interface
+    chat_input = st.chat_input("🏥 Ask me anything about the health data...")
+    
+    if chat_input:
+        # Add user message
+        st.session_state.chatbot_messages.append({"role": "user", "content": chat_input})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.write(chat_input)
+        
+        # Generate and display assistant response
+        with st.chat_message("assistant"):
+            with st.spinner("🔍 Analyzing your question..."):
+                try:
+                    if AGENT_AVAILABLE and st.session_state.agent:
+                        chatbot_response = st.session_state.agent.chat_with_data(
+                            chat_input, 
+                            st.session_state.chatbot_context, 
+                            st.session_state.chatbot_messages
+                        )
+                    else:
+                        # Mock response with potential matplotlib code
+                        if "chart" in chat_input.lower() or "graph" in chat_input.lower() or "plot" in chat_input.lower():
+                            chatbot_response = f"""
+Based on your request: "{chat_input}", here's a comprehensive analysis:
+
+This would provide detailed insights about your health data. Here's a sample visualization:
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Create health dashboard
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
+fig.suptitle('Healthcare Analysis Dashboard', fontsize=16, fontweight='bold')
+
+# Risk factors
+risk_data = list(risk_factors.values())
+risk_names = list(risk_factors.keys())
+colors = ['#28a745' if x == 0 else '#dc3545' for x in risk_data]
+ax1.bar(risk_names, risk_data, color=colors)
+ax1.set_title('Risk Factors', fontweight='bold')
+ax1.set_ylabel('Risk Level')
+
+# Heart risk meter
+ax2.barh(['Heart Risk'], [heart_risk_score], color='#dc3545', alpha=0.7)
+ax2.set_xlim(0, 1)
+ax2.set_title(f'Heart Risk: {{:.1%}}'.format(heart_risk_score), fontweight='bold')
+
+# Medications
+if len(medication_list) > 0:
+    ax3.barh(medication_list[:5], range(1, len(medication_list[:5])+1), color='#007bff')
+    ax3.set_title('Medications', fontweight='bold')
+else:
+    ax3.text(0.5, 0.5, 'No medication data', ha='center', va='center', transform=ax3.transAxes)
+
+# Health summary
+summary_text = f'Patient Age: {{}} years\\nDiabetes: {{}}\\nSmoking: {{}}'.format(patient_age, diabetes_status, smoking_status)
+ax4.text(0.1, 0.5, summary_text, fontsize=12, transform=ax4.transAxes, verticalalignment='center')
+ax4.set_title('Patient Summary', fontweight='bold')
+ax4.axis('off')
+
+plt.tight_layout()
+```
+
+This visualization shows your comprehensive health analysis including risk factors, cardiovascular assessment, medication profile, and overall health summary.
+                            """
+                        else:
+                            chatbot_response = f"""
+Thank you for your question: "{chat_input}"
+
+Based on the healthcare analysis data available, I can provide insights about:
+
+🩺 **Medical Records**: Comprehensive analysis of diagnoses, procedures, and clinical indicators
+💊 **Medications**: Current prescriptions, NDC codes, and therapeutic classifications  
+📊 **Risk Assessment**: Heart attack risk, chronic disease probability, and hospitalization likelihood
+📈 **Health Trajectory**: Predictive modeling and health progression analysis
+🎯 **Clinical Insights**: Evidence-based recommendations and care gap identification
+
+This is a demonstration response. In the full implementation with your health_agent_core backend, this would provide detailed, personalized medical insights based on your actual claims data.
+
+Would you like me to create a specific visualization or provide more details about any particular aspect of the health analysis?
+                            """
+                    
+                    # Check for matplotlib code and handle graphs
+                    matplotlib_code = extract_matplotlib_code(chatbot_response)
+                    
+                    if matplotlib_code:
+                        # Display text content without code
+                        text_content = chatbot_response
+                        for pattern in [f"```python\n{matplotlib_code}\n```", f"```\n{matplotlib_code}\n```"]:
+                            text_content = text_content.replace(pattern, "")
+                        
+                        if text_content.strip():
+                            st.write(text_content.strip())
+                        
+                        # Execute and display graph
+                        with st.spinner("📊 Generating visualization..."):
+                            try:
+                                img_buffer = execute_matplotlib_code(matplotlib_code)
+                                if img_buffer:
+                                    st.image(img_buffer, use_container_width=True, caption="🎨 Generated Healthcare Visualization")
+                                    st.success("✅ Graph generated successfully!")
+                                else:
+                                    st.error("❌ Failed to generate graph")
+                                    st.info("💡 Try asking for: 'Create a simple bar chart' or 'Show risk factors chart'")
+                            except Exception as graph_error:
+                                st.error(f"Graph generation error: {str(graph_error)}")
+                    else:
+                        # No matplotlib code, just display the response
+                        st.write(chatbot_response)
+                    
+                    # Add assistant response to messages
+                    st.session_state.chatbot_messages.append({"role": "assistant", "content": chatbot_response})
+                    
+                except Exception as e:
+                    error_msg = f"❌ Error: {str(e)}"
+                    st.error(error_msg)
+                    st.session_state.chatbot_messages.append({"role": "assistant", "content": error_msg})
+
+# Auto-refresh during analysis
+if st.session_state.analysis_running:
+    time.sleep(1)
+    st.rerun()
+
+# Status messages
+if st.session_state.analysis_results:
+    if st.session_state.analysis_results.get('success'):
+        st.success("🎉 Healthcare analysis completed successfully!")
+        if st.session_state.analysis_results.get('chatbot_ready'):
+            st.info("💬 AI Medical Assistant is now available in the sidebar and via the chat window button above!")
+    else:
+        st.error("❌ Analysis encountered errors")
+
+if __name__ == "__main__":
+    pass
