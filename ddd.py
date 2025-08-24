@@ -1,1743 +1,979 @@
+# Configure Streamlit page FIRST
+import streamlit as st
+
+# Determine sidebar state - COLLAPSED by default with larger width
+sidebar_state = "collapsed"
+
+st.set_page_config(
+    page_title="⚡ Real-time LangGraph Health Agent",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state=sidebar_state
+)
+
+# Now import other modules
 import json
-import asyncio
-from datetime import datetime
-from typing import Dict, Any, List, TypedDict, Literal, Optional, Callable
-from dataclasses import dataclass, asdict
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+import sys
+import os
 import logging
-from datetime import date
-import requests
+from typing import Dict, Any, Optional, Callable
+import matplotlib.pyplot as plt
+import matplotlib
+import io
+import base64
 import re
+import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import warnings
 import threading
+from queue import Queue, Empty
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
-# LangGraph imports
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+# ENHANCED MATPLOTLIB CONFIGURATION FOR STREAMLIT
+matplotlib.use('Agg')  # Use non-interactive backend
+plt.ioff()  # Turn off interactive mode
 
-# Import our enhanced modular components
-from health_api_integrator import EnhancedHealthAPIIntegrator
-from health_data_processor_work import EnhancedHealthDataProcessor
+# Suppress specific warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+warnings.filterwarnings('ignore', message='.*FigureCanvasAgg is non-interactive.*')
+
+# Set default style
+plt.style.use('default')
+
+# Configure matplotlib parameters for better Streamlit integration
+plt.rcParams.update({
+    'figure.facecolor': 'white',
+    'axes.facecolor': 'white',
+    'savefig.facecolor': 'white',
+    'figure.figsize': (10, 6),
+    'font.size': 10,
+    'axes.titlesize': 12,
+    'axes.labelsize': 10,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'legend.fontsize': 9,
+    'figure.titlesize': 14,
+    'font.family': 'DejaVu Sans',
+    'axes.unicode_minus': False,
+    'text.usetex': False,
+})
+
+# Add current directory to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-@dataclass
-class Config:
-    fastapi_url: str = "http://localhost:8000"  # MCP server URL
-    # Snowflake Cortex API Configuration
-    api_url: str = "https://sfassist.edagenaipreprod.awsdns.internal.das/api/cortex/complete"
-    api_key: str = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-    app_id: str = "edadip"
-    aplctn_cd: str = "edagnai"
-    model: str = "llama4-maverick"
+# Import the health analysis agent
+AGENT_AVAILABLE = False
+import_error = None
+HealthAnalysisAgent = None
+Config = None
+
+try:
+    from health_agent_core import HealthAnalysisAgent, Config
+    AGENT_AVAILABLE = True
+except ImportError as e:
+    AGENT_AVAILABLE = False
+    import_error = str(e)
+
+# Enhanced CSS with real-time status indicators
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+    font-family: 'Inter', sans-serif;
+}
+
+.main-header {
+    font-size: 3.2rem;
+    color: #2c3e50;
+    text-align: center;
+    margin-bottom: 2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: glow-pulse 3s ease-in-out infinite;
+}
+
+@keyframes glow-pulse {
+    0%, 100% { filter: drop-shadow(0 0 10px rgba(102, 126, 234, 0.3)); }
+    50% { filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.6)); }
+}
+
+.section-box {
+    background: white;
+    padding: 1.8rem;
+    border-radius: 15px;
+    border: 1px solid #e9ecef;
+    margin: 1.2rem 0;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+}
+
+.section-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 35px rgba(0,0,0,0.15);
+}
+
+.section-title {
+    font-size: 1.4rem;
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    border-bottom: 3px solid #3498db;
+    padding-bottom: 0.6rem;
+}
+
+.realtime-workflow-container {
+    background: linear-gradient(135deg, #e8f0fe 0%, #f3e5f5 25%, #e1f5fe 50%, #f1f8e9 75%, #fff8e1 100%);
+    padding: 3rem;
+    border-radius: 25px;
+    margin: 2rem 0;
+    border: 2px solid rgba(52, 152, 219, 0.3);
+    box-shadow: 0 20px 50px rgba(52, 152, 219, 0.2);
+    position: relative;
+    overflow: hidden;
+}
+
+.realtime-workflow-container::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+    animation: rotate-glow 20s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes rotate-glow {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.workflow-step {
+    background: rgba(255, 255, 255, 0.8);
+    padding: 1.5rem;
+    border-radius: 15px;
+    margin: 1rem 0;
+    border-left: 4px solid #6c757d;
+    transition: all 0.4s ease;
+    backdrop-filter: blur(10px);
+    position: relative;
+    z-index: 2;
+}
+
+.workflow-step.pending {
+    border-left-color: #6c757d;
+    background: rgba(108, 117, 125, 0.1);
+}
+
+.workflow-step.running {
+    border-left-color: #ffc107;
+    background: rgba(255, 193, 7, 0.15);
+    animation: pulse-step 1.5s infinite;
+    box-shadow: 0 10px 30px rgba(255, 193, 7, 0.3);
+}
+
+.workflow-step.completed {
+    border-left-color: #28a745;
+    background: rgba(40, 167, 69, 0.15);
+    box-shadow: 0 10px 30px rgba(40, 167, 69, 0.2);
+}
+
+.workflow-step.error {
+    border-left-color: #dc3545;
+    background: rgba(220, 53, 69, 0.15);
+    box-shadow: 0 10px 30px rgba(220, 53, 69, 0.2);
+}
+
+@keyframes pulse-step {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+}
+
+.realtime-sync-indicator {
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+    padding: 1.5rem;
+    border-radius: 15px;
+    margin: 1rem 0;
+    border-left: 4px solid #28a745;
+    animation: live-pulse 1.5s infinite;
+    position: relative;
+    z-index: 2;
+}
+
+@keyframes live-pulse {
+    0%, 100% { opacity: 0.9; }
+    50% { opacity: 1; }
+}
+
+.node-status-details {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 0.5rem;
+}
+
+.progress-metrics {
+    display: flex;
+    justify-content: space-between;
+    margin: 1rem 0;
+    position: relative;
+    z-index: 2;
+}
+
+.metric-card {
+    background: rgba(255, 255, 255, 0.9);
+    padding: 1rem;
+    border-radius: 10px;
+    text-align: center;
+    flex: 1;
+    margin: 0 0.5rem;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.status-error {
+    background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+    color: #d32f2f;
+    padding: 1rem;
+    border-radius: 8px;
+    margin: 1rem 0;
+    border-left: 4px solid #f44336;
+    font-weight: 600;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# REAL-TIME PROGRESS TRACKER with Enhanced Callbacks
+@dataclass 
+class NodeProgress:
+    node_name: str
+    ui_name: str
+    status: str  # pending, running, completed, error
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    error_message: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+class RealTimeLangGraphTracker:
+    """Enhanced real-time tracker for LangGraph node execution"""
     
-    # Enhanced system messages with better defined prompts
-    sys_msg: str = """You are Dr. HealthAI, a comprehensive healthcare data analyst and clinical decision support specialist with expertise in:
-
-CLINICAL SPECIALIZATION:
-• Medical coding systems (ICD-10, CPT, HCPCS, NDC) interpretation and analysis
-• Claims data analysis and healthcare utilization patterns
-• Risk stratification and predictive modeling for chronic diseases
-• Clinical decision support and evidence-based medicine
-• Population health management and care coordination
-• Healthcare economics and cost prediction
-• Quality metrics (HEDIS, STAR ratings) and care gap analysis
-• Advanced healthcare data visualization with matplotlib
-
-DATA ACCESS CAPABILITIES:
-• Complete deidentified medical claims with ICD-10 diagnosis codes and CPT procedure codes
-• Complete deidentified pharmacy claims with NDC codes and medication details
-• Healthcare service utilization patterns and claims dates (clm_rcvd_dt, rx_filled_dt)
-• Structured extractions of all medical and pharmacy fields with detailed analysis
-• Enhanced entity extraction results including chronic conditions and risk factors
-• Comprehensive patient demographic and clinical data
-• Batch-processed code meanings for medical and pharmacy codes
-
-ANALYTICAL RESPONSIBILITIES:
-You provide comprehensive healthcare analysis including clinical insights, risk assessments, predictive modeling, and evidence-based recommendations using ALL available deidentified claims data. Always reference specific data points, codes, dates, and clinical indicators from the provided records when making assessments.
-
-GRAPH GENERATION CAPABILITIES:
-You can generate matplotlib code for healthcare data visualizations including:
-• Medication timeline charts
-• Diagnosis progression timelines
-• Risk assessment dashboards
-• Health metrics overviews
-• Condition severity distributions
-• Utilization trend analysis
-
-RESPONSE STANDARDS:
-• Use clinical terminology appropriately while ensuring clarity
-• Cite specific ICD-10 codes, NDC codes, CPT codes, and claim dates
-• Provide evidence-based analysis using established clinical guidelines
-• Include risk stratification and predictive insights
-• Reference exact field names and values from the JSON data structure
-• Maintain professional healthcare analysis standards
-• Generate working matplotlib code when visualization is requested"""
-
-    chatbot_sys_msg: str = """You are Dr. ChatAI, a specialized healthcare AI assistant with COMPLETE ACCESS to comprehensive deidentified medical and pharmacy claims data. You serve as a clinical decision support tool for healthcare analysis with advanced graph generation capabilities.
-
-COMPREHENSIVE DATA ACCESS:
-✅ MEDICAL CLAIMS DATA:
-   • Complete deidentified medical records with ICD-10 diagnosis codes
-   • Healthcare service codes (hlth_srvc_cd) and CPT procedure codes
-   • Claims received dates (clm_rcvd_dt) and service utilization patterns
-   • Patient demographics (age, zip code) and clinical indicators
-
-✅ PHARMACY CLAIMS DATA:
-   • Complete deidentified pharmacy records with NDC medication codes
-   • Medication names (lbl_nm), prescription fill dates (rx_filled_dt)
-   • Drug utilization patterns and therapy management data
-   • Prescription adherence and medication history
-
-✅ ANALYTICAL RESULTS:
-   • Enhanced entity extraction with chronic condition identification
-   • Health trajectory analysis with predictive insights
-   • Risk assessment results including cardiovascular risk prediction
-   • Clinical complexity scoring and care gap analysis
-   • Batch-processed code meanings for all medical and pharmacy codes
-
-✅ GRAPH GENERATION CAPABILITIES:
-   • Generate working matplotlib code for healthcare visualizations
-   • Create medication timelines, diagnosis progressions, risk dashboards
-   • Support real-time chart generation and display
-   • Provide complete, executable Python code with proper imports
-
-ADVANCED CAPABILITIES:
-🔬 CLINICAL ANALYSIS:
-   • Interpret ICD-10 diagnosis codes for disease progression and prognosis assessment
-   • Analyze NDC medication codes for treatment adherence and therapeutic effectiveness
-   • Assess comorbidity burden from diagnosis patterns and medication combinations
-   • Evaluate drug interactions and optimize therapeutic pathways
-
-📊 PREDICTIVE MODELING:
-   • Risk stratification for chronic diseases (diabetes, hypertension, COPD, CKD)
-   • Hospitalization and readmission risk prediction (6-12 month outlook)
-   • Emergency department utilization vs outpatient care patterns
-   • Medication adherence risk assessment and intervention strategies
-   • Healthcare cost prediction and utilization forecasting
-
-💰 HEALTHCARE ECONOMICS:
-   • High-cost claimant identification and cost projection
-   • Healthcare utilization optimization (inpatient vs outpatient)
-   • Care management program recommendations
-   • Population health risk segmentation
-
-🎯 QUALITY & CARE MANAGEMENT:
-   • Care gap identification (missed screenings, vaccinations)
-   • HEDIS and STAR rating impact assessment
-   • Preventive care opportunity identification
-   • Personalized care plan recommendations
-
-📈 VISUALIZATION CAPABILITIES:
-   • Generate matplotlib code for medication timeline charts
-   • Create risk assessment dashboards with multiple metrics
-   • Develop diagnosis progression visualizations
-   • Build comprehensive health overview charts
-   • Support custom visualization requests
-
-GRAPH GENERATION PROTOCOL:
-When asked to create a graph or visualization:
-1. **Detect Request**: Identify graph type from user query
-2. **Generate Code**: Create complete, executable matplotlib code
-3. **Use Real Data**: Incorporate actual patient data when available
-4. **Provide Context**: Include brief explanation of the visualization
-5. **Ensure Quality**: Generate professional, informative charts
-
-RESPONSE PROTOCOL:
-1. **DATA-DRIVEN ANALYSIS**: Always use specific data from the provided claims records
-2. **CLINICAL EVIDENCE**: Reference exact ICD-10 codes, NDC codes, dates, and clinical findings
-3. **PREDICTIVE INSIGHTS**: Provide forward-looking analysis based on available clinical indicators
-4. **ACTIONABLE RECOMMENDATIONS**: Suggest specific clinical actions and care management strategies
-5. **PROFESSIONAL STANDARDS**: Maintain clinical accuracy while ensuring patient safety considerations
-6. **GRAPH GENERATION**: Provide working matplotlib code when visualization is requested
-
-GRAPH RESPONSE FORMAT:
-When generating graphs, respond with:
-```
-[Brief explanation of what the visualization shows]
-
-```python
-[Complete matplotlib code]
-```
-
-[Clinical insights from the visualization]
-```
-
-CRITICAL INSTRUCTIONS:
-• Access and analyze the COMPLETE deidentified claims dataset provided
-• Reference specific codes, dates, medications, and clinical findings
-• Provide comprehensive analysis using both medical AND pharmacy data
-• Include predictive insights and risk stratification
-• Cite exact field paths and values from the JSON data structure
-• Explain medical terminology and provide clinical context
-• Focus on actionable clinical insights and care management recommendations
-• Generate working matplotlib code for visualization requests
-• Use actual patient data in graphs when available
-
-You have comprehensive access to this patient's complete healthcare data - use it to provide detailed, professional medical analysis, clinical decision support, and advanced data visualizations."""
-
-    timeout: int = 30
-
-    # Heart Attack Prediction API Configuration
-    heart_attack_api_url: str = "http://localhost:8000"
-    heart_attack_threshold: float = 0.5
-
-    def to_dict(self):
-        return asdict(self)
-
-# Enhanced State Definition for LangGraph with callback support
-class HealthAnalysisState(TypedDict):
-    # Input data
-    patient_data: Dict[str, Any]
-
-    # API outputs
-    mcid_output: Dict[str, Any]
-    medical_output: Dict[str, Any]
-    pharmacy_output: Dict[str, Any]
-    token_output: Dict[str, Any]
-
-    # Processed data
-    deidentified_medical: Dict[str, Any]
-    deidentified_pharmacy: Dict[str, Any]
-    deidentified_mcid: Dict[str, Any]
-
-    # Extracted structured data
-    medical_extraction: Dict[str, Any]
-    pharmacy_extraction: Dict[str, Any]
-
-    entity_extraction: Dict[str, Any]
-
-    # Analysis results
-    health_trajectory: str
-    final_summary: str
-
-    # Heart Attack Prediction
-    heart_attack_prediction: Dict[str, Any]
-    heart_attack_risk_score: float
-    heart_attack_features: Dict[str, Any]
-
-    # Enhanced chatbot functionality with graph generation
-    chatbot_ready: bool
-    chatbot_context: Dict[str, Any]
-    chat_history: List[Dict[str, str]]
-    graph_generation_ready: bool
-
-    # Control flow
-    current_step: str
-    errors: List[str]
-    retry_count: int
-    processing_complete: bool
-    step_status: Dict[str, str]
+    def __init__(self):
+        self.progress_queue = Queue()
+        self.node_status = {}
+        self.current_node = None
+        self.lock = threading.Lock()
+        
+        # Enhanced node mapping with descriptions
+        self.node_mapping = {
+            'fetch_api_data': {
+                'ui_name': 'API Data Fetch',
+                'icon': '⚡',
+                'description': 'Fetching comprehensive claims data from APIs'
+            },
+            'deidentify_claims_data': {
+                'ui_name': 'Data Deidentification', 
+                'icon': '🔒',
+                'description': 'Advanced PII removal with clinical preservation'
+            },
+            'extract_claims_fields': {
+                'ui_name': 'Field Extraction',
+                'icon': '🚀', 
+                'description': 'Extracting medical and pharmacy fields'
+            },
+            'extract_entities': {
+                'ui_name': 'Entity Extraction',
+                'icon': '🎯',
+                'description': 'Advanced health entity identification'
+            },
+            'analyze_trajectory': {
+                'ui_name': 'Health Trajectory',
+                'icon': '📈',
+                'description': 'Comprehensive predictive health analysis'
+            },
+            'generate_summary': {
+                'ui_name': 'Summary Generation',
+                'icon': '📋',
+                'description': 'Executive summary creation'
+            },
+            'predict_heart_attack': {
+                'ui_name': 'Heart Risk Prediction',
+                'icon': '❤️',
+                'description': 'ML-based cardiovascular assessment'
+            },
+            'initialize_chatbot': {
+                'ui_name': 'Chatbot Initialization',
+                'icon': '💬',
+                'description': 'AI assistant with graph generation'
+            }
+        }
     
-    # Real-time callback support
-    callback_function: Optional[Callable[[str, str, Dict[str, Any], Optional[str]], None]]
-
-class HealthAnalysisAgent:
-    """Enhanced Health Analysis Agent with Real-time Callback Support"""
-
-    def __init__(self, custom_config: Optional[Config] = None):
-        self.config = custom_config or Config()
-        
-        # Real-time callback support
-        self._callback_lock = threading.Lock()
-        self._node_callbacks = {}
-
-        # Initialize enhanced components
-        self.api_integrator = EnhancedHealthAPIIntegrator(self.config)
-        self.data_processor = EnhancedHealthDataProcessor(self.api_integrator)
-
-        logger.info("🔧 Enhanced HealthAnalysisAgent initialized with Real-time Callbacks")
-        logger.info(f"🌐 Snowflake API URL: {self.config.api_url}")
-        logger.info(f"🤖 Model: {self.config.model}")
-        logger.info(f"📡 MCP Server URL: {self.config.fastapi_url}")
-        logger.info(f"❤️ Heart Attack ML API: {self.config.heart_attack_api_url}")
-        logger.info(f"📊 Graph generation ready for medical data visualizations")
-        logger.info(f"🔄 Real-time callback system initialized")
-
-        self.setup_enhanced_langgraph()
-
-    def setup_enhanced_langgraph(self):
-        """Setup enhanced LangGraph workflow with real-time callback support"""
-        logger.info("🔧 Setting up Enhanced LangGraph workflow with real-time callbacks...")
-
-        workflow = StateGraph(HealthAnalysisState)
-
-        # Add all processing nodes
-        workflow.add_node("fetch_api_data", self.fetch_api_data)
-        workflow.add_node("deidentify_claims_data", self.deidentify_claims_data)
-        workflow.add_node("extract_claims_fields", self.extract_claims_fields)
-        workflow.add_node("extract_entities", self.extract_entities)
-        workflow.add_node("analyze_trajectory", self.analyze_trajectory)
-        workflow.add_node("generate_summary", self.generate_summary)
-        workflow.add_node("predict_heart_attack", self.predict_heart_attack)
-        workflow.add_node("initialize_chatbot", self.initialize_chatbot)
-        workflow.add_node("handle_error", self.handle_error)
-
-        # Define workflow edges
-        workflow.add_edge(START, "fetch_api_data")
-
-        workflow.add_conditional_edges(
-            "fetch_api_data",
-            self.should_continue_after_api,
-            {
-                "continue": "deidentify_claims_data",
-                "retry": "fetch_api_data",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "deidentify_claims_data",
-            self.should_continue_after_deidentify,
-            {
-                "continue": "extract_claims_fields",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "extract_claims_fields",
-            self.should_continue_after_extraction_step,
-            {
-                "continue": "extract_entities",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "extract_entities",
-            self.should_continue_after_entity_extraction,
-            {
-                "continue": "analyze_trajectory",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "analyze_trajectory",
-            self.should_continue_after_trajectory,
-            {
-                "continue": "generate_summary",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "generate_summary",
-            self.should_continue_after_summary,
-            {
-                "continue": "predict_heart_attack",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_conditional_edges(
-            "predict_heart_attack",
-            self.should_continue_after_heart_attack_prediction,
-            {
-                "continue": "initialize_chatbot",
-                "error": "handle_error"
-            }
-        )
-
-        workflow.add_edge("initialize_chatbot", END)
-        workflow.add_edge("handle_error", END)
-
-        # Compile with checkpointer
-        memory = MemorySaver()
-        self.graph = workflow.compile(checkpointer=memory)
-
-        logger.info("✅ Enhanced LangGraph workflow compiled successfully with real-time callbacks!")
-
-    # Enhanced callback system
-    def _execute_callback(self, node_name: str, status: str, state: HealthAnalysisState, error_msg: Optional[str] = None):
-        """Execute callback if available"""
-        try:
-            callback = state.get('callback_function')
-            if callback and callable(callback):
-                details = {
-                    'step_status': state.get('step_status', {}),
-                    'errors': state.get('errors', []),
-                    'current_step': state.get('current_step', ''),
-                    'node_name': node_name
-                }
-                callback(node_name, status, details, error_msg)
-        except Exception as e:
-            logger.warning(f"Callback execution failed for {node_name}: {e}")
-
-    # ===== ENHANCED LANGGRAPH NODES WITH REAL-TIME CALLBACKS =====
-
-    def fetch_api_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 1: Fetch claims data from APIs with real-time callbacks"""
-        node_name = "fetch_api_data"
-        logger.info(f"🚀 Node 1: Starting Claims API data fetch...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            patient_data = state["patient_data"]
-
-            # Validation
-            required_fields = ["first_name", "last_name", "ssn", "date_of_birth", "gender", "zip_code"]
-            for field in required_fields:
-                if not patient_data.get(field):
-                    error_msg = f"Missing required field: {field}"
-                    state["errors"].append(error_msg)
-                    state["step_status"][node_name] = "error"
-                    self._execute_callback(node_name, 'error', state, error_msg)
-                    return state
-
-            # Fetch data
-            api_result = self.api_integrator.fetch_backend_data_enhanced(patient_data)
-
-            if "error" in api_result:
-                error_msg = f"Claims API Error: {api_result['error']}"
-                state["errors"].append(error_msg)
-                state["step_status"][node_name] = "error"
-                self._execute_callback(node_name, 'error', state, error_msg)
-            else:
-                state["mcid_output"] = api_result.get("mcid_output", {})
-                state["medical_output"] = api_result.get("medical_output", {})
-                state["pharmacy_output"] = api_result.get("pharmacy_output", {})
-                state["token_output"] = api_result.get("token_output", {})
-
-                state["step_status"][node_name] = "completed"
-                self._execute_callback(node_name, 'completed', state)
-                logger.info("✅ Successfully fetched all Claims API data")
-
-        except Exception as e:
-            error_msg = f"Error fetching Claims API data: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def deidentify_claims_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 2: Deidentification of claims data with real-time callbacks"""
-        node_name = "deidentify_claims_data"
-        logger.info(f"🔒 Node 2: Starting comprehensive claims data deidentification...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            # Deidentify all data types
-            medical_data = state.get("medical_output", {})
-            deidentified_medical = self.data_processor.deidentify_medical_data_enhanced(medical_data, state["patient_data"])
-            state["deidentified_medical"] = deidentified_medical
-
-            pharmacy_data = state.get("pharmacy_output", {})
-            deidentified_pharmacy = self.data_processor.deidentify_pharmacy_data_enhanced(pharmacy_data)
-            state["deidentified_pharmacy"] = deidentified_pharmacy
-
-            mcid_data = state.get("mcid_output", {})
-            deidentified_mcid = self.data_processor.deidentify_mcid_data_enhanced(mcid_data)
-            state["deidentified_mcid"] = deidentified_mcid
-
-            state["step_status"][node_name] = "completed"
-            self._execute_callback(node_name, 'completed', state)
-            logger.info("✅ Successfully completed comprehensive claims data deidentification")
-
-        except Exception as e:
-            error_msg = f"Error in claims data deidentification: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def extract_claims_fields(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 3: Extract fields from claims data with real-time callbacks"""
-        node_name = "extract_claims_fields"
-        logger.info(f"🔍 Node 3: Starting enhanced claims field extraction with batch processing...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            # Extract medical and pharmacy fields with batch processing
-            medical_extraction = self.data_processor.extract_medical_fields_batch_enhanced(state.get("deidentified_medical", {}))
-            state["medical_extraction"] = medical_extraction
-            logger.info(f"📋 Medical extraction: {len(medical_extraction.get('hlth_srvc_records', []))} health service records")
-
-            pharmacy_extraction = self.data_processor.extract_pharmacy_fields_batch_enhanced(state.get("deidentified_pharmacy", {}))
-            state["pharmacy_extraction"] = pharmacy_extraction
-            logger.info(f"💊 Pharmacy extraction: {len(pharmacy_extraction.get('ndc_records', []))} NDC records")
-
-            state["step_status"][node_name] = "completed"
-            self._execute_callback(node_name, 'completed', state)
-            logger.info("✅ Successfully completed enhanced claims field extraction with batch processing")
-
-        except Exception as e:
-            error_msg = f"Error in claims field extraction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def extract_entities(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 4: Extract health entities with real-time callbacks"""
-        node_name = "extract_entities"
-        logger.info(f"🎯 Node 4: Starting LLM-powered health entity extraction...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-       
-        try:
-            pharmacy_data = state.get("pharmacy_output", {})
-            pharmacy_extraction = state.get("pharmacy_extraction", {})
-            medical_extraction = state.get("medical_extraction", {})
-            patient_data = state.get("patient_data", {})
-           
-            # Calculate age
-            if patient_data.get('date_of_birth'):
-                try:
-                    dob = datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date()
-                    today = date.today()
-                    calculated_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                    patient_data['calculated_age'] = calculated_age
-                    logger.info(f"📅 Calculated age from DOB: {calculated_age} years")
-                except Exception as e:
-                    logger.warning(f"Could not calculate age from DOB: {e}")
-           
-            # Extract entities using enhanced method
-            entities = self.data_processor.extract_health_entities_with_clinical_insights(
-                pharmacy_data,
-                pharmacy_extraction,
-                medical_extraction,
-                patient_data,
-                self.api_integrator
-            )
-           
-            state["entity_extraction"] = entities
-            state["step_status"][node_name] = "completed"
-            self._execute_callback(node_name, 'completed', state)
-           
-            conditions_count = len(entities.get("medical_conditions", []))
-            medications_count = len(entities.get("medications_identified", []))
-            logger.info(f"✅ Successfully extracted health entities: {conditions_count} conditions, {medications_count} medications")
-           
-        except Exception as e:
-            error_msg = f"Error in entity extraction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-       
-        return state
-
-    def analyze_trajectory(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 5: Health trajectory analysis with real-time callbacks"""
-        node_name = "analyze_trajectory"
-        logger.info(f"📈 Node 5: Starting comprehensive health trajectory analysis...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            deidentified_medical = state.get("deidentified_medical", {})
-            deidentified_pharmacy = state.get("deidentified_pharmacy", {})
-            deidentified_mcid = state.get("deidentified_mcid", {})
-            medical_extraction = state.get("medical_extraction", {})
-            pharmacy_extraction = state.get("pharmacy_extraction", {})
-            entities = state.get("entity_extraction", {})
-
-            trajectory_prompt = self._create_comprehensive_trajectory_prompt_with_evaluation(
-                deidentified_medical, deidentified_pharmacy, deidentified_mcid,
-                medical_extraction, pharmacy_extraction, entities
-            )
-
-            logger.info("🤖 Calling Snowflake Cortex for comprehensive trajectory analysis...")
-
-            response = self.api_integrator.call_llm_enhanced(trajectory_prompt, self.config.sys_msg)
-
-            if response.startswith("Error"):
-                error_msg = f"Trajectory analysis failed: {response}"
-                state["errors"].append(error_msg)
-                state["step_status"][node_name] = "error"
-                self._execute_callback(node_name, 'error', state, error_msg)
-            else:
-                state["health_trajectory"] = response
-                state["step_status"][node_name] = "completed"
-                self._execute_callback(node_name, 'completed', state)
-                logger.info("✅ Successfully completed comprehensive trajectory analysis")
-
-        except Exception as e:
-            error_msg = f"Error in trajectory analysis: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def generate_summary(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 6: Generate summary with real-time callbacks"""
-        node_name = "generate_summary"
-        logger.info(f"📋 Node 6: Generating comprehensive final summary...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            summary_prompt = self._create_comprehensive_summary_prompt(
-                state.get("health_trajectory", ""),
-                state.get("entity_extraction", {}),
-                state.get("medical_extraction", {}),
-                state.get("pharmacy_extraction", {})
-            )
-
-            logger.info("🤖 Calling Snowflake Cortex for final summary...")
-
-            response = self.api_integrator.call_llm_enhanced(summary_prompt, self.config.sys_msg)
-
-            if response.startswith("Error"):
-                error_msg = f"Summary generation failed: {response}"
-                state["errors"].append(error_msg)
-                state["step_status"][node_name] = "error"
-                self._execute_callback(node_name, 'error', state, error_msg)
-            else:
-                state["final_summary"] = response
-                state["step_status"][node_name] = "completed"
-                self._execute_callback(node_name, 'completed', state)
-                logger.info("✅ Successfully generated comprehensive final summary")
-
-        except Exception as e:
-            error_msg = f"Error in summary generation: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def predict_heart_attack(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 7: Heart attack prediction with real-time callbacks"""
-        node_name = "predict_heart_attack"
-        logger.info(f"❤️ Node 7: Starting heart attack prediction...")
-        
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            # Extract features
-            logger.info("🔍 Extracting heart attack features...")
-            features = self._extract_enhanced_heart_attack_features(state)
-            state["heart_attack_features"] = features
-
-            if not features or "error" in features:
-                error_msg = "Failed to extract features for heart attack prediction"
-                state["errors"].append(error_msg)
-                state["step_status"][node_name] = "error"
-                self._execute_callback(node_name, 'error', state, error_msg)
-                logger.error(error_msg)
-                return state
-
-            # Prepare features for API call
-            logger.info("⚙️ Preparing features for API call...")
-            fastapi_features = self._prepare_enhanced_fastapi_features(features)
-
-            if fastapi_features is None:
-                error_msg = "Failed to prepare feature vector for prediction"
-                state["errors"].append(error_msg)
-                state["step_status"][node_name] = "error"
-                self._execute_callback(node_name, 'error', state, error_msg)
-                logger.error(error_msg)
-                return state
-
-            # Make prediction
-            logger.info("🚀 Making heart attack prediction call...")
-            prediction_result = self._call_heart_attack_prediction_sync(fastapi_features)
-
-            if prediction_result is None:
-                error_msg = "Heart attack prediction returned None"
-                state["errors"].append(error_msg)
-                state["step_status"][node_name] = "error"
-                self._execute_callback(node_name, 'error', state, error_msg)
-                logger.error(error_msg)
-                return state
-
-            # Process result
-            if prediction_result.get("success", False):
-                logger.info("✅ Processing successful prediction result...")
+    def create_node_callback(self):
+        """Create callback function to inject into LangGraph nodes"""
+        def node_callback(node_name: str, status: str, details: Dict[str, Any] = None, error_msg: str = None):
+            """Real-time callback from LangGraph node execution"""
+            with self.lock:
+                timestamp = datetime.now()
                 
-                prediction_data = prediction_result.get("prediction_data", {})
-                risk_probability = prediction_data.get("probability", 0.0)
-                binary_prediction = prediction_data.get("prediction", 0)
+                node_info = self.node_mapping.get(node_name, {
+                    'ui_name': node_name,
+                    'icon': '⚙️',
+                    'description': f'Processing {node_name}'
+                })
                 
-                risk_percentage = risk_probability * 100
-                confidence_percentage = (1 - risk_probability) * 100 if binary_prediction == 0 else risk_probability * 100
+                progress = NodeProgress(
+                    node_name=node_name,
+                    ui_name=node_info['ui_name'],
+                    status=status,
+                    start_time=timestamp if status == 'running' else self.node_status.get(node_name, {}).get('start_time'),
+                    end_time=timestamp if status in ['completed', 'error'] else None,
+                    error_message=error_msg,
+                    details=details or {}
+                )
                 
-                if risk_percentage >= 70:
-                    risk_category = "High Risk"
-                elif risk_percentage >= 50:
-                    risk_category = "Medium Risk"
-                else:
-                    risk_category = "Low Risk"
+                self.node_status[node_name] = progress
+                self.current_node = node_name if status == 'running' else None
                 
-                enhanced_prediction = {
-                    "risk_display": f"Heart Disease Risk: {risk_percentage:.1f}% ({risk_category})",
-                    "confidence_display": f"Confidence: {confidence_percentage:.1f}%",
-                    "combined_display": f"Heart Disease Risk: {risk_percentage:.1f}% ({risk_category}) | Confidence: {confidence_percentage:.1f}%",
-                    "raw_risk_score": risk_probability,
-                    "raw_prediction": binary_prediction,
-                    "risk_category": risk_category,
-                    "fastapi_server_url": self.config.heart_attack_api_url,
-                    "prediction_method": prediction_result.get("method", "unknown"),
-                    "prediction_endpoint": prediction_result.get("endpoint", "unknown"),
-                    "prediction_timestamp": datetime.now().isoformat(),
-                    "enhanced_features_used": features.get("feature_interpretation", {}),
-                    "model_enhanced": True
-                }
+                # Put in queue for UI updates
+                self.progress_queue.put({
+                    'node_name': node_name,
+                    'ui_name': node_info['ui_name'],
+                    'icon': node_info['icon'],
+                    'description': node_info['description'],
+                    'status': status,
+                    'timestamp': timestamp,
+                    'error_message': error_msg,
+                    'details': details or {},
+                    'duration': self._calculate_duration(progress)
+                })
                 
-                state["heart_attack_prediction"] = enhanced_prediction
-                state["heart_attack_risk_score"] = float(risk_probability)
-                
-                logger.info(f"✅ Heart attack prediction completed successfully")
-                logger.info(f"❤️ Display: {enhanced_prediction['combined_display']}")
-                
-            else:
-                error_msg = prediction_result.get("error", "Unknown API error")
-                logger.warning(f"⚠️ Heart attack prediction failed: {error_msg}")
-                
-                state["heart_attack_prediction"] = {
-                    "error": error_msg,
-                    "risk_display": "Heart Disease Risk: Error",
-                    "confidence_display": "Confidence: Error",
-                    "combined_display": f"Heart Disease Risk: Error - {error_msg}",
-                    "fastapi_server_url": self.config.heart_attack_api_url,
-                    "error_details": error_msg,
-                    "tried_endpoints": prediction_result.get("tried_endpoints", []),
-                    "model_enhanced": True
-                }
-                state["heart_attack_risk_score"] = 0.0
-                
-            state["step_status"][node_name] = "completed"
-            self._execute_callback(node_name, 'completed', state)
-
-        except Exception as e:
-            error_msg = f"Error in heart attack prediction: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def initialize_chatbot(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 8: Initialize chatbot with real-time callbacks"""
-        node_name = "initialize_chatbot"
-        logger.info(f"💬 Node 8: Initializing comprehensive chatbot with graph generation...")
+                logger.info(f"🔄 REAL-TIME UPDATE: {node_info['ui_name']} -> {status.upper()}")
         
-        state["current_step"] = node_name
-        state["step_status"][node_name] = "running"
-        
-        # Execute callback for start
-        self._execute_callback(node_name, 'running', state)
-
-        try:
-            # Prepare comprehensive chatbot context
-            comprehensive_chatbot_context = {
-                "deidentified_medical": state.get("deidentified_medical", {}),
-                "deidentified_pharmacy": state.get("deidentified_pharmacy", {}),
-                "deidentified_mcid": state.get("deidentified_mcid", {}),
-                "medical_extraction": state.get("medical_extraction", {}),
-                "pharmacy_extraction": state.get("pharmacy_extraction", {}),
-                "entity_extraction": state.get("entity_extraction", {}),
-                "health_trajectory": state.get("health_trajectory", ""),
-                "final_summary": state.get("final_summary", ""),
-                "heart_attack_prediction": state.get("heart_attack_prediction", {}),
-                "heart_attack_risk_score": state.get("heart_attack_risk_score", 0.0),
-                "heart_attack_features": state.get("heart_attack_features", {}),
-                "patient_overview": {
-                    "age": state.get("deidentified_medical", {}).get("src_mbr_age", "unknown"),
-                    "zip": state.get("deidentified_medical", {}).get("src_mbr_zip_cd", "unknown"),
-                    "analysis_timestamp": datetime.now().isoformat(),
-                    "heart_attack_risk_level": state.get("heart_attack_prediction", {}).get("risk_category", "unknown"),
-                    "model_type": "enhanced_ml_api_comprehensive",
-                    "deidentification_level": "comprehensive_claims_data",
-                    "claims_data_types": ["medical", "pharmacy", "mcid"],
-                    "graph_generation_supported": True,
-                    "batch_code_meanings_available": True,
-                    "realtime_callbacks_enabled": True
-                }
-            }
-
-            state["chat_history"] = []
-            state["chatbot_context"] = comprehensive_chatbot_context
-            state["chatbot_ready"] = True
-            state["graph_generation_ready"] = True
-            state["processing_complete"] = True
-            state["step_status"][node_name] = "completed"
+        return node_callback
+    
+    def _calculate_duration(self, progress: NodeProgress) -> Optional[float]:
+        """Calculate node execution duration"""
+        if progress.start_time and progress.end_time:
+            return (progress.end_time - progress.start_time).total_seconds()
+        return None
+    
+    def get_current_status(self) -> Dict[str, Any]:
+        """Get current overall status"""
+        with self.lock:
+            total_nodes = len(self.node_mapping)
+            completed = len([n for n in self.node_status.values() if n.status == 'completed'])
+            running = len([n for n in self.node_status.values() if n.status == 'running'])
+            errors = len([n for n in self.node_status.values() if n.status == 'error'])
             
-            # Execute callback for completion
-            self._execute_callback(node_name, 'completed', state)
-
-            medical_records = len(state.get("medical_extraction", {}).get("hlth_srvc_records", []))
-            pharmacy_records = len(state.get("pharmacy_extraction", {}).get("ndc_records", []))
-
-            logger.info("✅ Successfully initialized comprehensive chatbot with graph generation")
-            logger.info(f"📊 Chatbot context includes: {medical_records} medical records, {pharmacy_records} pharmacy records")
-            logger.info(f"📈 Graph generation: Ready for matplotlib visualizations")
-            logger.info(f"🔄 Real-time callbacks: Successfully integrated")
-
-        except Exception as e:
-            error_msg = f"Error initializing chatbot: {str(e)}"
-            state["errors"].append(error_msg)
-            state["step_status"][node_name] = "error"
-            self._execute_callback(node_name, 'error', state, error_msg)
-            logger.error(error_msg)
-
-        return state
-
-    def handle_error(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Error handling node with real-time callbacks"""
-        node_name = "handle_error"
-        logger.error(f"🚨 LangGraph Error Handler: {state['current_step']}")
-        logger.error(f"Errors: {state['errors']}")
-
-        state["processing_complete"] = True
-        current_step = state.get("current_step", "unknown")
-        state["step_status"][current_step] = "error"
-        
-        # Execute callback for error
-        self._execute_callback(current_step, 'error', state, f"Error in {current_step}")
-        
-        return state
-
-    # ===== CONDITIONAL EDGES =====
-
-    def should_continue_after_api(self, state: HealthAnalysisState) -> Literal["continue", "retry", "error"]:
-        if state["errors"]:
-            if state["retry_count"] < 3:  # max_retries
-                state["retry_count"] += 1
-                logger.warning(f"🔄 Retrying API fetch (attempt {state['retry_count']}/3)")
-                state["errors"] = []
-                return "retry"
-            else:
-                logger.error(f"❌ Max retries (3) exceeded for API fetch")
-                return "error"
-        return "continue"
-
-    def should_continue_after_deidentify(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-
-    def should_continue_after_extraction_step(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-
-    def should_continue_after_entity_extraction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-
-    def should_continue_after_trajectory(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-
-    def should_continue_after_summary(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-
-    def should_continue_after_heart_attack_prediction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
-        return "error" if state["errors"] else "continue"
-
-    # ===== ENHANCED CHATBOT FUNCTIONALITY WITH GRAPH GENERATION =====
-
-    def chat_with_data(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-        """Enhanced chatbot with comprehensive claims data access and advanced graph generation"""
-        try:
-            # Check if this is a graph request using data processor's detection
-            graph_request = self.data_processor.detect_graph_request(user_query)
-
-            if graph_request.get("is_graph_request", False):
-                return self._handle_graph_request_enhanced(user_query, chat_context, chat_history, graph_request)
-
-            # Check if this is a heart attack related question
-            heart_attack_keywords = ['heart attack', 'heart disease', 'cardiac', 'cardiovascular', 'heart risk', 'coronary', 'myocardial', 'cardiac risk']
-            is_heart_attack_question = any(keyword in user_query.lower() for keyword in heart_attack_keywords)
-
-            if is_heart_attack_question:
-                return self._handle_heart_attack_question_enhanced(user_query, chat_context, chat_history)
-            else:
-                return self._handle_general_question_enhanced(user_query, chat_context, chat_history)
-
-        except Exception as e:
-            logger.error(f"Error in enhanced chatbot: {str(e)}")
-            return "I encountered an error processing your question. Please try again. I have access to comprehensive deidentified claims data and can generate visualizations for detailed analysis."
-
-    def _handle_graph_request_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]], graph_request: Dict[str, Any]) -> str:
-        """Handle graph generation requests with enhanced matplotlib support"""
-        try:
-            graph_type = graph_request.get("graph_type", "general")
-            
-            logger.info(f"📊 Generating {graph_type} visualization for user query: {user_query[:50]}...")
-            
-            # Use the API integrator's specialized graph generation method
-            response = self.api_integrator.call_llm_for_graph_generation(user_query, chat_context)
-            
-            # If API call fails, use data processor's fallback generation
-            if "Graph generation failed" in response or "Error" in response:
-                logger.warning("API graph generation failed, using data processor fallback")
-                matplotlib_code = self.data_processor.generate_matplotlib_code(graph_type, chat_context)
-                
-                response = f"""## Healthcare Data Visualization
-
-I'll create a {graph_type} visualization for your healthcare data.
-
-```python
-{matplotlib_code}
-```
-
-This visualization uses your actual patient data when available, including medical records, pharmacy claims, and risk assessments. The chart provides clinical insights based on the comprehensive healthcare analysis."""
-
-            return response
-                
-        except Exception as e:
-            logger.error(f"Error handling enhanced graph request: {str(e)}")
-            return f"""
-## Graph Generation Error
-
-I encountered an error while generating your requested visualization: {str(e)}
-
-Available Graph Types:
-- **Medication Timeline**: "show me a medication timeline"
-- **Diagnosis Timeline**: "create a diagnosis timeline chart"  
-- **Risk Dashboard**: "generate a risk assessment dashboard"
-- **Medication Distribution**: "show me a pie chart of medications"
-- **Health Overview**: "show comprehensive health overview"
-
-Please try rephrasing your request with one of these specific graph types.
-"""
-
-    def _handle_heart_attack_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-        """Handle heart attack related questions with comprehensive analysis"""
-        try:
-            # Get comprehensive context data
-            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
-            entity_extraction = chat_context.get("entity_extraction", {})
-            medical_extraction = chat_context.get("medical_extraction", {})
-            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
-            
-            patient_age = chat_context.get("patient_overview", {}).get("age", "unknown")
-            risk_display = heart_attack_prediction.get("risk_display", "Not available")
-
-            # Build conversation history
-            history_text = "No previous conversation"
-            if chat_history:
-                recent_history = chat_history[-3:]
-                history_lines = []
-                for msg in recent_history:
-                    role = "User" if msg['role'] == 'user' else "Assistant"
-                    content = msg['content'][:100]
-                    history_lines.append(f"{role}: {content}")
-                history_text = "\n".join(history_lines)
-
-            # Create comprehensive heart attack analysis prompt
-            heart_attack_prompt = f"""You are Dr. CardioAI, a specialist in cardiovascular risk assessment with access to comprehensive patient claims data.
-
-COMPREHENSIVE PATIENT DATA AVAILABLE:
-**PATIENT DEMOGRAPHICS:**
-- Age: {patient_age}
-- Current Health Status: Diabetes: {entity_extraction.get('diabetics', 'unknown')}, Blood Pressure: {entity_extraction.get('blood_pressure', 'unknown')}, Smoking: {entity_extraction.get('smoking', 'unknown')}
-
-**COMPLETE MEDICAL CLAIMS DATA:**
-{json.dumps(medical_extraction, indent=2)}
-
-**COMPLETE PHARMACY CLAIMS DATA:**
-{json.dumps(pharmacy_extraction, indent=2)}
-
-**ENHANCED HEALTH ENTITIES:**
-{json.dumps(entity_extraction, indent=2)}
-
-**CURRENT ML MODEL PREDICTION:**
-{risk_display}
-
-**RECENT CONVERSATION:**
-{history_text}
-
-**USER QUESTION:** {user_query}
-
-**COMPREHENSIVE ANALYSIS INSTRUCTIONS:**
-
-🔬 **DATA UTILIZATION REQUIREMENTS:**
-- Analyze ALL available medical claims data including ICD-10 diagnosis codes
-- Review ALL pharmacy claims data including NDC medication codes  
-- Examine complete health entity extraction results
-- Reference specific codes, dates, and clinical findings
-- Use both medical AND pharmacy data comprehensively
-
-📊 **CARDIOVASCULAR RISK ASSESSMENT PROTOCOL:**
-1. **Clinical Data Analysis**: Review all ICD-10 codes for cardiovascular conditions, diabetes, hypertension
-2. **Medication Analysis**: Examine NDC codes for cardiovascular medications, diabetes drugs, lipid management
-3. **Risk Factor Identification**: Identify modifiable and non-modifiable risk factors from complete data
-4. **Comorbidity Assessment**: Analyze disease burden and interaction effects
-5. **Temporal Analysis**: Review claims dates for disease progression patterns
-
-💡 **RESPONSE REQUIREMENTS:**
-- Provide specific risk percentage assessment based on comprehensive clinical data
-- Reference exact ICD-10 codes, NDC codes, and claim dates
-- Compare your clinical assessment with the ML model prediction
-- Explain reasoning using available clinical evidence
-- Include actionable recommendations for risk reduction
-
-**PROVIDE COMPREHENSIVE CARDIOVASCULAR RISK ANALYSIS:**
-
-## 🫀 COMPREHENSIVE CARDIOVASCULAR RISK ASSESSMENT
-
-**Clinical Risk Analysis:** [Your detailed percentage assessment]%
-**Risk Category:** [Low/Medium/High Risk with clinical justification]
-
-**Key Risk Factors Identified:**
-[List specific factors from complete claims data with codes and dates]
-
-**Supporting Clinical Evidence:**
-[Reference specific ICD-10 codes, NDC codes, medications, and claim dates]
-
-**ML Model Comparison:**
-- ML Prediction: {risk_display}
-- Clinical Assessment: [Your assessment]
-- Analysis Agreement: [Compare and explain differences]
-
-**Detailed Clinical Reasoning:**
-[Comprehensive analysis using all available claims data]
-
-**Risk Reduction Recommendations:**
-[Specific actionable recommendations based on identified risk factors]
-
-Use the complete deidentified claims dataset to provide the most accurate and comprehensive cardiovascular risk assessment possible."""
-
-            logger.info(f"Processing enhanced heart attack question: {user_query[:50]}...")
-
-            response = self.api_integrator.call_llm_enhanced(heart_attack_prompt, self.config.chatbot_sys_msg)
-
-            if response.startswith("Error"):
-                return "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question."
-
-            return response
-
-        except Exception as e:
-            logger.error(f"Error in enhanced heart attack question: {str(e)}")
-            return "I encountered an error with cardiovascular analysis. Please try again with a simpler question about heart disease risk."
-
-    def _handle_general_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-        """Handle general questions with comprehensive context"""
-        try:
-            # Prepare comprehensive context
-            complete_context = self.data_processor.prepare_enhanced_clinical_context(chat_context)
-            
-            # Build conversation history
-            history_text = "No previous conversation"
-            if chat_history:
-                recent_history = chat_history[-5:]
-                history_lines = []
-                for msg in recent_history:
-                    role = "User" if msg['role'] == 'user' else "Assistant"
-                    content = msg['content'][:150]
-                    history_lines.append(f"{role}: {content}")
-                history_text = "\n".join(history_lines)
-
-            # Create comprehensive analysis prompt
-            comprehensive_prompt = f"""You are Dr. AnalysisAI, a healthcare data analyst with access to comprehensive patient claims data and advanced visualization capabilities.
-
-**COMPREHENSIVE DATA ACCESS:**
-{complete_context}
-
-**CONVERSATION HISTORY:**
-{history_text}
-
-**PATIENT QUESTION:** {user_query}
-
-**COMPREHENSIVE ANALYSIS INSTRUCTIONS:**
-
-🔬 **COMPLETE DATA UTILIZATION:**
-- Access ALL deidentified medical claims data with ICD-10 diagnosis codes
-- Review ALL deidentified pharmacy claims data with NDC medication codes
-- Examine complete health entity extraction results and risk assessments
-- Reference specific codes, dates, medications, and clinical findings
-- Use comprehensive claims dataset for thorough analysis
-- Utilize batch-processed code meanings for enhanced clinical insights
-
-📊 **CLINICAL DATA NAVIGATION:**
-- Medical Claims: Access diagnosis codes (ICD-10), procedure codes (CPT), service dates
-- Pharmacy Claims: Access medication names, NDC codes, prescription fill dates
-- Entity Data: Access chronic conditions, risk factors, demographic information
-- Dates: Reference clm_rcvd_dt (medical), rx_filled_dt (pharmacy) for temporal analysis
-- Code Meanings: Use batch-processed explanations for clinical interpretation
-
-💡 **RESPONSE REQUIREMENTS:**
-- Provide data-driven answers using specific information from claims
-- Reference exact codes, dates, and clinical findings
-- Explain medical terminology and provide clinical context
-- Include both medical AND pharmacy data in comprehensive analysis
-- Cite specific field paths and values from the JSON data structure
-- Generate matplotlib code if visualization is requested
-
-📈 **VISUALIZATION CAPABILITIES:**
-- Generate working matplotlib code for healthcare visualizations
-- Create medication timelines, diagnosis progressions, risk dashboards
-- Use actual patient data when available
-- Provide complete, executable Python code with proper imports
-
-**CRITICAL ANALYSIS STANDARDS:**
-- Use only the provided deidentified claims data for analysis
-- Reference specific ICD-10 codes, NDC codes, and dates when relevant
-- Provide evidence-based insights based on available clinical data
-- Include predictive insights when supported by clinical indicators
-- Maintain professional healthcare analysis standards
-- Generate graphs when visualization would enhance understanding
-
-**COMPREHENSIVE RESPONSE USING COMPLETE CLAIMS DATA:**
-[Provide detailed analysis using all available deidentified medical and pharmacy claims data]"""
-
-            logger.info(f"Processing enhanced general query: {user_query[:50]}...")
-
-            response = self.api_integrator.call_llm_enhanced(comprehensive_prompt, self.config.chatbot_sys_msg)
-
-            if response.startswith("Error"):
-                return "I encountered an error processing your question. Please try rephrasing it more simply."
-
-            return response
-
-        except Exception as e:
-            logger.error(f"Error in enhanced general question: {str(e)}")
-            return "I encountered an error. Please try again with a simpler question."
-
-    # ===== HELPER METHODS =====
-
-    def _create_comprehensive_trajectory_prompt_with_evaluation(self, medical_data: Dict, pharmacy_data: Dict, mcid_data: Dict,
-                                                               medical_extraction: Dict, pharmacy_extraction: Dict,
-                                                               entities: Dict) -> str:
-        """Create comprehensive trajectory prompt with evaluation questions"""
-
-        medical_summary = self._extract_medical_summary(medical_data, medical_extraction)
-        pharmacy_summary = self._extract_pharmacy_summary(pharmacy_data, pharmacy_extraction)
-
-        return f"""You are Dr. TrajectoryAI, a comprehensive healthcare analyst conducting detailed patient health trajectory analysis with predictive modeling capabilities.
-
-**COMPREHENSIVE PATIENT CLAIMS DATA:**
-
-**MEDICAL CLAIMS SUMMARY:**
-{medical_summary}
-
-**PHARMACY CLAIMS SUMMARY:**
-{pharmacy_summary}
-
-**ENHANCED HEALTH ENTITIES:**
-{json.dumps(entities, indent=2)}
-
-**COMPREHENSIVE HEALTH TRAJECTORY ANALYSIS WITH PREDICTIVE EVALUATION:**
-
-Conduct a thorough analysis addressing these critical healthcare evaluation questions:
-
-## 🔮 RISK PREDICTION (Clinical Outcomes)
-**1. Chronic Disease Risk Assessment:**
-- Based on this person's medical and pharmacy history, assess the risk of developing chronic diseases like diabetes, hypertension, COPD, or chronic kidney disease?
-- Analyze current ICD-10 codes and medication patterns for disease progression indicators
-
-**2. Hospitalization & Readmission Risk:**
-- What is the likelihood that this person will be hospitalized or readmitted in the next 6–12 months?
-- Review service utilization patterns and medication adherence indicators
-
-**3. Emergency vs Outpatient Care Risk:**
-- Is this person at risk of using the emergency room instead of outpatient care?
-- Analyze healthcare utilization patterns from claims data
-
-**4. Medication Adherence Risk:**
-- How likely is this person to stop taking prescribed medications?
-- Review prescription fill patterns and therapeutic gaps
-
-**5. Serious Event Risk:**
-- Does this person have a high risk of serious events like stroke, heart attack, or other complications due to comorbidities?
-- Analyze cardiovascular risk factors and medication management
-
-## 💰 COST & UTILIZATION PREDICTION
-**6. High-Cost Claimant Prediction:**
-- Is this person likely to become a high-cost claimant next year?
-- Analyze current utilization trends and cost drivers
-
-**7. Healthcare Cost Estimation:**
-- Can you estimate this person's future healthcare costs (per month or per year)?
-- Project based on current utilization patterns and medication costs
-
-**8. Care Setting Prediction:**
-- Is this person more likely to need inpatient hospital care or outpatient care in the future?
-- Review current care patterns and complexity indicators
-
-## 🔍 FRAUD, WASTE & ABUSE (FWA) DETECTION
-**9. Claims Anomaly Detection:**
-- Do this person's medical or pharmacy claims show any anomalies that could indicate errors or unusual patterns?
-- Review for inconsistent diagnoses, unusual prescription patterns, or billing irregularities
-
-**10. Prescribing Pattern Analysis:**
-- Are there any unusual prescribing or billing patterns related to this person's records?
-- Examine medication combinations and prescribing frequency
-
-## 🎯 PERSONALIZED CARE MANAGEMENT
-**11. Risk Segmentation:**
-- How should this person be segmented — healthy, rising risk, chronic but stable, or high-cost/critical?
-- Provide risk stratification based on comprehensive data analysis
-
-**12. Preventive Care Recommendations:**
-- What preventive screenings, wellness programs, or lifestyle changes should be recommended as the next best action?
-- Identify specific care gaps and opportunities
-
-**13. Care Gap Analysis:**
-- Does this person have any care gaps, such as missed checkups, cancer screenings, or vaccinations?
-- Review claims for preventive care compliance
-
-## 💊 PHARMACY-SPECIFIC PREDICTIONS
-**14. Polypharmacy Risk:**
-- Is this person at risk of polypharmacy (taking too many medications or unsafe combinations)?
-- Analyze current medication regimen for interactions and complexity
-
-**15. Therapy Escalation:**
-- Is this person likely to switch to higher-cost specialty drugs or need therapy escalation soon?
-- Review current medications for potential progression patterns
-
-**16. Specialty Drug Prediction:**
-- Is it likely that this person will need expensive biologics or injectables in the future?
-- Assess disease progression and current therapeutic approaches
-
-## 🔬 ADVANCED / STRATEGIC PREDICTIONS
-**17. Disease Progression Modeling:**
-- Can you model how this person's disease might progress over time (for example: diabetes → complications → hospitalizations)?
-- Create trajectory model based on current conditions and medications
-
-**18. Quality Metrics Impact:**
-- Does this person have any care gaps that could affect quality metrics (like HEDIS or STAR ratings)?
-- Identify opportunities for quality measure improvement
-
-**19. Population Health Risk:**
-- Based on available data, how might this person's long-term health contribute to population-level risk?
-- Assess impact on overall population health management
-
-**COMPREHENSIVE ANALYSIS REQUIREMENTS:**
-- Address each evaluation question using specific data from medical and pharmacy claims
-- Reference exact ICD-10 codes, NDC codes, and claim dates
-- Provide risk percentages and likelihood assessments where possible
-- Include temporal analysis showing health progression over time
-- Offer specific, actionable recommendations for each identified risk
-- Create predictive models based on available clinical indicators
-
-**DELIVERABLE:**
-Provide a comprehensive 800-1000 word health trajectory analysis that addresses all evaluation questions with specific data references, risk assessments, and actionable recommendations for care management and risk mitigation.
-
-**ANALYSIS FOCUS:**
-Use ALL available claims data to create the most comprehensive predictive health assessment possible, addressing every evaluation question with evidence-based analysis and specific recommendations."""
-
-    def _create_comprehensive_summary_prompt(self, trajectory_analysis: str, entities: Dict,
-                                           medical_extraction: Dict, pharmacy_extraction: Dict) -> str:
-        """Create comprehensive summary prompt"""
-
-        return f"""Based on the comprehensive health trajectory analysis, create an executive summary for healthcare decision-makers.
-
-**COMPREHENSIVE HEALTH TRAJECTORY ANALYSIS:**
-{trajectory_analysis}
-
-**ENHANCED HEALTH ENTITIES:**
-- Diabetes: {entities.get('diabetics', 'unknown')}
-- Age Group: {entities.get('age_group', 'unknown')}
-- Smoking Status: {entities.get('smoking', 'unknown')}
-- Blood Pressure: {entities.get('blood_pressure', 'unknown')}
-- Medical Conditions: {len(entities.get('medical_conditions', []))}
-- Medications: {len(entities.get('medications_identified', []))}
-
-**CLAIMS DATA SUMMARY:**
-- Medical Records: {len(medical_extraction.get('hlth_srvc_records', []))}
-- Diagnosis Codes: {medical_extraction.get('extraction_summary', {}).get('total_diagnosis_codes', 0)}
-- Pharmacy Records: {len(pharmacy_extraction.get('ndc_records', []))}
-
-**EXECUTIVE SUMMARY REQUIREMENTS:**
-
-Create a comprehensive summary with:
-
-## 🏥 CURRENT HEALTH STATUS
-[2-3 sentences summarizing overall health condition and key findings]
-
-## 🚨 PRIORITY RISK FACTORS
-[Bullet points of highest priority risks requiring immediate attention]
-
-## 💰 COST & UTILIZATION INSIGHTS
-[Key findings about healthcare costs and utilization patterns]
-
-## 🎯 CARE MANAGEMENT RECOMMENDATIONS
-[Specific actionable recommendations for care management teams]
-
-## 📈 PREDICTIVE INSIGHTS
-[Key predictions about future health outcomes and costs]
-
-## ⚠️ IMMEDIATE ACTION ITEMS
-[Priority items requiring immediate clinical attention]
-
-**FORMAT:** Professional healthcare executive summary, 400-500 words, focusing on actionable insights for care management and clinical decision-making."""
-
-    def _extract_enhanced_heart_attack_features(self, state: HealthAnalysisState) -> Dict[str, Any]:
-        """Enhanced feature extraction for heart attack prediction"""
-        try:
-            features = {}
-
-            # Age extraction
-            deidentified_medical = state.get("deidentified_medical", {})
-            patient_age = deidentified_medical.get("src_mbr_age", None)
-
-            if patient_age and patient_age != "unknown":
-                try:
-                    age_value = int(float(str(patient_age)))
-                    if 0 <= age_value <= 120:
-                        features["Age"] = age_value
-                    else:
-                        features["Age"] = 50
-                except:
-                    features["Age"] = 50
-            else:
-                features["Age"] = 50
-
-            # Gender extraction
-            patient_data = state.get("patient_data", {})
-            gender = str(patient_data.get("gender", "F")).upper()
-            features["Gender"] = 1 if gender in ["M", "MALE", "1"] else 0
-
-            # Entity-based features
-            entity_extraction = state.get("entity_extraction", {})
-
-            # Diabetes
-            diabetes = str(entity_extraction.get("diabetics", "no")).lower()
-            features["Diabetes"] = 1 if diabetes in ["yes", "true", "1"] else 0
-
-            # Blood pressure
-            blood_pressure = str(entity_extraction.get("blood_pressure", "unknown")).lower()
-            features["High_BP"] = 1 if blood_pressure in ["managed", "diagnosed", "yes", "true", "1"] else 0
-
-            # Smoking
-            smoking = str(entity_extraction.get("smoking", "no")).lower()
-            features["Smoking"] = 1 if smoking in ["yes", "true", "1"] else 0
-
-            # Validate features
-            for key in features:
-                try:
-                    features[key] = int(features[key])
-                except:
-                    if key == "Age":
-                        features[key] = 50
-                    else:
-                        features[key] = 0
-
-            enhanced_feature_summary = {
-                "extracted_features": features,
-                "feature_interpretation": {
-                    "Age": f"{features['Age']} years old",
-                    "Gender": "Male" if features["Gender"] == 1 else "Female",
-                    "Diabetes": "Yes" if features["Diabetes"] == 1 else "No",
-                    "High_BP": "Yes" if features["High_BP"] == 1 else "No",
-                    "Smoking": "Yes" if features["Smoking"] == 1 else "No"
-                },
-                "data_sources": {
-                    "age_source": "deidentified_medical.src_mbr_age",
-                    "gender_source": "patient_data.gender",
-                    "diabetes_source": "entity_extraction.diabetics",
-                    "bp_source": "entity_extraction.blood_pressure",
-                    "smoking_source": "entity_extraction.smoking"
-                },
-                "extraction_enhanced": True,
-                "realtime_callbacks_enabled": True
-            }
-
-            logger.info(f"✅ Enhanced heart attack features: {enhanced_feature_summary['feature_interpretation']}")
-            return enhanced_feature_summary
-
-        except Exception as e:
-            logger.error(f"Error in heart attack feature extraction: {e}")
-            return {"error": f"Feature extraction failed: {str(e)}"}
-
-    def _prepare_enhanced_fastapi_features(self, features: Dict[str, Any]) -> Optional[Dict[str, int]]:
-        """Prepare feature data for FastAPI server call"""
-        try:
-            extracted_features = features.get("extracted_features", {})
-
-            fastapi_features = {
-                "age": int(extracted_features.get("Age", 50)),
-                "gender": int(extracted_features.get("Gender", 0)),
-                "diabetes": int(extracted_features.get("Diabetes", 0)),
-                "high_bp": int(extracted_features.get("High_BP", 0)),
-                "smoking": int(extracted_features.get("Smoking", 0))
-            }
-
-            # Validate age range
-            if fastapi_features["age"] < 0 or fastapi_features["age"] > 120:
-                logger.warning(f"Age {fastapi_features['age']} out of range, using default 50")
-                fastapi_features["age"] = 50
-
-            # Validate binary features
-            binary_features = ["gender", "diabetes", "high_bp", "smoking"]
-            for key in binary_features:
-                if fastapi_features[key] not in [0, 1]:
-                    logger.warning(f"{key} value {fastapi_features[key]} invalid, using 0")
-                    fastapi_features[key] = 0
-
-            logger.info(f"✅ FastAPI features prepared: {fastapi_features}")
-            return fastapi_features
-
-        except Exception as e:
-            logger.error(f"Error preparing FastAPI features: {e}")
-            return None
-
-    def _call_heart_attack_prediction_sync(self, features: Dict[str, Any]) -> Dict[str, Any]:
-        """Synchronous heart attack prediction call"""
-        try:
-            import requests
-
-            logger.info(f"🔍 Heart attack prediction features: {features}")
-
-            if not features:
-                return {
-                    "success": False,
-                    "error": "No features provided for heart attack prediction"
-                }
-
-            heart_attack_url = self.config.heart_attack_api_url
-            endpoints = [
-                f"{heart_attack_url}/predict",
-                f"{heart_attack_url}/predict-simple"
-            ]
-
-            params = {
-                "age": int(features.get("age", 50)),
-                "gender": int(features.get("gender", 0)),
-                "diabetes": int(features.get("diabetes", 0)),
-                "high_bp": int(features.get("high_bp", 0)),
-                "smoking": int(features.get("smoking", 0))
-            }
-
-            logger.info(f"📤 Sending prediction request to {endpoints[0]}")
-
-            try:
-                response = requests.post(endpoints[0], json=params, timeout=30)
-                if response.status_code == 200:
-                    result = response.json()
-                    logger.info(f"✅ Prediction successful: {result}")
-                    return {
-                        "success": True,
-                        "prediction_data": result,
-                        "method": "POST_JSON_SYNC",
-                        "endpoint": endpoints[0]
-                    }
-                else:
-                    logger.warning(f"❌ First endpoint failed with status {response.status_code}")
-
-            except requests.exceptions.ConnectionError as conn_error:
-                logger.error(f"❌ Connection failed: {conn_error}")
-                return {
-                    "success": False,
-                    "error": f"Cannot connect to heart attack prediction server. Make sure the server is running."
-                }
-            except Exception as request_error:
-                logger.warning(f"❌ Request failed: {str(request_error)}")
-
-            try:
-                logger.info(f"🔄 Trying fallback endpoint: {endpoints[1]}")
-                response = requests.post(endpoints[1], params=params, timeout=30)
-
-                if response.status_code == 200:
-                    result = response.json()
-                    logger.info(f"✅ Fallback prediction successful: {result}")
-                    return {
-                        "success": True,
-                        "prediction_data": result,
-                        "method": "POST_PARAMS_SYNC",
-                        "endpoint": endpoints[1]
-                    }
-                else:
-                    error_text = response.text
-                    logger.error(f"❌ All endpoints failed. Status {response.status_code}: {error_text}")
-                    return {
-                        "success": False,
-                        "error": f"Heart attack prediction server error {response.status_code}: {error_text}",
-                        "tried_endpoints": endpoints
-                    }
-
-            except Exception as fallback_error:
-                logger.error(f"❌ All prediction methods failed: {str(fallback_error)}")
-                return {
-                    "success": False,
-                    "error": f"All prediction methods failed. Error: {str(fallback_error)}",
-                    "tried_endpoints": endpoints
-                }
-
-        except Exception as general_error:
-            logger.error(f"❌ Unexpected error in heart attack prediction: {general_error}")
             return {
-                "success": False,
-                "error": f"Heart attack prediction failed: {str(general_error)}"
+                'total_nodes': total_nodes,
+                'completed': completed,
+                'running': running,
+                'errors': errors,
+                'progress_percent': (completed / total_nodes) * 100,
+                'current_node': self.current_node,
+                'node_status': dict(self.node_status)
             }
 
-    def _extract_medical_summary(self, medical_data: Dict, medical_extraction: Dict) -> str:
-        """Extract medical summary"""
-        try:
-            summary_parts = []
-
-            age = medical_data.get("src_mbr_age", "unknown")
-            zip_code = medical_data.get("src_mbr_zip_cd", "unknown")
-            summary_parts.append(f"Patient Age: {age}, Location: {zip_code}")
-
-            records = medical_extraction.get('hlth_srvc_records', [])
-            summary_parts.append(f"Medical Records: {len(records)} health service records")
-
-            if records:
-                recent_diagnoses = []
-                for record in records[:5]:
-                    diag_codes = record.get('diagnosis_codes', [])
-                    service_date = record.get('clm_rcvd_dt', 'Unknown date')
-                    if diag_codes:
-                        for diag in diag_codes[:2]:  # Limit diagnoses per record
-                            code = diag.get('code', 'Unknown')
-                            recent_diagnoses.append(f"Diagnosis {code} on {service_date}")
+# ENHANCED AGENT WRAPPER with Real Callback Integration
+class EnhancedLangGraphWrapper:
+    """Enhanced wrapper that injects real-time callbacks into LangGraph nodes"""
+    
+    def __init__(self, agent):
+        self.agent = agent
+        self.tracker = RealTimeLangGraphTracker()
+        self.original_methods = {}
+        
+    def inject_realtime_callbacks(self):
+        """Inject real-time callbacks into all LangGraph node methods"""
+        callback = self.tracker.create_node_callback()
+        
+        # Get all node methods to patch
+        node_methods = [
+            'fetch_api_data', 'deidentify_claims_data', 'extract_claims_fields',
+            'extract_entities', 'analyze_trajectory', 'generate_summary', 
+            'predict_heart_attack', 'initialize_chatbot'
+        ]
+        
+        for method_name in node_methods:
+            if hasattr(self.agent, method_name):
+                original_method = getattr(self.agent, method_name)
+                self.original_methods[method_name] = original_method
+                
+                def create_wrapped_method(method_name, original_method):
+                    def wrapped_method(state):
+                        # Notify start
+                        callback(method_name, 'running')
+                        
+                        try:
+                            # Execute original method
+                            result = original_method(state)
+                            
+                            # Check for errors in state
+                            if state.get('errors'):
+                                callback(method_name, 'error', 
+                                        error_msg=str(state['errors'][-1]) if state['errors'] else 'Unknown error')
+                            else:
+                                callback(method_name, 'completed', 
+                                        details={'step_status': state.get('step_status', {})})
+                            
+                            return result
+                            
+                        except Exception as e:
+                            callback(method_name, 'error', error_msg=str(e))
+                            raise e
                     
-                if recent_diagnoses:
-                    summary_parts.append("Recent Diagnoses: " + "; ".join(recent_diagnoses))
-
-            return "\n".join(summary_parts)
-
-        except Exception as e:
-            return f"Medical data available but summary extraction failed: {str(e)}"
-
-    def _extract_pharmacy_summary(self, pharmacy_data: Dict, pharmacy_extraction: Dict) -> str:
-        """Extract pharmacy summary"""
+                    return wrapped_method
+                
+                # Replace method with wrapped version
+                wrapped = create_wrapped_method(method_name, original_method)
+                setattr(self.agent, method_name, wrapped)
+                
+        logger.info("✅ Real-time callbacks injected into all LangGraph nodes")
+    
+    def restore_original_methods(self):
+        """Restore original methods after analysis"""
+        for method_name, original_method in self.original_methods.items():
+            setattr(self.agent, method_name, original_method)
+        logger.info("✅ Original LangGraph methods restored")
+    
+    def run_with_realtime_updates(self, patient_data: Dict[str, Any], 
+                                  workflow_placeholder, progress_placeholder):
+        """Run analysis with real-time UI updates"""
+        
         try:
-            summary_parts = []
-
-            records = pharmacy_extraction.get('ndc_records', [])
-            summary_parts.append(f"Pharmacy Records: {len(records)} medication records")
-
-            if records:
-                recent_meds = []
-                for record in records[:5]:
-                    ndc_code = record.get('ndc', 'Unknown')
-                    label_name = record.get('lbl_nm', 'Unknown medication')
-                    fill_date = record.get('rx_filled_dt', 'Unknown date')
-                    recent_meds.append(f"{label_name} (NDC: {ndc_code}) filled on {fill_date}")
-                    
-                if recent_meds:
-                    summary_parts.append("Recent Medications: " + "; ".join(recent_meds))
-
-            return "\n".join(summary_parts)
-
-        except Exception as e:
-            return f"Pharmacy data available but summary extraction failed: {str(e)}"
-
-    def get_code_explanations_for_record(self, record: Dict[str, Any], record_type: str = "medical") -> Dict[str, Any]:
-        """Get code explanations for records"""
-        explanations = {}
-
-        try:
-            if record_type == "medical":
-                service_code = record.get("hlth_srvc_cd")
-                if service_code:
-                    explanations["service_code_explanation"] = self.data_processor.get_service_code_explanation_isolated(service_code)
-
-                diagnosis_codes = record.get("diagnosis_codes", [])
-                explanations["diagnosis_explanations"] = []
-                for diag in diagnosis_codes:
-                    diag_code = diag.get("code")
-                    if diag_code:
-                        explanation = self.data_processor.get_diagnosis_code_explanation_isolated(diag_code)
-                        explanations["diagnosis_explanations"].append({
-                            "code": diag_code,
-                            "explanation": explanation,
-                            "position": diag.get("position", 1)
-                        })
-
-            elif record_type == "pharmacy":
-                ndc_code = record.get("ndc")
-                if ndc_code:
-                    explanations["ndc_explanation"] = self.data_processor.get_ndc_code_explanation_isolated(ndc_code)
-
-                medication = record.get("lbl_nm")
-                if medication:
-                    explanations["medication_explanation"] = self.data_processor.get_medication_explanation_isolated(medication)
-
-        except Exception as e:
-            logger.warning(f"Error getting code explanations: {e}")
-            explanations["error"] = f"Could not get explanations: {str(e)}"
-
-        return explanations
-
-    def test_llm_connection(self) -> Dict[str, Any]:
-        """Test Snowflake Cortex API connection"""
-        return self.api_integrator.test_healthcare_llm_connection()
-
-    def test_backend_connection(self) -> Dict[str, Any]:
-        """Test backend server connection"""
-        return self.api_integrator.test_backend_connection_enhanced()
-
-    def run_analysis(self, patient_data: Dict[str, Any], callback: Optional[Callable[[str, str, Dict[str, Any], Optional[str]], None]] = None) -> Dict[str, Any]:
-        """Run the enhanced health analysis workflow using LangGraph with optional real-time callbacks"""
-
-        initial_state = HealthAnalysisState(
-            patient_data=patient_data,
-            mcid_output={},
-            medical_output={},
-            pharmacy_output={},
-            token_output={},
-            deidentified_medical={},
-            deidentified_pharmacy={},
-            deidentified_mcid={},
-            medical_extraction={},
-            pharmacy_extraction={},
-            entity_extraction={},
-            health_trajectory="",
-            final_summary="",
-            heart_attack_prediction={},
-            heart_attack_risk_score=0.0,
-            heart_attack_features={},
-            chatbot_ready=False,
-            chatbot_context={},
-            chat_history=[],
-            graph_generation_ready=False,
-            current_step="",
-            errors=[],
-            retry_count=0,
-            processing_complete=False,
-            step_status={},
-            callback_function=callback  # Add callback to state
-        )
-
-        try:
-            config_dict = {"configurable": {"thread_id": f"realtime_health_analysis_{datetime.now().timestamp()}"}}
-
-            logger.info("🚀 Starting Enhanced LangGraph workflow with real-time callbacks...")
-
-            final_state = self.graph.invoke(initial_state, config=config_dict)
-
-            results = {
-                "success": final_state["processing_complete"] and not final_state["errors"],
-                "patient_data": final_state["patient_data"],
-                "api_outputs": {
-                    "mcid": final_state["mcid_output"],
-                    "medical": final_state["medical_output"],
-                    "pharmacy": final_state["pharmacy_output"],
-                    "token": final_state["token_output"]
-                },
-                "deidentified_data": {
-                    "medical": final_state["deidentified_medical"],
-                    "pharmacy": final_state["deidentified_pharmacy"],
-                    "mcid": final_state["deidentified_mcid"]
-                },
-                "structured_extractions": {
-                    "medical": final_state["medical_extraction"],
-                    "pharmacy": final_state["pharmacy_extraction"]
-                },
-                "entity_extraction": final_state["entity_extraction"],
-                "health_trajectory": final_state["health_trajectory"],
-                "final_summary": final_state["final_summary"],
-                "heart_attack_prediction": final_state["heart_attack_prediction"],
-                "heart_attack_risk_score": final_state["heart_attack_risk_score"],
-                "heart_attack_features": final_state["heart_attack_features"],
-                "chatbot_ready": final_state["chatbot_ready"],
-                "chatbot_context": final_state["chatbot_context"],
-                "chat_history": final_state["chat_history"],
-                "graph_generation_ready": final_state["graph_generation_ready"],
-                "errors": final_state["errors"],
-                "processing_steps_completed": self._count_completed_steps(final_state),
-                "step_status": final_state["step_status"],
-                "langgraph_used": True,
-                "comprehensive_analysis": True,
-                "enhanced_chatbot": True,
-                "graph_generation_ready": True,
-                "batch_code_meanings": True,
-                "realtime_callbacks_enabled": True,
-                "enhancement_version": "v9.0_realtime_callbacks_integrated"
-            }
-
-            if results["success"]:
-                logger.info("✅ Enhanced LangGraph analysis completed successfully with real-time callbacks!")
-                logger.info(f"💬 Enhanced chatbot ready: {results['chatbot_ready']}")
-                logger.info(f"📊 Graph generation ready: {results['graph_generation_ready']}")
-                logger.info(f"🔄 Real-time callbacks: Successfully executed throughout workflow")
-            else:
-                logger.error(f"❌ Enhanced LangGraph analysis failed: {final_state['errors']}")
-
+            # Inject callbacks
+            self.inject_realtime_callbacks()
+            
+            # Start UI update thread
+            stop_ui_updates = threading.Event()
+            ui_thread = threading.Thread(
+                target=self._ui_update_worker,
+                args=(workflow_placeholder, progress_placeholder, stop_ui_updates),
+                daemon=True
+            )
+            ui_thread.start()
+            
+            # Run the actual analysis
+            logger.info("🚀 Starting LangGraph analysis with real-time callbacks...")
+            results = self.agent.run_analysis(patient_data)
+            
+            # Stop UI updates
+            stop_ui_updates.set()
+            ui_thread.join(timeout=2)
+            
+            # Final UI update
+            final_status = self.tracker.get_current_status()
+            self._update_workflow_display(workflow_placeholder, final_status)
+            
+            with progress_placeholder.container():
+                if results.get('success'):
+                    st.success("🎉 LangGraph analysis completed successfully!")
+                else:
+                    st.error("❌ LangGraph analysis encountered errors")
+            
             return results
-
+            
         except Exception as e:
-            logger.error(f"Fatal error in Enhanced LangGraph workflow: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "patient_data": patient_data,
-                "errors": [str(e)],
-                "processing_steps_completed": 0,
-                "langgraph_used": True,
-                "comprehensive_analysis": False,
-                "enhanced_chatbot": False,
-                "graph_generation_ready": False,
-                "batch_code_meanings": False,
-                "realtime_callbacks_enabled": False,
-                "enhancement_version": "v9.0_realtime_callbacks_integrated"
-            }
-
-    def _count_completed_steps(self, state: HealthAnalysisState) -> int:
-        """Count processing steps completed"""
-        steps = 0
-        if state.get("mcid_output"): steps += 1
-        if state.get("deidentified_medical") and not state.get("deidentified_medical", {}).get("error"): steps += 1
-        if state.get("medical_extraction") or state.get("pharmacy_extraction"): steps += 1
-        if state.get("entity_extraction"): steps += 1
-        if state.get("health_trajectory"): steps += 1
-        if state.get("final_summary"): steps += 1
-        if state.get("heart_attack_prediction"): steps += 1
-        if state.get("chatbot_ready"): steps += 1
-        return steps
-
-def main():
-    """Enhanced Health Analysis Agent with Real-time Callbacks"""
+            logger.error(f"Error in real-time analysis: {str(e)}")
+            raise e
+        finally:
+            # Always restore original methods
+            self.restore_original_methods()
     
-    print("🏥 Enhanced Health Analysis Agent v9.0 - Real-time Callbacks Integrated")
-    print("✅ Enhanced features:")
-    print("   📡 EnhancedHealthAPIIntegrator - Comprehensive API connectivity with graph generation")
-    print("   🔧 EnhancedHealthDataProcessor - Advanced claims data processing with matplotlib code generation")
-    print("   🏗️ HealthAnalysisAgent - Enhanced workflow orchestration with real-time callbacks")
-    print("   💬 Enhanced chatbot - Complete claims data access with real-time graph generation")
-    print("   📊 Advanced graph generation - Matplotlib code creation and execution")
-    print("   🧠 Batch code meanings - LLM-powered medical and pharmacy code interpretation")
-    print("   🔄 Real-time callbacks - True synchronization with LangGraph node execution")
-    print()
+    def _ui_update_worker(self, workflow_placeholder, progress_placeholder, stop_event):
+        """Background worker for UI updates"""
+        while not stop_event.is_set():
+            try:
+                # Check for progress updates
+                update = self.tracker.progress_queue.get(timeout=0.5)
+                
+                # Update workflow display
+                current_status = self.tracker.get_current_status()
+                self._update_workflow_display(workflow_placeholder, current_status)
+                
+                # Update progress messages
+                with progress_placeholder.container():
+                    if update['status'] == 'running':
+                        st.info(f"🔄 **LIVE**: Executing {update['ui_name']}...")
+                    elif update['status'] == 'completed':
+                        duration = update.get('duration')
+                        duration_text = f" ({duration:.1f}s)" if duration else ""
+                        st.success(f"✅ **Completed**: {update['ui_name']}{duration_text}")
+                    elif update['status'] == 'error':
+                        error_msg = update.get('error_message', 'Unknown error')
+                        st.error(f"❌ **Failed**: {update['ui_name']} - {error_msg}")
+                
+            except Empty:
+                continue
+            except Exception as e:
+                logger.warning(f"UI update error: {e}")
+                continue
+    
+    def _update_workflow_display(self, workflow_placeholder, status: Dict[str, Any]):
+        """Update the workflow visualization"""
+        with workflow_placeholder.container():
+            self._display_realtime_workflow(status)
 
-    config = Config()
-    print("📋 Enhanced Configuration:")
-    print(f"   🌐 Snowflake API: {config.api_url}")
-    print(f"   🤖 Model: {config.model}")
-    print(f"   📡 Server: {config.fastapi_url}")
-    print(f"   ❤️ Heart Attack ML API: {config.heart_attack_api_url}")
-    print(f"   📈 Graph Generation: Advanced matplotlib support")
-    print(f"   🔬 Batch Processing: Medical and pharmacy code meanings")
-    print(f"   🔄 Real-time Callbacks: Integrated LangGraph node synchronization")
-    print()
-    print("✅ Enhanced Health Agent ready for real-time synchronized analysis!")
+def _display_realtime_workflow(status: Dict[str, Any]):
+    """Display real-time workflow with actual LangGraph status"""
+    
+    # Main container
+    st.markdown('<div class="realtime-workflow-container">', unsafe_allow_html=True)
+    
+    # Header with live status
+    current_node_name = status.get('current_node', 'None')
+    current_ui_name = 'Idle'
+    if current_node_name and current_node_name != 'None':
+        tracker = RealTimeLangGraphTracker()
+        current_ui_name = tracker.node_mapping.get(current_node_name, {}).get('ui_name', current_node_name)
+    
+    st.markdown(f"""
+    <div style="text-align: center; margin-bottom: 2rem; position: relative; z-index: 2;">
+        <h2 style="color: #2c3e50; font-weight: 700;">🧠 LIVE LangGraph Healthcare Analysis</h2>
+        <p style="color: #34495e; font-size: 1.1rem;">Real-time synchronized workflow execution</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Live sync indicator
+    if status['running'] > 0:
+        st.markdown(f"""
+        <div class="realtime-sync-indicator">
+            🟢 <strong>LIVE EXECUTION</strong> | 
+            <strong>Current Node:</strong> {current_ui_name} | 
+            <strong>Progress:</strong> {status['progress_percent']:.0f}%
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Progress metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Nodes", status['total_nodes'])
+    with col2:
+        st.metric("Completed", status['completed'])
+    with col3:
+        st.metric("Running", status['running'])
+    with col4:
+        st.metric("Progress", f"{status['progress_percent']:.0f}%")
+    
+    # Progress bar
+    st.progress(status['progress_percent'] / 100)
+    
+    # Display workflow steps with real status
+    tracker = RealTimeLangGraphTracker()
+    for node_name, node_info in tracker.node_mapping.items():
+        node_status = status['node_status'].get(node_name)
+        
+        if node_status:
+            step_status = node_status.status
+            start_time = node_status.start_time
+            end_time = node_status.end_time
+            duration = tracker._calculate_duration(node_status) if hasattr(tracker, '_calculate_duration') else None
+        else:
+            step_status = 'pending'
+            start_time = None
+            end_time = None
+            duration = None
+        
+        # Status display
+        if step_status == 'completed':
+            status_emoji = "✅"
+            status_text = "Completed"
+            if duration:
+                status_text += f" ({duration:.1f}s)"
+        elif step_status == 'running':
+            status_emoji = "🔄"
+            status_text = "Executing..."
+        elif step_status == 'error':
+            status_emoji = "❌"
+            status_text = "Failed"
+            if node_status and node_status.error_message:
+                status_text += f": {node_status.error_message[:50]}"
+        else:
+            status_emoji = "⏳"
+            status_text = "Pending"
+        
+        # Display step
+        st.markdown(f"""
+        <div class="workflow-step {step_status}">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <div style="font-size: 1.5rem;">{node_info['icon']}</div>
+                <div style="flex: 1;">
+                    <h4 style="margin: 0; color: #2c3e50;">{node_info['ui_name']}</h4>
+                    <p style="margin: 0; color: #666; font-size: 0.9rem;">{node_info['description']}</p>
+                    <div class="node-status-details">
+                        LangGraph Node: <code>{node_name}</code>
+                        {f" | Started: {start_time.strftime('%H:%M:%S')}" if start_time else ""}
+                        {f" | Ended: {end_time.strftime('%H:%M:%S')}" if end_time else ""}
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <div style="font-size: 1.2rem;">{status_emoji}</div>
+                    <small style="color: #666; font-size: 0.8rem;">{status_text}</small>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Status summary
+    if status['running'] > 0:
+        status_message = f"🧠 LIVE: LangGraph executing {current_ui_name}"
+    elif status['completed'] == status['total_nodes']:
+        status_message = "🎉 All LangGraph nodes completed successfully!"
+    elif status['errors'] > 0:
+        status_message = f"❌ {status['errors']} LangGraph node(s) failed"
+    else:
+        status_message = "🚀 LangGraph workflow ready to execute..."
+    
+    st.markdown(f"""
+    <div style="text-align: center; margin-top: 2rem; padding: 1rem; background: rgba(255,255,255,0.8); border-radius: 10px; position: relative; z-index: 2;">
+        <p style="margin: 0; font-weight: 600; color: #2c3e50;">{status_message}</p>
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    return "Enhanced Health Agent with real-time callbacks ready for integration"
+# Helper functions (keeping existing ones)
+def safe_get(dictionary, keys, default=None):
+    """Safely get nested dictionary values"""
+    if isinstance(keys, str):
+        keys = [keys]
+    
+    current = dictionary
+    for key in keys:
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        else:
+            return default
+    return current
+
+def calculate_age(birth_date):
+    """Calculate age from birth date"""
+    if not birth_date:
+        return None
+    today = datetime.now().date()
+    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return age
+
+def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate patient data"""
+    errors = []
+    required_fields = {
+        'first_name': 'First Name',
+        'last_name': 'Last Name', 
+        'ssn': 'SSN',
+        'date_of_birth': 'Date of Birth',
+        'gender': 'Gender',
+        'zip_code': 'Zip Code'
+    }
+    
+    for field, display_name in required_fields.items():
+        if not data.get(field):
+            errors.append(f"{display_name} is required")
+        elif field == 'ssn' and len(str(data[field])) < 9:
+            errors.append("SSN must be at least 9 digits")
+        elif field == 'zip_code' and len(str(data[field])) < 5:
+            errors.append("Zip code must be at least 5 digits")
+    
+    if data.get('date_of_birth'):
+        try:
+            birth_date = datetime.strptime(data['date_of_birth'], '%Y-%m-%d').date()
+            age = calculate_age(birth_date)
+            
+            if age and age > 150:
+                errors.append("Age cannot be greater than 150 years")
+            elif age and age < 0:
+                errors.append("Date of birth cannot be in the future")
+        except:
+            errors.append("Invalid date format")
+    
+    return len(errors) == 0, errors
+
+# Initialize session state with enhanced tracking
+def initialize_session_state():
+    """Initialize session state variables for real-time processing"""
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_running' not in st.session_state:
+        st.session_state.analysis_running = False
+    if 'agent' not in st.session_state:
+        st.session_state.agent = None
+    if 'agent_wrapper' not in st.session_state:
+        st.session_state.agent_wrapper = None
+    if 'config' not in st.session_state:
+        st.session_state.config = None
+    if 'chatbot_context' not in st.session_state:
+        st.session_state.chatbot_context = None
+    if 'calculated_age' not in st.session_state:
+        st.session_state.calculated_age = None
+    if 'realtime_tracker' not in st.session_state:
+        st.session_state.realtime_tracker = None
+
+def reset_workflow():
+    """Reset workflow to initial state"""
+    st.session_state.realtime_tracker = RealTimeLangGraphTracker()
+
+initialize_session_state()
+
+# Enhanced Main Title
+st.markdown('<h1 class="main-header">🧠 Real-time LangGraph Health Agent</h1>', unsafe_allow_html=True)
+
+# Display import status
+if not AGENT_AVAILABLE:
+    st.markdown(f'<div class="status-error">Failed to import Health Agent: {import_error}</div>', unsafe_allow_html=True)
+    st.stop()
+
+# Sidebar with enhanced real-time info
+with st.sidebar:
+    st.title("🔄 Real-time Monitor")
+    st.info("**TRUE LangGraph Synchronization**")
+    st.markdown("---")
+    st.markdown("**Real-time Features:**")
+    st.markdown("• **Live Node Execution**: Real callbacks from LangGraph nodes")
+    st.markdown("• **Actual Status Updates**: True node completion tracking") 
+    st.markdown("• **Error Detection**: Real failure reporting from nodes")
+    st.markdown("• **Execution Timing**: Actual node duration measurement")
+    st.markdown("• **Thread-safe Updates**: Concurrent UI refreshing")
+    st.markdown("---")
+    if st.session_state.realtime_tracker:
+        current_status = st.session_state.realtime_tracker.get_current_status()
+        st.metric("Nodes Completed", f"{current_status['completed']}/{current_status['total_nodes']}")
+        st.metric("Current Progress", f"{current_status['progress_percent']:.0f}%")
+
+# 1. PATIENT INFORMATION
+st.markdown("""
+<div class="section-box">
+    <div class="section-title">Patient Information</div>
+</div>
+""", unsafe_allow_html=True)
+
+with st.container():
+    with st.form("patient_input_form"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            first_name = st.text_input("First Name *", value="", type="password")
+            last_name = st.text_input("Last Name *", value="", type="password")
+        
+        with col2:
+            ssn = st.text_input("SSN *", value="", type="password")
+            date_of_birth = st.date_input(
+                "Date of Birth *", 
+                value=datetime.now().date(),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date()
+            )
+        
+        with col3:
+            gender = st.selectbox("Gender *", ["F", "M"])
+            zip_code = st.text_input("Zip Code *", value="", type="password")
+        
+        # Show calculated age
+        if date_of_birth:
+            calculated_age = calculate_age(date_of_birth)
+            if calculated_age is not None:
+                st.session_state.calculated_age = calculated_age
+                st.info(f"**Calculated Age:** {calculated_age} years old")
+        elif st.session_state.calculated_age is not None:
+            st.info(f"**Calculated Age:** {st.session_state.calculated_age} years old")
+        
+        # RUN ANALYSIS BUTTON
+        submitted = st.form_submit_button(
+            "🚀 Run REAL-TIME LangGraph Analysis", 
+            use_container_width=True,
+            disabled=st.session_state.analysis_running,
+            type="primary"
+        )
+
+# Handle form submission with enhanced real-time tracking
+if submitted:
+    # Validate form data
+    patient_data = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "ssn": ssn,
+        "date_of_birth": date_of_birth.strftime('%Y-%m-%d'),
+        "gender": gender,
+        "zip_code": zip_code
+    }
+    
+    valid, errors = validate_patient_data(patient_data)
+    
+    if not valid:
+        st.error("Please fix the following errors:")
+        for error in errors:
+            st.error(f"• {error}")
+    else:
+        # Start real-time analysis
+        reset_workflow()
+        st.session_state.analysis_running = True
+        st.session_state.analysis_results = None
+        st.session_state.chatbot_context = None
+        st.session_state.calculated_age = None
+        
+        # Initialize agent and enhanced wrapper
+        try:
+            config = Config()
+            st.session_state.config = config
+            st.session_state.agent = HealthAnalysisAgent(config)
+            st.session_state.agent_wrapper = EnhancedLangGraphWrapper(st.session_state.agent)
+            
+            # DEBUG: Show enhanced agent setup
+            with st.expander("🔍 **ENHANCED Real-time LangGraph Configuration**", expanded=False):
+                st.write("**Real-time LangGraph Integration:**")
+                
+                if hasattr(st.session_state.agent, 'graph'):
+                    st.success("✅ LangGraph StateGraph compiled and ready")
+                if hasattr(st.session_state.agent_wrapper, 'tracker'):
+                    st.success("✅ Real-time progress tracker initialized")
+                if hasattr(st.session_state.agent_wrapper, 'inject_realtime_callbacks'):
+                    st.success("✅ Callback injection system ready")
+                
+                st.write("**Enhanced Node Tracking:**")
+                tracker = st.session_state.agent_wrapper.tracker
+                for node_name, node_info in tracker.node_mapping.items():
+                    st.write(f"• `{node_name}` → **{node_info['ui_name']}** {node_info['icon']}")
+                
+                st.write("**Real-time Capabilities:**")
+                st.write("• ✅ Thread-safe progress tracking")
+                st.write("• ✅ Node execution timing")
+                st.write("• ✅ Real error capture and reporting")
+                st.write("• ✅ Live UI updates during execution")
+                st.write("• ✅ Callback injection into all nodes")
+            
+        except Exception as e:
+            st.error(f"Failed to initialize enhanced LangGraph agent: {str(e)}")
+            st.session_state.analysis_running = False
+            st.stop()
+        
+        st.rerun()
+
+# Display REAL-TIME synchronized workflow and execute LangGraph
+if st.session_state.analysis_running:
+    st.markdown("## 🧠 REAL-TIME LangGraph Execution")
+    
+    # Create placeholders for REAL-TIME updates
+    workflow_placeholder = st.empty()
+    progress_placeholder = st.empty()
+    
+    # Show initial workflow state
+    initial_status = {
+        'total_nodes': 8,
+        'completed': 0,
+        'running': 0,
+        'errors': 0,
+        'progress_percent': 0,
+        'current_node': None,
+        'node_status': {}
+    }
+    
+    _display_realtime_workflow(initial_status)
+    
+    with progress_placeholder.container():
+        st.info("🚀 Starting REAL-TIME LangGraph healthcare analysis...")
+    
+    # Execute LangGraph with REAL-TIME UPDATES
+    try:
+        patient_data = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "ssn": ssn,
+            "date_of_birth": date_of_birth.strftime('%Y-%m-%d'),
+            "gender": gender,
+            "zip_code": zip_code
+        }
+        
+        # Run LangGraph with REAL-TIME callbacks
+        results = st.session_state.agent_wrapper.run_with_realtime_updates(
+            patient_data, 
+            workflow_placeholder,
+            progress_placeholder
+        )
+        
+        # Store results
+        st.session_state.analysis_results = results
+        st.session_state.analysis_running = False
+        
+        if results and results.get("success") and results.get("chatbot_ready"):
+            st.session_state.chatbot_context = results.get("chatbot_context")
+        
+        st.rerun()
+        
+    except Exception as e:
+        st.session_state.analysis_running = False
+        
+        with progress_placeholder.container():
+            st.error(f"❌ Real-time LangGraph execution failed: {str(e)}")
+        
+        # Show error in final workflow display
+        error_status = st.session_state.agent_wrapper.tracker.get_current_status() if st.session_state.agent_wrapper else initial_status
+        error_status['errors'] = error_status.get('errors', 0) + 1
+        
+        with workflow_placeholder.container():
+            _display_realtime_workflow(error_status)
+
+# Display results after completion (keeping existing results display code)
+if st.session_state.analysis_results and not st.session_state.analysis_running:
+    results = st.session_state.analysis_results
+    
+    if results.get("success"):
+        # Success banner
+        st.markdown("""
+        <div class="analysis-complete-banner">
+            <h2 style="margin: 0; color: #28a745; font-weight: 700;">🎉 REAL-TIME LangGraph Analysis Complete!</h2>
+            <p style="margin: 0.5rem 0; color: #155724; font-size: 1.1rem;">
+                All LangGraph nodes executed successfully with real-time progress tracking.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show execution summary
+        if st.session_state.agent_wrapper and st.session_state.agent_wrapper.tracker:
+            final_status = st.session_state.agent_wrapper.tracker.get_current_status()
+            st.markdown("### 📊 Execution Summary")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Nodes", final_status['total_nodes'])
+            with col2:
+                st.metric("Completed", final_status['completed'])
+            with col3:
+                st.metric("Success Rate", f"{(final_status['completed']/final_status['total_nodes']*100):.0f}%")
+            with col4:
+                total_duration = sum([
+                    node.duration for node in final_status['node_status'].values() 
+                    if hasattr(node, 'duration') and node.duration
+                ]) if final_status['node_status'] else 0
+                st.metric("Total Time", f"{total_duration:.1f}s" if total_duration else "N/A")
+        
+        # Chatbot launch button
+        if results.get("chatbot_ready", False) and st.session_state.chatbot_context:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button(
+                    "🚀 Launch Medical Assistant", 
+                    key="launch_chatbot_main",
+                    use_container_width=True,
+                    help="Open the Medical Assistant with full LangGraph analysis data"
+                ):
+                    st.switch_page("pages/chatbot.py")
+    else:
+        st.error("❌ Real-time LangGraph analysis encountered errors")
+        if results.get('errors'):
+            for error in results['errors']:
+                st.error(f"• {error}")
 
 if __name__ == "__main__":
-    main()
+    pass
