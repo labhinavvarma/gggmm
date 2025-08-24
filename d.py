@@ -1350,53 +1350,49 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
 
     # 1. CLAIMS DATA - Available after API Fetch + Deidentification
     claims_availability = get_section_availability('claims_data')
-    
-    with st.expander(
-        "📊 Claims Data", 
-        expanded=False,
-        disabled=(claims_availability == 'disabled')
-    ):
-        if claims_availability == 'disabled':
-            st.info("⏳ This section will be available after API Fetch and Deidentification steps complete")
+if claims_availability == 'disabled':
+    st.markdown("### 📊 Claims Data")
+    st.info("⏳ This section will be available after API Fetch and Deidentification steps complete")
+else:
+    with st.expander("📊 Claims Data", expanded=False):
+        st.markdown("""
+        <div class="section-box section-available">
+            <div class="section-title">Claims Data Analysis</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Rest of your expander content here...
+        deidentified_data = safe_get(results, 'deidentified_data', {})
+        api_outputs = safe_get(results, 'api_outputs', {})
+        
+        if deidentified_data or api_outputs:
+            tab1, tab2, tab3 = st.tabs(["Medical Claims", "Pharmacy Claims", "MCID Data"])
+
+            with tab1:
+                st.success("✅ Medical claims data processed")
+                if deidentified_data.get('medical'):
+                    with st.expander("View Medical Claims JSON", expanded=False):
+                        st.json(deidentified_data['medical'])
+                else:
+                    st.json({"status": "Medical claims data loaded", "records": "Available for analysis"})
+            
+            with tab2:
+                st.success("✅ Pharmacy claims data processed") 
+                if deidentified_data.get('pharmacy'):
+                    with st.expander("View Pharmacy Claims JSON", expanded=False):
+                        st.json(deidentified_data['pharmacy'])
+                else:
+                    st.json({"status": "Pharmacy claims data loaded", "records": "Available for analysis"})
+            
+            with tab3:
+                st.success("✅ MCID data processed")
+                if api_outputs.get('mcid'):
+                    with st.expander("View MCID JSON Data", expanded=False):
+                        st.json(api_outputs['mcid'])
+                else:
+                    st.json({"status": "MCID data loaded", "matches": "Available for analysis"})
         else:
-            st.markdown("""
-            <div class="section-box section-available">
-                <div class="section-title">Claims Data Analysis</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Display claims data
-            deidentified_data = safe_get(results, 'deidentified_data', {})
-            api_outputs = safe_get(results, 'api_outputs', {})
-            
-            if deidentified_data or api_outputs:
-                tab1, tab2, tab3 = st.tabs(["Medical Claims", "Pharmacy Claims", "MCID Data"])
-                
-                with tab1:
-                    st.success("✅ Medical claims data processed")
-                    if deidentified_data.get('medical'):
-                        with st.expander("View Medical Claims JSON", expanded=False):
-                            st.json(deidentified_data['medical'])
-                    else:
-                        st.json({"status": "Medical claims data loaded", "records": "Available for analysis"})
-                
-                with tab2:
-                    st.success("✅ Pharmacy claims data processed") 
-                    if deidentified_data.get('pharmacy'):
-                        with st.expander("View Pharmacy Claims JSON", expanded=False):
-                            st.json(deidentified_data['pharmacy'])
-                    else:
-                        st.json({"status": "Pharmacy claims data loaded", "records": "Available for analysis"})
-                
-                with tab3:
-                    st.success("✅ MCID data processed")
-                    if api_outputs.get('mcid'):
-                        with st.expander("View MCID JSON Data", expanded=False):
-                            st.json(api_outputs['mcid'])
-                    else:
-                        st.json({"status": "MCID data loaded", "matches": "Available for analysis"})
-            else:
-                st.error("No claims data available")
+            st.error("No claims data available")
 
     # 2. CLAIMS DATA ANALYSIS - Available after Field Extraction
     code_analysis_availability = get_section_availability('code_analysis')
