@@ -3,14 +3,25 @@ import requests
 import json
 import uuid
 import pandas as pd
-import PyPDF2
-import docx
 import io
 import base64
 from typing import Dict, Any, List, Optional
 import time
 from datetime import datetime
 import warnings
+
+# Import optional libraries with error handling
+try:
+    import PyPDF2
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 # Disable SSL warnings
 try:
@@ -74,6 +85,12 @@ class FileProcessor:
     @staticmethod
     def process_word(file) -> Dict[str, Any]:
         """Process Word documents and extract text"""
+        if not DOCX_AVAILABLE:
+            return {
+                "type": "word", 
+                "error": "python-docx library not available. Please install with: pip install python-docx>=1.0.1"
+            }
+            
         try:
             doc = docx.Document(file)
             
@@ -113,6 +130,12 @@ class FileProcessor:
     @staticmethod
     def process_pdf(file) -> Dict[str, Any]:
         """Process PDF files and extract text"""
+        if not PDF_AVAILABLE:
+            return {
+                "type": "pdf", 
+                "error": "PyPDF2 library not available. Please install with: pip install PyPDF2>=3.0.0"
+            }
+            
         try:
             pdf_reader = PyPDF2.PdfReader(file)
             
@@ -307,11 +330,30 @@ def main():
     with st.sidebar:
         st.header("📁 File Upload")
         
+        # Determine supported file types based on available libraries
+        supported_types = ['xlsx', 'xls']  # Always support Excel
+        type_descriptions = ["Excel (.xlsx, .xls)"]
+        
+        if DOCX_AVAILABLE:
+            supported_types.append('docx')
+            type_descriptions.append("Word (.docx)")
+        
+        if PDF_AVAILABLE:
+            supported_types.append('pdf')
+            type_descriptions.append("PDF (.pdf)")
+        
+        help_text = f"Supported formats: {', '.join(type_descriptions)}"
+        
         uploaded_file = st.file_uploader(
             "Upload your file",
-            type=['xlsx', 'xls', 'docx', 'pdf'],
-            help="Supported formats: Excel (.xlsx, .xls), Word (.docx), PDF (.pdf)"
+            type=supported_types,
+            help=help_text
         )
+        
+        if not DOCX_AVAILABLE:
+            st.warning("⚠️ Word document support disabled. Install python-docx>=1.0.1 to enable.")
+        if not PDF_AVAILABLE:
+            st.warning("⚠️ PDF support disabled. Install PyPDF2>=3.0.0 to enable.")
         
         if uploaded_file is not None:
             # Process file if it's new or different
