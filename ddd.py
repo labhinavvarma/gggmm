@@ -3,6 +3,7 @@ import requests
 import json
 import uuid
 import pandas as pd
+import numpy as np
 import io
 import base64
 from typing import Dict, Any, List, Optional
@@ -23,12 +24,19 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
-# Disable SSL warnings
+# Disable SSL warnings and other annoying warnings
 try:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 except (ImportError, AttributeError):
     warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+# Suppress common warnings
+warnings.filterwarnings('ignore', message='Data Validation extension is not supported')
+warnings.filterwarnings('ignore', message='Mean of empty slice')
+warnings.filterwarnings('ignore', message='Downcasting object dtype arrays')
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
 
 # === Configuration ===
 API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
@@ -58,29 +66,57 @@ class FileProcessor:
                 # Clean column names
                 df.columns = df.columns.astype(str).str.strip()
                 
+                # Handle missing values properly to avoid FutureWarning
+                df_clean = df.copy()
+                for col in df_clean.columns:
+                    if df_clean[col].dtype == 'object':
+                        df_clean[col] = df_clean[col].fillna('').astype(str)
+                    else:
+                        df_clean[col] = df_clean[col].fillna(0)
+                
                 sheet_info = {
                     "rows": len(df),
                     "columns": len(df.columns),
                     "column_names": df.columns.tolist(),
-                    "sample_data": df.head(3).fillna('').to_dict('records'),
+                    "sample_data": df_clean.head(3).to_dict('records'),
                     "data_types": df.dtypes.to_dict(),
                     "summary_stats": {}
                 }
                 
-                # Add summary statistics for numeric columns
+                # Add summary statistics for numeric columns (with proper error handling)
                 numeric_cols = df.select_dtypes(include=['number']).columns
                 for col in numeric_cols:
-                    sheet_info["summary_stats"][col] = {
-                        "mean": float(df[col].mean()),
-                        "median": float(df[col].median()),
-                        "min": float(df[col].min()),
-                        "max": float(df[col].max()),
-                        "count": int(df[col].count())
-                    }
+                    try:
+                        # Only calculate stats if column has valid numeric data
+                        valid_data = df[col].dropna()
+                        if len(valid_data) > 0 and not valid_data.empty:
+                            sheet_info["summary_stats"][col] = {
+                                "mean": float(valid_data.mean()),
+                                "median": float(valid_data.median()),
+                                "min": float(valid_data.min()),
+                                "max": float(valid_data.max()),
+                                "count": int(valid_data.count()),
+                                "null_count": int(df[col].isnull().sum())
+                            }
+                        else:
+                            sheet_info["summary_stats"][col] = {
+                                "mean": 0,
+                                "median": 0,
+                                "min": 0,
+                                "max": 0,
+                                "count": 0,
+                                "null_count": int(df[col].isnull().sum())
+                            }
+                    except (ValueError, TypeError):
+                        # Skip columns that can't be processed
+                        continue
                 
                 sheet_info["data_types"] = {k: str(v) for k, v in sheet_info["data_types"].items()}
                 result["sheets"][sheet_name] = sheet_info
-                result["raw_data"][sheet_name] = df.fillna('').to_dict('records')
+                
+                # Clean data for JSON serialization
+                df_for_json = df_clean.copy()
+                result["raw_data"][sheet_name] = df_for_json.to_dict('records')
                 
             total_rows = sum(info["rows"] for info in result["sheets"].values())
             total_sheets = len(result["sheets"])
@@ -383,6 +419,9 @@ def render_chat_message(role: str, content: str, timestamp: str):
 def main():
     """Enhanced main application with ChatGPT-like interface"""
     
+    # Set pandas options to avoid warnings
+    pd.set_option('future.no_silent_downcasting', True)
+    
     # Page configuration
     st.set_page_config(
         page_title="AI Data Analyst",
@@ -402,12 +441,12 @@ def main():
         background: white;
     }
     .chat-container {
-        height: 60vh;
+        height: 70vh;
         overflow-y: auto;
-        padding: 20px 0;
+        padding: 30px 20px;
         background: #fafafa;
-        border-radius: 10px;
-        margin-bottom: 20px;
+        border-radius: 15px;
+        margin-bottom: 30px;
     }
     .file-upload-container {
         background: white;
@@ -421,26 +460,57 @@ def main():
         padding: 15px;
         border-radius: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        margin: 10px 0;
+        margin: 15px 0;
     }
     .stExpander {
         border: 1px solid #e5e7eb;
         border-radius: 8px;
-        margin: 5px 0;
+        margin: 8px 0;
+    }
+    .stExpander > div > div > div > div {
+        padding: 10px 15px;
     }
     .question-btn {
         width: 100%;
         text-align: left;
-        padding: 8px 12px;
-        margin: 2px 0;
+        padding: 10px 15px;
+        margin: 4px 0;
         background: #f8f9fa;
         border: 1px solid #e9ecef;
-        border-radius: 6px;
+        border-radius: 8px;
         cursor: pointer;
         font-size: 13px;
+        transition: all 0.2s ease;
     }
     .question-btn:hover {
         background: #e9ecef;
+        transform: translateY(-1px);
+    }
+    /* Sidebar styling */
+    .css-1d391kg {
+        padding-top: 2rem;
+    }
+    /* Make input box more prominent */
+    .stTextInput > div > div > input {
+        padding: 12px 16px;
+        border-radius: 25px;
+        border: 2px solid #e5e7eb;
+        font-size: 16px;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    /* Button styling */
+    .stButton > button {
+        border-radius: 20px;
+        border: none;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -538,86 +608,9 @@ def main():
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Library status
-        if not DOCX_AVAILABLE or not PDF_AVAILABLE:
-            st.markdown("### ⚠️ Library Status")
-            if not DOCX_AVAILABLE:
-                st.warning("Word support disabled")
-            if not PDF_AVAILABLE:
-                st.warning("PDF support disabled")
-    
-    # Main chat area
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # Chat messages container
-        chat_container = st.container()
+        st.markdown('</div>', unsafe_allow_html=True)
         
-        with chat_container:
-            if st.session_state.messages:
-                st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-                for role, message, timestamp in st.session_state.messages:
-                    render_chat_message(role, message, timestamp)
-                st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div style="text-align: center; padding: 40px; color: #6b7280; background: #fafafa; border-radius: 10px; margin: 20px 0;">
-                    <h3>👋 Welcome to AI Data Analyst!</h3>
-                    <p>Upload your files and start asking questions about your data.</p>
-                    <p>Use the quick questions on the right to get started, or type your own question below.</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Chat input at bottom (ChatGPT style)
-        st.markdown("### 💬 Ask about your data")
-        
-        col_input, col_send, col_clear = st.columns([4, 1, 1])
-        
-        with col_input:
-            user_input = st.text_input(
-                "Type your question here...",
-                placeholder="e.g., What are the key insights from my data?",
-                label_visibility="collapsed"
-            )
-        
-        with col_send:
-            send_clicked = st.button("Send 🚀", use_container_width=True)
-        
-        with col_clear:
-            clear_clicked = st.button("Clear 🗑️", use_container_width=True)
-        
-        if clear_clicked:
-            st.session_state.messages = []
-            st.rerun()
-        
-        # Process input
-        if (send_clicked and user_input.strip()) or (user_input and len(user_input) > 0 and st.session_state.get('auto_send', False)):
-            if st.session_state.get('auto_send', False):
-                st.session_state['auto_send'] = False
-            
-            if not st.session_state.files_data:
-                st.warning("Please upload files first to start analysis!")
-            else:
-                with st.spinner("🤔 Analyzing your question..."):
-                    # Get conversation history
-                    conversation_history = []
-                    for role, message, _ in st.session_state.messages[-6:]:
-                        conversation_history.append({"role": role, "content": message})
-                    
-                    # Send to API
-                    response = api_client.send_message(
-                        user_input, 
-                        st.session_state.files_data,
-                        conversation_history
-                    )
-                    
-                    if response:
-                        timestamp = datetime.now().strftime("%H:%M")
-                        st.session_state.messages.append(("user", user_input, timestamp))
-                        st.session_state.messages.append(("assistant", response, timestamp))
-                        st.rerun()
-    
-    with col2:
+        # Quick Questions in Sidebar
         st.markdown('<div class="quick-questions">', unsafe_allow_html=True)
         st.markdown("### 🎯 Quick Questions")
         
@@ -626,7 +619,7 @@ def main():
         for category, questions in quick_questions.items():
             with st.expander(category):
                 for question, detailed_prompt in questions.items():
-                    if st.button(question, key=f"q_{hash(question)}", help="Click to ask this question"):
+                    if st.button(question, key=f"q_{hash(question)}", help="Click to ask this question", use_container_width=True):
                         if not st.session_state.files_data:
                             st.warning("Upload files first!")
                         else:
@@ -649,6 +642,87 @@ def main():
                                     st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Library status
+        if not DOCX_AVAILABLE or not PDF_AVAILABLE:
+            st.markdown("### ⚠️ Library Status")
+            if not DOCX_AVAILABLE:
+                st.warning("Word support disabled")
+            if not PDF_AVAILABLE:
+                st.warning("PDF support disabled")
+    
+    # Main chat area (full width)
+    # Chat messages container
+    chat_container = st.container()
+    
+    with chat_container:
+        if st.session_state.messages:
+            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+            for role, message, timestamp in st.session_state.messages:
+                render_chat_message(role, message, timestamp)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="text-align: center; padding: 60px 40px; color: #6b7280; background: #fafafa; border-radius: 15px; margin: 30px 0;">
+                <h2>👋 Welcome to AI Data Analyst!</h2>
+                <p style="font-size: 18px; margin: 20px 0;">Upload your files in the sidebar and start asking questions about your data.</p>
+                <p style="font-size: 16px; opacity: 0.8;">Use the quick questions in the sidebar to get started, or type your own question below.</p>
+                <div style="margin-top: 30px;">
+                    <span style="background: #e3f2fd; padding: 8px 16px; border-radius: 20px; margin: 0 5px; font-size: 14px;">📊 Data Analysis</span>
+                    <span style="background: #f3e5f5; padding: 8px 16px; border-radius: 20px; margin: 0 5px; font-size: 14px;">💼 Business Intelligence</span>
+                    <span style="background: #e8f5e8; padding: 8px 16px; border-radius: 20px; margin: 0 5px; font-size: 14px;">📈 Financial Analysis</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Chat input at bottom (ChatGPT style) - Full width
+    st.markdown("### 💬 Ask about your data")
+    
+    col_input, col_send, col_clear = st.columns([5, 1, 1])
+    
+    with col_input:
+        user_input = st.text_input(
+            "Type your question here...",
+            placeholder="e.g., What are the key insights from my data?",
+            label_visibility="collapsed"
+        )
+    
+    with col_send:
+        send_clicked = st.button("Send 🚀", use_container_width=True)
+    
+    with col_clear:
+        clear_clicked = st.button("Clear 🗑️", use_container_width=True)
+    
+    if clear_clicked:
+        st.session_state.messages = []
+        st.rerun()
+    
+    # Process input
+    if (send_clicked and user_input.strip()) or (user_input and len(user_input) > 0 and st.session_state.get('auto_send', False)):
+        if st.session_state.get('auto_send', False):
+            st.session_state['auto_send'] = False
+        
+        if not st.session_state.files_data:
+            st.warning("Please upload files first to start analysis!")
+        else:
+            with st.spinner("🤔 Analyzing your question..."):
+                # Get conversation history
+                conversation_history = []
+                for role, message, _ in st.session_state.messages[-6:]:
+                    conversation_history.append({"role": role, "content": message})
+                
+                # Send to API
+                response = api_client.send_message(
+                    user_input, 
+                    st.session_state.files_data,
+                    conversation_history
+                )
+                
+                if response:
+                    timestamp = datetime.now().strftime("%H:%M")
+                    st.session_state.messages.append(("user", user_input, timestamp))
+                    st.session_state.messages.append(("assistant", response, timestamp))
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
