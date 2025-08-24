@@ -1667,9 +1667,20 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
                 
                 # Risk percentage in large text
                 if risk_percentage:
+                    # Determine color based on risk category
+                    if risk_category == "Low Risk":
+                        percentage_color = "#28a745"  # Green
+                        shadow_color = "rgba(40, 167, 69, 0.3)"
+                    elif risk_category == "Medium Risk":
+                        percentage_color = "#d39e00"  # Dark yellow
+                        shadow_color = "rgba(211, 158, 0, 0.3)"
+                    else:  # High Risk or Unknown
+                        percentage_color = "#dc3545"  # Red
+                        shadow_color = "rgba(220, 53, 69, 0.3)"
+                    
                     st.markdown(f"""
                     <div style="text-align: center; margin: 2rem 0;">
-                        <div style="font-size: 4rem; font-weight: 800; color: #dc3545; text-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);">
+                        <div style="font-size: 4rem; font-weight: 800; color: {percentage_color}; text-shadow: 0 2px 4px {shadow_color};">
                             {risk_percentage}
                         </div>
                     </div>
