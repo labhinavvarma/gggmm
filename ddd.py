@@ -19,7 +19,7 @@ import time
 import sys
 import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 import matplotlib.pyplot as plt
 import matplotlib
 import io
@@ -31,7 +31,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import warnings
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue, Empty
 
 # ENHANCED MATPLOTLIB CONFIGURATION FOR STREAMLIT
 matplotlib.use('Agg')  # Use non-interactive backend
@@ -299,18 +299,18 @@ st.markdown("""
     font-weight: 600;
 }
 
-.langgraph-sync-indicator {
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+.live-sync-indicator {
+    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
     padding: 1rem;
     border-radius: 10px;
     margin: 1rem 0;
-    border-left: 4px solid #2196f3;
+    border-left: 4px solid #28a745;
     font-weight: 600;
-    animation: sync-pulse 2s infinite;
+    animation: live-pulse 1.5s infinite;
 }
 
-@keyframes sync-pulse {
-    0%, 100% { opacity: 0.8; }
+@keyframes live-pulse {
+    0%, 100% { opacity: 0.9; }
     50% { opacity: 1; }
 }
 </style>
@@ -373,7 +373,7 @@ def validate_patient_data(data: Dict[str, Any]) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 def display_advanced_professional_workflow():
-    """ORIGINAL Display the advanced professional workflow animation - SYNCHRONIZED WITH LANGGRAPH"""
+    """ORIGINAL Display the advanced professional workflow animation - WITH REAL LANGGRAPH SYNC"""
     
     # Calculate statistics
     total_steps = len(st.session_state.workflow_steps)
@@ -389,22 +389,20 @@ def display_advanced_professional_workflow():
     st.markdown("""
     <div style="text-align: center; margin-bottom: 2rem; position: relative; z-index: 2;">
         <h2 style="color: #2c3e50; font-weight: 700;">🧠 LangGraph Healthcare Analysis Pipeline</h2>
-        <p style="color: #34495e; font-size: 1.1rem;">Real-time synchronized workflow with 8 LangGraph nodes</p>
+        <p style="color: #34495e; font-size: 1.1rem;">Live synchronized workflow with real LangGraph execution</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # LangGraph sync indicator
+    # Live sync indicator - shows REAL status
     if st.session_state.analysis_running:
-        st.markdown("""
-        <div class="langgraph-sync-indicator" style="position: relative; z-index: 2;">
-            🔄 <strong>LangGraph Status:</strong> Executing nodes in real-time | 
-            <strong>Current Node:</strong> {current_node} | 
-            <strong>Progress:</strong> {progress:.0f}%
+        current_node = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Initializing')
+        st.markdown(f"""
+        <div class="live-sync-indicator" style="position: relative; z-index: 2;">
+            🟢 <strong>LIVE:</strong> LangGraph node executing | 
+            <strong>Current:</strong> {current_node} | 
+            <strong>Real Progress:</strong> {progress_percentage:.0f}%
         </div>
-        """.format(
-            current_node=next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Initializing'),
-            progress=progress_percentage
-        ), unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
     
     # Progress metrics with ORIGINAL styling
     col1, col2, col3, col4 = st.columns(4)
@@ -416,7 +414,7 @@ def display_advanced_professional_workflow():
     with col3:
         st.metric("Processing", running_steps)
     with col4:
-        st.metric("Progress", f"{progress_percentage:.0f}%")
+        st.metric("Real Progress", f"{progress_percentage:.0f}%")
     
     # Progress bar
     st.progress(progress_percentage / 100)
@@ -441,7 +439,7 @@ def display_advanced_professional_workflow():
         
         langgraph_node = langgraph_node_map.get(name, name)
         
-        # Determine styling based on status
+        # Determine styling based on REAL status from LangGraph
         if status == 'completed':
             step_class = "workflow-step completed"
             status_emoji = "✅"
@@ -476,14 +474,14 @@ def display_advanced_professional_workflow():
         </div>
         """, unsafe_allow_html=True)
     
-    # Status message with LangGraph sync info
+    # Status message with REAL LangGraph status
     if running_steps > 0:
         current_step_name = next((step['name'] for step in st.session_state.workflow_steps if step['status'] == 'running'), 'Processing')
-        status_message = f"🧠 LangGraph Node Executing: {current_step_name}"
+        status_message = f"🧠 LIVE: LangGraph executing {current_step_name}"
     elif completed_steps == total_steps:
         status_message = "🎉 All LangGraph nodes completed successfully!"
     elif error_steps > 0:
-        status_message = f"❌ {error_steps} LangGraph node(s) encountered errors"
+        status_message = f"❌ {error_steps} LangGraph node(s) failed"
     else:
         status_message = "🚀 LangGraph workflow ready to execute..."
     
@@ -494,108 +492,191 @@ def display_advanced_professional_workflow():
     </div>
     """, unsafe_allow_html=True)
 
-def run_langgraph_with_sync_animation(agent, patient_data, workflow_placeholder, progress_placeholder):
-    """Execute LangGraph while updating workflow animation in real-time"""
+# REAL LANGGRAPH PROGRESS TRACKER
+class LangGraphProgressTracker:
+    """Track real LangGraph progress and update UI accordingly"""
     
-    # LangGraph node sequence (matches your agent's workflow)
-    langgraph_sequence = [
-        {'name': 'API Fetch', 'duration': 3.0, 'node': 'fetch_api_data'},
-        {'name': 'Deidentification', 'duration': 2.5, 'node': 'deidentify_claims_data'},
-        {'name': 'Field Extraction', 'duration': 4.0, 'node': 'extract_claims_fields'},
-        {'name': 'Entity Extraction', 'duration': 3.5, 'node': 'extract_entities'},
-        {'name': 'Health Trajectory', 'duration': 5.0, 'node': 'analyze_trajectory'},
-        {'name': 'Heart Risk Prediction', 'duration': 2.5, 'node': 'predict_heart_attack'},
-        {'name': 'Chatbot Initialization', 'duration': 1.5, 'node': 'initialize_chatbot'}
-    ]
+    def __init__(self):
+        self.progress_queue = Queue()
+        self.node_mapping = {
+            'fetch_api_data': 'API Fetch',
+            'deidentify_claims_data': 'Deidentification',
+            'extract_claims_fields': 'Field Extraction', 
+            'extract_entities': 'Entity Extraction',
+            'analyze_trajectory': 'Health Trajectory',
+            'predict_heart_attack': 'Heart Risk Prediction',
+            'initialize_chatbot': 'Chatbot Initialization'
+        }
     
-    # Start LangGraph execution in separate thread
-    langgraph_future = None
-    results = None
-    
-    def execute_langgraph():
-        return agent.run_analysis(patient_data)
-    
-    # Use ThreadPoolExecutor to run LangGraph
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        langgraph_future = executor.submit(execute_langgraph)
+    def create_progress_callback(self):
+        """Create a progress callback for the LangGraph agent"""
+        def progress_callback(node_name: str, status: str, data: dict = None):
+            """Callback function to track LangGraph node progress"""
+            ui_name = self.node_mapping.get(node_name, node_name)
+            self.progress_queue.put({
+                'node_name': node_name,
+                'ui_name': ui_name,
+                'status': status,
+                'data': data,
+                'timestamp': datetime.now()
+            })
         
-        # Simulate progress based on typical LangGraph timing
-        total_duration = sum(step['duration'] for step in langgraph_sequence)
-        start_time = time.time()
+        return progress_callback
+    
+    def update_workflow_status(self, node_name: str, status: str):
+        """Update workflow step status based on LangGraph node"""
+        ui_name = self.node_mapping.get(node_name, node_name)
         
-        for i, step_info in enumerate(langgraph_sequence):
-            step_name = step_info['name']
-            duration = step_info['duration']
-            
-            # Set step as running
-            for j, step in enumerate(st.session_state.workflow_steps):
-                if step['name'] == step_name:
-                    st.session_state.workflow_steps[j]['status'] = 'running'
-                    break
-            
-            # Update workflow display
-            with workflow_placeholder.container():
-                display_advanced_professional_workflow()
-            
-            # Update progress message
-            with progress_placeholder.container():
-                elapsed_time = time.time() - start_time
-                progress_pct = min((elapsed_time / total_duration) * 100, 95)  # Cap at 95% until complete
-                st.info(f"🧠 Executing LangGraph Node: **{step_info['node']}** | Progress: {progress_pct:.0f}%")
-            
-            # Wait for step duration or until LangGraph completes
-            step_start = time.time()
-            while (time.time() - step_start) < duration:
-                if langgraph_future.done():
-                    break
-                time.sleep(0.2)
-            
-            # Mark step as completed if LangGraph hasn't finished yet
-            if not langgraph_future.done():
-                for j, step in enumerate(st.session_state.workflow_steps):
-                    if step['name'] == step_name:
-                        st.session_state.workflow_steps[j]['status'] = 'completed'
-                        break
-                
-                # Update display
-                with workflow_placeholder.container():
-                    display_advanced_professional_workflow()
+        for i, step in enumerate(st.session_state.workflow_steps):
+            if step['name'] == ui_name:
+                st.session_state.workflow_steps[i]['status'] = status
+                break
+
+# ENHANCED LANGGRAPH WRAPPER with REAL PROGRESS
+class LangGraphAgentWrapper:
+    """Wrapper around HealthAnalysisAgent to provide real progress updates"""
+    
+    def __init__(self, agent):
+        self.agent = agent
+        self.progress_tracker = LangGraphProgressTracker()
         
-        # Wait for LangGraph to complete and get results
+    def run_analysis_with_live_updates(self, patient_data: Dict[str, Any], 
+                                     workflow_placeholder, progress_placeholder):
+        """Run LangGraph analysis with real live progress updates"""
+        
         try:
-            results = langgraph_future.result(timeout=30)  # 30 second timeout
+            # Set up progress tracking
+            progress_callback = self.progress_tracker.create_progress_callback()
             
-            # Mark all steps as completed
-            for j, step in enumerate(st.session_state.workflow_steps):
-                st.session_state.workflow_steps[j]['status'] = 'completed'
+            # Start monitoring progress in a separate thread
+            def monitor_progress():
+                while st.session_state.analysis_running:
+                    try:
+                        # Check for progress updates
+                        progress_update = self.progress_tracker.progress_queue.get(timeout=0.1)
+                        
+                        # Update workflow status based on real LangGraph progress
+                        self.progress_tracker.update_workflow_status(
+                            progress_update['node_name'], 
+                            progress_update['status']
+                        )
+                        
+                        # Update UI immediately
+                        with workflow_placeholder.container():
+                            display_advanced_professional_workflow()
+                        
+                        with progress_placeholder.container():
+                            if progress_update['status'] == 'running':
+                                st.info(f"🧠 LIVE: Executing LangGraph node `{progress_update['node_name']}`")
+                            elif progress_update['status'] == 'completed':
+                                st.success(f"✅ Completed: {progress_update['ui_name']}")
+                            elif progress_update['status'] == 'error':
+                                st.error(f"❌ Failed: {progress_update['ui_name']}")
+                        
+                    except Empty:
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Progress monitoring error: {e}")
+                        continue
             
-            # Final update
-            with workflow_placeholder.container():
-                display_advanced_professional_workflow()
+            # Start progress monitoring thread
+            progress_thread = threading.Thread(target=monitor_progress, daemon=True)
+            progress_thread.start()
             
-            with progress_placeholder.container():
-                if results and results.get('success'):
-                    st.success("🎉 LangGraph workflow completed successfully!")
-                else:
-                    st.error("❌ LangGraph workflow encountered errors")
-                    # Mark steps with errors
-                    for j, step in enumerate(st.session_state.workflow_steps):
-                        st.session_state.workflow_steps[j]['status'] = 'error'
+            # Patch the agent to send progress updates
+            original_methods = {}
+            
+            # Hook into LangGraph node methods to send real progress
+            if hasattr(self.agent, 'fetch_api_data'):
+                original_methods['fetch_api_data'] = self.agent.fetch_api_data
+                def wrapped_fetch_api_data(state):
+                    progress_callback('fetch_api_data', 'running')
+                    result = original_methods['fetch_api_data'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('fetch_api_data', status)
+                    return result
+                self.agent.fetch_api_data = wrapped_fetch_api_data
+            
+            if hasattr(self.agent, 'deidentify_claims_data'):
+                original_methods['deidentify_claims_data'] = self.agent.deidentify_claims_data
+                def wrapped_deidentify_claims_data(state):
+                    progress_callback('deidentify_claims_data', 'running')
+                    result = original_methods['deidentify_claims_data'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('deidentify_claims_data', status)
+                    return result
+                self.agent.deidentify_claims_data = wrapped_deidentify_claims_data
+            
+            if hasattr(self.agent, 'extract_claims_fields'):
+                original_methods['extract_claims_fields'] = self.agent.extract_claims_fields
+                def wrapped_extract_claims_fields(state):
+                    progress_callback('extract_claims_fields', 'running')
+                    result = original_methods['extract_claims_fields'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('extract_claims_fields', status)
+                    return result
+                self.agent.extract_claims_fields = wrapped_extract_claims_fields
+            
+            if hasattr(self.agent, 'extract_entities'):
+                original_methods['extract_entities'] = self.agent.extract_entities
+                def wrapped_extract_entities(state):
+                    progress_callback('extract_entities', 'running')
+                    result = original_methods['extract_entities'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('extract_entities', status)
+                    return result
+                self.agent.extract_entities = wrapped_extract_entities
+            
+            if hasattr(self.agent, 'analyze_trajectory'):
+                original_methods['analyze_trajectory'] = self.agent.analyze_trajectory
+                def wrapped_analyze_trajectory(state):
+                    progress_callback('analyze_trajectory', 'running')
+                    result = original_methods['analyze_trajectory'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('analyze_trajectory', status)
+                    return result
+                self.agent.analyze_trajectory = wrapped_analyze_trajectory
+            
+            if hasattr(self.agent, 'predict_heart_attack'):
+                original_methods['predict_heart_attack'] = self.agent.predict_heart_attack
+                def wrapped_predict_heart_attack(state):
+                    progress_callback('predict_heart_attack', 'running')
+                    result = original_methods['predict_heart_attack'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('predict_heart_attack', status)
+                    return result
+                self.agent.predict_heart_attack = wrapped_predict_heart_attack
+            
+            if hasattr(self.agent, 'initialize_chatbot'):
+                original_methods['initialize_chatbot'] = self.agent.initialize_chatbot
+                def wrapped_initialize_chatbot(state):
+                    progress_callback('initialize_chatbot', 'running')
+                    result = original_methods['initialize_chatbot'](state)
+                    status = 'completed' if not state.get('errors') else 'error'
+                    progress_callback('initialize_chatbot', status)
+                    return result
+                self.agent.initialize_chatbot = wrapped_initialize_chatbot
+            
+            # Execute the actual LangGraph analysis
+            results = self.agent.run_analysis(patient_data)
+            
+            # Restore original methods
+            for method_name, original_method in original_methods.items():
+                setattr(self.agent, method_name, original_method)
+            
+            return results
             
         except Exception as e:
-            # Handle errors
-            with progress_placeholder.container():
-                st.error(f"❌ LangGraph execution failed: {str(e)}")
-            
-            # Mark remaining steps as error
-            for j, step in enumerate(st.session_state.workflow_steps):
-                if step['status'] != 'completed':
-                    st.session_state.workflow_steps[j]['status'] = 'error'
+            logger.error(f"LangGraph execution failed: {e}")
+            # Mark all remaining steps as error
+            for step in st.session_state.workflow_steps:
+                if step['status'] not in ['completed', 'error']:
+                    step['status'] = 'error'
             
             with workflow_placeholder.container():
                 display_advanced_professional_workflow()
-    
-    return results
+            
+            raise e
 
 def display_batch_code_meanings_enhanced(results):
     """Enhanced batch processed code meanings display"""
@@ -671,6 +752,8 @@ def initialize_session_state():
         st.session_state.analysis_running = False
     if 'agent' not in st.session_state:
         st.session_state.agent = None
+    if 'agent_wrapper' not in st.session_state:
+        st.session_state.agent_wrapper = None
     if 'config' not in st.session_state:
         st.session_state.config = None
     if 'chatbot_context' not in st.session_state:
@@ -678,7 +761,7 @@ def initialize_session_state():
     if 'calculated_age' not in st.session_state:
         st.session_state.calculated_age = None
     
-    # Enhanced workflow steps - SYNCHRONIZED WITH LANGGRAPH NODES
+    # Enhanced workflow steps - REAL LANGGRAPH NODE MAPPING
     if 'workflow_steps' not in st.session_state:
         st.session_state.workflow_steps = [
             {'name': 'API Fetch', 'status': 'pending', 'description': 'Fetching comprehensive claims data', 'icon': '⚡', 'node': 'fetch_api_data'},
@@ -710,13 +793,12 @@ with st.sidebar:
     st.title("Medical Assistant")
     st.info("Medical Assistant will be available after running health analysis")
     st.markdown("---")
-    st.markdown("**LangGraph Analysis Features:**")
-    st.markdown("• **8 Sequential Nodes:** Complete workflow execution")
-    st.markdown("• **Real-time Sync:** Animations match actual node execution") 
-    st.markdown("• **Claims Processing:** Medical & pharmacy data analysis")
-    st.markdown("• **Entity Extraction:** Health conditions & risk factors")
-    st.markdown("• **Risk Assessment:** ML-based heart attack prediction")
-    st.markdown("• **Graph Generation:** Advanced matplotlib visualizations")
+    st.markdown("**REAL LangGraph Sync Features:**")
+    st.markdown("• **Live Node Updates:** Real-time progress from LangGraph execution")
+    st.markdown("• **Node Status Tracking:** Actual node completion status") 
+    st.markdown("• **Error Handling:** Real failure detection and reporting")
+    st.markdown("• **Progress Monitoring:** True synchronization with workflow")
+    st.markdown("• **Beautiful Animations:** Original styling with real data")
 
 # 1. PATIENT INFORMATION
 st.markdown("""
@@ -757,7 +839,7 @@ with st.container():
         
         # RUN ANALYSIS BUTTON
         submitted = st.form_submit_button(
-            "🚀 Run LangGraph Healthcare Analysis", 
+            "🚀 Run LIVE LangGraph Analysis", 
             use_container_width=True,
             disabled=st.session_state.analysis_running,
             type="primary"
@@ -789,31 +871,33 @@ if submitted:
         st.session_state.chatbot_context = None
         st.session_state.calculated_age = None
         
-        # Initialize agent
+        # Initialize agent and wrapper
         try:
             config = Config()
             st.session_state.config = config
             st.session_state.agent = HealthAnalysisAgent(config)
+            st.session_state.agent_wrapper = LangGraphAgentWrapper(st.session_state.agent)
             
-            # DEBUG: Show agent setup in expandable section
-            with st.expander("🔍 **LangGraph Agent Configuration**", expanded=False):
-                st.write("**HealthAnalysisAgent Status:**")
+            # DEBUG: Show agent setup
+            with st.expander("🔍 **LIVE LangGraph Agent Configuration**", expanded=False):
+                st.write("**Real-Time LangGraph Integration:**")
                 
                 if hasattr(st.session_state.agent, 'graph'):
                     st.success("✅ LangGraph StateGraph compiled and ready")
                 if hasattr(st.session_state.agent, 'run_analysis'):
                     st.success("✅ run_analysis method available")
-                if hasattr(st.session_state.agent, 'chat_with_data'):
-                    st.success("✅ Enhanced chatbot with graph generation ready")
+                if hasattr(st.session_state.agent_wrapper, 'run_analysis_with_live_updates'):
+                    st.success("✅ Live progress tracking wrapper ready")
                 
-                st.write("**LangGraph Node Sequence:**")
+                st.write("**LangGraph Node → UI Mapping:**")
                 for step in st.session_state.workflow_steps:
-                    st.write(f"• **{step['name']}** → `{step['node']}`")
+                    st.write(f"• `{step['node']}` → **{step['name']}**")
                 
-                st.write("**Configuration:**")
-                st.write(f"• Model: {config.model}")
-                st.write(f"• Heart Attack API: {config.heart_attack_api_url}")
-                st.write(f"• Snowflake API: {config.api_url}")
+                st.write("**Live Update Features:**")
+                st.write("• ✅ Real-time node status updates")
+                st.write("• ✅ Progress tracking with callbacks")
+                st.write("• ✅ Error detection and reporting")
+                st.write("• ✅ Animation sync with actual execution")
             
         except Exception as e:
             st.error(f"Failed to initialize LangGraph agent: {str(e)}")
@@ -822,11 +906,11 @@ if submitted:
         
         st.rerun()
 
-# Display synchronized workflow animation and execute LangGraph
+# Display LIVE synchronized workflow animation and execute LangGraph
 if st.session_state.analysis_running:
-    st.markdown("## 🧠 LangGraph Real-Time Execution")
+    st.markdown("## 🧠 LIVE LangGraph Execution")
     
-    # Create placeholders for synchronized updates
+    # Create placeholders for REAL-TIME updates
     workflow_placeholder = st.empty()
     progress_placeholder = st.empty()
     
@@ -835,9 +919,9 @@ if st.session_state.analysis_running:
         display_advanced_professional_workflow()
     
     with progress_placeholder.container():
-        st.info("🚀 Initializing LangGraph healthcare analysis workflow...")
+        st.info("🚀 Starting LIVE LangGraph healthcare analysis with real-time progress...")
     
-    # Execute LangGraph with synchronized animation
+    # Execute LangGraph with REAL LIVE UPDATES
     try:
         patient_data = {
             "first_name": first_name,
@@ -848,9 +932,8 @@ if st.session_state.analysis_running:
             "zip_code": zip_code
         }
         
-        # Run LangGraph with synchronized animations
-        results = run_langgraph_with_sync_animation(
-            st.session_state.agent, 
+        # Run LangGraph with REAL live updates
+        results = st.session_state.agent_wrapper.run_analysis_with_live_updates(
             patient_data, 
             workflow_placeholder,
             progress_placeholder
@@ -863,8 +946,20 @@ if st.session_state.analysis_running:
         if results and results.get("success") and results.get("chatbot_ready"):
             st.session_state.chatbot_context = results.get("chatbot_context")
         
-        # Clear progress placeholder
-        progress_placeholder.empty()
+        # Final status update
+        with progress_placeholder.container():
+            if results and results.get('success'):
+                st.success("🎉 LangGraph workflow completed successfully with LIVE tracking!")
+            else:
+                st.error("❌ LangGraph workflow encountered errors")
+                # Mark failed steps
+                for step in st.session_state.workflow_steps:
+                    if step['status'] not in ['completed']:
+                        step['status'] = 'error'
+        
+        # Final workflow update
+        with workflow_placeholder.container():
+            display_advanced_professional_workflow()
         
         st.rerun()
         
@@ -889,9 +984,9 @@ if st.session_state.analysis_results and not st.session_state.analysis_running:
         # Success banner
         st.markdown("""
         <div class="analysis-complete-banner">
-            <h2 style="margin: 0; color: #28a745; font-weight: 700;">🎉 LangGraph Analysis Complete!</h2>
+            <h2 style="margin: 0; color: #28a745; font-weight: 700;">🎉 LIVE LangGraph Analysis Complete!</h2>
             <p style="margin: 0.5rem 0; color: #155724; font-size: 1.1rem;">
-                All 8 LangGraph nodes executed successfully. Your comprehensive health analysis is ready.
+                All LangGraph nodes executed successfully with real-time progress tracking.
             </p>
         </div>
         """, unsafe_allow_html=True)
