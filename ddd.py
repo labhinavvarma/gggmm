@@ -778,7 +778,7 @@ def display_enhanced_mcid_data(mcid_data):
         st.json(mcid_data)
 
 def display_batch_code_meanings_enhanced(results):
-    """Enhanced batch processed code meanings in organized tabular format with proper subdivisions and PROVIDER FIELDS"""
+    """Enhanced batch processed code meanings with debugging for provider fields"""
     st.markdown("""
     <div class="batch-meanings-card">
         <h3>Claims Data Analysis</h3>
@@ -788,6 +788,20 @@ def display_batch_code_meanings_enhanced(results):
     # Get extraction results
     medical_extraction = safe_get(results, 'structured_extractions', {}).get('medical', {})
     pharmacy_extraction = safe_get(results, 'structured_extractions', {}).get('pharmacy', {})
+    
+    # DEBUG: Show available fields in pharmacy records
+    pharmacy_records = pharmacy_extraction.get("ndc_records", [])
+    if pharmacy_records:
+        st.write("**DEBUG: Sample pharmacy record fields:**")
+        sample_record = pharmacy_records[0] if pharmacy_records else {}
+        st.write(list(sample_record.keys()))
+        
+        # DEBUG: Show actual values for provider fields
+        st.write("**DEBUG: Provider field values in first few records:**")
+        for i, record in enumerate(pharmacy_records[:3]):
+            st.write(f"Record {i+1}:")
+            st.write(f"  - billg_prov_nm: '{record.get('billg_prov_nm', 'NOT FOUND')}'")
+            st.write(f"  - prscrbg_prov_nm: '{record.get('prscrbg_prov_nm', 'NOT FOUND')}'")
     
     # Create main tabs for Medical and Pharmacy
     tab1, tab2 = st.tabs(["Medical Code Meanings", "Pharmacy Code Meanings"])
@@ -801,12 +815,13 @@ def display_batch_code_meanings_enhanced(results):
         diagnosis_meanings = medical_meanings.get("diagnosis_code_meanings", {})
         medical_records = medical_extraction.get("hlth_srvc_records", [])
         
-        # FIXED METRICS CALCULATION - Count unique codes from actual data
+        # FIXED METRICS CALCULATION - Count unique codes and billing providers from actual data
         unique_service_codes = set()
         unique_diagnosis_codes = set()
+        unique_billing_providers = set()  # NEW: Count unique billing providers
         total_medical_records = len(medical_records)
         
-        # Count unique codes from medical records
+        # Count unique codes and providers from medical records
         for record in medical_records:
             # Count service codes
             service_code = record.get("hlth_srvc_cd", "")
@@ -818,8 +833,13 @@ def display_batch_code_meanings_enhanced(results):
                 code = diag.get("code", "")
                 if code:
                     unique_diagnosis_codes.add(code)
+            
+            # NEW: Count billing providers
+            billing_provider = record.get("billg_prov_nm", "")
+            if billing_provider and billing_provider != "Not Available":
+                unique_billing_providers.add(billing_provider)
         
-        # Medical summary metrics with CORRECTED VALUES and PROPER STYLING
+        # Medical summary metrics with UPDATED FOURTH METRIC (Billing Providers instead of Batch Status)
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.markdown(f'''
@@ -843,12 +863,11 @@ def display_batch_code_meanings_enhanced(results):
             </div>
             ''', unsafe_allow_html=True)
         with col4:
-            batch_status = medical_extraction.get("llm_call_status", "unknown")
-            status_color = "#28a745" if batch_status in ["success", "completed"] else "#ffc107" if batch_status == "pending" else "#dc3545"
+            # CHANGED: Show unique billing providers instead of batch status
             st.markdown(f'''
             <div class="metric-summary-box">
-                <h3 style="margin: 0; color: {status_color}; font-size: 1.5rem; font-weight: bold;">{batch_status.upper()}</h3>
-                <p style="margin: 0; color: #6c757d; font-weight: 600;">Batch Status</p>
+                <h3 style="margin: 0; color: #6f42c1; font-size: 2rem; font-weight: bold;">{len(unique_billing_providers)}</h3>
+                <p style="margin: 0; color: #6c757d; font-weight: 600;">Billing Providers</p>
             </div>
             ''', unsafe_allow_html=True)
         
@@ -865,7 +884,7 @@ def display_batch_code_meanings_enhanced(results):
                 for record in medical_records:
                     claim_date = record.get("clm_rcvd_dt", "Unknown")
                     record_path = record.get("data_path", "")
-                    # NEW: Get provider information
+                    # Get provider information
                     billing_provider = record.get("billg_prov_nm", "Not Available")
                     billing_zip = record.get("billg_prov_zip_cd", "Not Available")
                     
@@ -1008,16 +1027,16 @@ def display_batch_code_meanings_enhanced(results):
         pharmacy_meanings = pharmacy_extraction.get("code_meanings", {})
         ndc_meanings = pharmacy_meanings.get("ndc_code_meanings", {})
         med_meanings = pharmacy_meanings.get("medication_meanings", {})
-        pharmacy_records = pharmacy_extraction.get("ndc_records", [])
         
-        # FIXED METRICS CALCULATION - Count unique codes from actual pharmacy data
+        # Count unique codes from actual pharmacy data WITH DEBUGGING
         unique_ndc_codes = set()
         unique_medications = set()
-        unique_prescribing_providers = set()  # NEW: Count unique prescribing providers
+        unique_prescribing_providers = set()
+        unique_billing_providers_pharmacy = set()
         total_pharmacy_records = len(pharmacy_records)
         
-        # Count unique codes from pharmacy records
-        for record in pharmacy_records:
+        # Count unique codes from pharmacy records WITH DEBUGGING
+        for i, record in enumerate(pharmacy_records):
             # Count NDC codes
             ndc_code = record.get("ndc", "")
             if ndc_code:
@@ -1028,12 +1047,24 @@ def display_batch_code_meanings_enhanced(results):
             if med_name:
                 unique_medications.add(med_name)
             
-            # NEW: Count prescribing providers
-            prescribing_provider = record.get("prscrb_prov_nm", "")
-            if prescribing_provider and prescribing_provider != "Not Available":
+            # Count prescribing providers WITH DEBUGGING
+            prescribing_provider = record.get("prscrbg_prov_nm", "")
+            if prescribing_provider and prescribing_provider.strip() != "" and prescribing_provider != "Not Available":
                 unique_prescribing_providers.add(prescribing_provider)
+                if i < 3:  # Debug first 3 records
+                    st.write(f"DEBUG: Added prescribing provider: '{prescribing_provider}'")
+            
+            # Count billing providers
+            billing_provider = record.get("billg_prov_nm", "")
+            if billing_provider and billing_provider.strip() != "" and billing_provider != "Not Available":
+                unique_billing_providers_pharmacy.add(billing_provider)
         
-        # Pharmacy summary metrics with CORRECTED VALUES and UPDATED FOURTH METRIC
+        # DEBUG: Show what we found
+        st.write(f"**DEBUG: Found {len(unique_prescribing_providers)} unique prescribing providers:**")
+        for provider in list(unique_prescribing_providers)[:5]:
+            st.write(f"  - '{provider}'")
+        
+        # Pharmacy summary metrics 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.markdown(f'''
@@ -1057,7 +1088,7 @@ def display_batch_code_meanings_enhanced(results):
             </div>
             ''', unsafe_allow_html=True)
         with col4:
-            # CHANGED: Show unique prescribing providers instead of batch status
+            # Show unique prescribing providers with debugging info
             st.markdown(f'''
             <div class="metric-summary-box">
                 <h3 style="margin: 0; color: #17a2b8; font-size: 2rem; font-weight: bold;">{len(unique_prescribing_providers)}</h3>
@@ -1081,8 +1112,8 @@ def display_batch_code_meanings_enhanced(results):
                     label_name = record.get("lbl_nm", "")
                     record_path = record.get("data_path", "")
                     
-                    if ndc_code:  # Just check if NDC code exists
-                        ndc_meaning = ndc_meanings.get(ndc_code, f"NDC code {ndc_code}")  # Use fallback if no meaning
+                    if ndc_code:
+                        ndc_meaning = ndc_meanings.get(ndc_code, f"NDC code {ndc_code}")
                         ndc_data.append({
                             "NDC Code": ndc_code,
                             "NDC Meaning": ndc_meaning,
@@ -1092,14 +1123,10 @@ def display_batch_code_meanings_enhanced(results):
                         })
                 
                 if ndc_data:
-                    # Display unique code count
                     unique_codes = len(set(item["NDC Code"] for item in ndc_data))
                     st.info(f"**Unique NDC Codes Found:** {unique_codes}")
                     
-                    # Create DataFrame and display as enhanced table
                     df_ndc = pd.DataFrame(ndc_data)
-                    
-                    # Sort by fill date (most recent first)
                     df_ndc_sorted = df_ndc.sort_values('Fill Date', ascending=False, na_position='last')
                     
                     st.dataframe(
@@ -1117,7 +1144,6 @@ def display_batch_code_meanings_enhanced(results):
                     
                     st.info("NDC codes data processed successfully")
                     
-                    # Show code frequency analysis
                     with st.expander("NDC Code Frequency Analysis"):
                         code_counts = df_ndc['NDC Code'].value_counts()
                         st.bar_chart(code_counts)
@@ -1143,12 +1169,18 @@ def display_batch_code_meanings_enhanced(results):
                     med_name = record.get("lbl_nm", "")
                     ndc_code = record.get("ndc", "")
                     record_path = record.get("data_path", "")
-                    # NEW: Get provider information
+                    # Get provider information with more thorough checking
                     billing_provider = record.get("billg_prov_nm", "Not Available")
-                    prescribing_provider = record.get("prscrb_prov_nm", "Not Available")
+                    prescribing_provider = record.get("prscrbg_prov_nm", "Not Available")
                     
-                    if med_name:  # Just check if medication name exists
-                        med_meaning = med_meanings.get(med_name, f"Medication: {med_name}")  # Use fallback if no meaning
+                    # Clean up provider data
+                    if billing_provider and billing_provider.strip() == "":
+                        billing_provider = "Not Available"
+                    if prescribing_provider and prescribing_provider.strip() == "":
+                        prescribing_provider = "Not Available"
+                    
+                    if med_name:
+                        med_meaning = med_meanings.get(med_name, f"Medication: {med_name}")
                         medication_data.append({
                             "Medication Name": med_name,
                             "Medication Meaning": med_meaning,
@@ -1160,14 +1192,10 @@ def display_batch_code_meanings_enhanced(results):
                         })
                 
                 if medication_data:
-                    # Display unique medication count
                     unique_meds = len(set(item["Medication Name"] for item in medication_data))
                     st.info(f"**Unique Medications Found:** {unique_meds}")
                     
-                    # Create DataFrame and display as enhanced table
                     df_medication = pd.DataFrame(medication_data)
-                    
-                    # Sort by fill date (most recent first)
                     df_medication_sorted = df_medication.sort_values('Fill Date', ascending=False, na_position='last')
                     
                     st.dataframe(
@@ -1187,7 +1215,6 @@ def display_batch_code_meanings_enhanced(results):
                     
                     st.info("Medication data with provider information processed successfully")
                     
-                    # Show medication frequency analysis
                     with st.expander("Medication Frequency Analysis"):
                         med_counts = df_medication['Medication Name'].value_counts()
                         st.bar_chart(med_counts)
@@ -1196,7 +1223,6 @@ def display_batch_code_meanings_enhanced(results):
                             meaning = med_meanings.get(med, f"Medication: {med}")
                             st.write(f"• **{med}** ({count}x): {meaning}")
                     
-                    # NEW: Show provider analysis
                     with st.expander("Provider Analysis"):
                         billing_provider_counts = df_medication['Billing Provider'].value_counts()
                         st.write("**Most Frequent Billing Providers:**")
