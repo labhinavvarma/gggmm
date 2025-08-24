@@ -28,7 +28,6 @@ try:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 except (ImportError, AttributeError):
-    # If urllib3.exceptions is not available, use warnings filter
     warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 # === Configuration ===
@@ -45,42 +44,53 @@ class FileProcessor:
     def process_excel(file) -> Dict[str, Any]:
         """Process Excel files and return structured data"""
         try:
-            # Read all sheets
             excel_data = pd.read_excel(file, sheet_name=None)
             
             result = {
                 "type": "excel",
+                "filename": file.name,
                 "sheets": {},
                 "summary": "",
                 "raw_data": {}
             }
             
             for sheet_name, df in excel_data.items():
-                # Basic info about the sheet
+                # Clean column names
+                df.columns = df.columns.astype(str).str.strip()
+                
                 sheet_info = {
                     "rows": len(df),
                     "columns": len(df.columns),
                     "column_names": df.columns.tolist(),
-                    "sample_data": df.head(5).to_dict('records'),
-                    "data_types": df.dtypes.to_dict()
+                    "sample_data": df.head(3).fillna('').to_dict('records'),
+                    "data_types": df.dtypes.to_dict(),
+                    "summary_stats": {}
                 }
                 
-                # Convert data types to strings for JSON serialization
+                # Add summary statistics for numeric columns
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                for col in numeric_cols:
+                    sheet_info["summary_stats"][col] = {
+                        "mean": float(df[col].mean()),
+                        "median": float(df[col].median()),
+                        "min": float(df[col].min()),
+                        "max": float(df[col].max()),
+                        "count": int(df[col].count())
+                    }
+                
                 sheet_info["data_types"] = {k: str(v) for k, v in sheet_info["data_types"].items()}
-                
                 result["sheets"][sheet_name] = sheet_info
-                result["raw_data"][sheet_name] = df.to_dict('records')
+                result["raw_data"][sheet_name] = df.fillna('').to_dict('records')
                 
-            # Create summary
             total_rows = sum(info["rows"] for info in result["sheets"].values())
             total_sheets = len(result["sheets"])
-            result["summary"] = f"Excel file with {total_sheets} sheet(s) containing {total_rows} total rows."
+            result["summary"] = f"Excel file '{file.name}' with {total_sheets} sheet(s) and {total_rows} total rows"
             
             return result
             
         except Exception as e:
-            st.error(f"Error processing Excel file: {str(e)}")
-            return {"type": "excel", "error": str(e)}
+            st.error(f"Error processing Excel file {file.name}: {str(e)}")
+            return {"type": "excel", "filename": file.name, "error": str(e)}
     
     @staticmethod
     def process_word(file) -> Dict[str, Any]:
@@ -88,7 +98,8 @@ class FileProcessor:
         if not DOCX_AVAILABLE:
             return {
                 "type": "word", 
-                "error": "python-docx library not available. Please install with: pip install python-docx>=1.0.1"
+                "filename": file.name,
+                "error": "python-docx library not available"
             }
             
         try:
@@ -97,18 +108,14 @@ class FileProcessor:
             paragraphs = []
             tables_data = []
             
-            # Extract paragraphs
             for para in doc.paragraphs:
                 if para.text.strip():
                     paragraphs.append(para.text.strip())
             
-            # Extract tables
             for table in doc.tables:
                 table_data = []
                 for row in table.rows:
-                    row_data = []
-                    for cell in row.cells:
-                        row_data.append(cell.text.strip())
+                    row_data = [cell.text.strip() for cell in row.cells]
                     table_data.append(row_data)
                 tables_data.append(table_data)
             
@@ -116,16 +123,17 @@ class FileProcessor:
             
             return {
                 "type": "word",
+                "filename": file.name,
                 "paragraphs": paragraphs,
                 "tables": tables_data,
                 "full_text": full_text,
-                "summary": f"Word document with {len(paragraphs)} paragraphs and {len(tables_data)} tables.",
+                "summary": f"Word document '{file.name}' with {len(paragraphs)} paragraphs, {len(tables_data)} tables, and {len(full_text.split())} words",
                 "word_count": len(full_text.split())
             }
             
         except Exception as e:
-            st.error(f"Error processing Word file: {str(e)}")
-            return {"type": "word", "error": str(e)}
+            st.error(f"Error processing Word file {file.name}: {str(e)}")
+            return {"type": "word", "filename": file.name, "error": str(e)}
     
     @staticmethod
     def process_pdf(file) -> Dict[str, Any]:
@@ -133,12 +141,12 @@ class FileProcessor:
         if not PDF_AVAILABLE:
             return {
                 "type": "pdf", 
-                "error": "PyPDF2 library not available. Please install with: pip install PyPDF2>=3.0.0"
+                "filename": file.name,
+                "error": "PyPDF2 library not available"
             }
             
         try:
             pdf_reader = PyPDF2.PdfReader(file)
-            
             pages_text = []
             full_text = ""
             
@@ -158,18 +166,20 @@ class FileProcessor:
             
             return {
                 "type": "pdf",
+                "filename": file.name,
                 "pages": pages_text,
                 "full_text": full_text.strip(),
-                "summary": f"PDF document with {len(pdf_reader.pages)} pages.",
-                "page_count": len(pdf_reader.pages)
+                "summary": f"PDF document '{file.name}' with {len(pdf_reader.pages)} pages and {len(full_text.split())} words",
+                "page_count": len(pdf_reader.pages),
+                "word_count": len(full_text.split())
             }
             
         except Exception as e:
-            st.error(f"Error processing PDF file: {str(e)}")
-            return {"type": "pdf", "error": str(e)}
+            st.error(f"Error processing PDF file {file.name}: {str(e)}")
+            return {"type": "pdf", "filename": file.name, "error": str(e)}
 
 class SFAssistAPI:
-    """Handle communication with SF Assist API"""
+    """Enhanced API client with better conversation handling"""
     
     def __init__(self):
         self.api_url = API_URL
@@ -178,82 +188,96 @@ class SFAssistAPI:
         self.aplctn_cd = APLCTN_CD
         self.model = MODEL
     
-    def create_system_message(self, file_data: Dict[str, Any]) -> str:
-        """Create system message with file context"""
-        base_msg = """You are an expert data analyst AI assistant. You have access to the user's uploaded file(s) and should provide accurate, insightful analysis based on the data provided.
+    def create_enhanced_system_message(self, files_data: List[Dict[str, Any]]) -> str:
+        """Create comprehensive system message with multiple file contexts"""
+        base_msg = """You are an expert AI Data Analyst Assistant. You have been provided with the user's uploaded files and should act as their personal data analyst, providing comprehensive, accurate, and actionable insights.
 
-IMPORTANT GUIDELINES:
-1. Always reference the specific data from the uploaded file when answering questions
-2. Provide detailed analysis including statistics, trends, and insights when applicable
-3. If asked about data not present in the file, clearly state that information is not available
-4. For Excel files, you can reference specific sheets, columns, and data points
-5. For text documents (Word/PDF), reference specific sections or content
-6. Provide actionable insights and recommendations when appropriate
-7. Use clear, professional language suitable for business analysis
+CORE RESPONSIBILITIES:
+• Analyze data comprehensively across all uploaded files
+• Provide detailed statistical analysis, trends, and patterns
+• Generate actionable business insights and recommendations  
+• Answer questions accurately based on the available data
+• Explain complex findings in clear, understandable terms
+• Compare and contrast data across different files when relevant
+
+ANALYSIS APPROACH:
+• Always reference specific data points, metrics, and findings from the files
+• Use statistical methods and business intelligence principles
+• Identify correlations, trends, outliers, and anomalies
+• Provide context and explain the significance of findings
+• Suggest next steps or further analysis when appropriate
+• Be transparent about data limitations or missing information
+
+COMMUNICATION STYLE:
+• Professional yet conversational tone
+• Use bullet points and structured formatting for clarity
+• Include specific numbers, percentages, and data points
+• Explain technical concepts in business-friendly language
+• Provide both high-level summaries and detailed breakdowns when requested
 
 """
         
-        if file_data.get("type") == "excel":
-            context = f"""
-UPLOADED EXCEL FILE CONTEXT:
-{file_data.get('summary', '')}
-
-SHEETS AND STRUCTURE:
-"""
-            for sheet_name, sheet_info in file_data.get("sheets", {}).items():
-                context += f"""
-Sheet: {sheet_name}
-- Rows: {sheet_info['rows']}
-- Columns: {sheet_info['columns']} ({', '.join(sheet_info['column_names'])})
-- Sample data preview: {json.dumps(sheet_info['sample_data'][:3], indent=2)}
-"""
+        if not files_data:
+            return base_msg + "\nNo files have been uploaded yet. Please ask the user to upload files to begin analysis."
         
-        elif file_data.get("type") == "word":
-            context = f"""
-UPLOADED WORD DOCUMENT CONTEXT:
-{file_data.get('summary', '')}
-Word count: {file_data.get('word_count', 0)}
-
-CONTENT PREVIEW:
-{file_data.get('full_text', '')[:1500]}...
-"""
+        context = f"\n=== UPLOADED FILES CONTEXT ===\nYou have access to {len(files_data)} file(s):\n\n"
         
-        elif file_data.get("type") == "pdf":
-            context = f"""
-UPLOADED PDF DOCUMENT CONTEXT:
-{file_data.get('summary', '')}
-
-CONTENT PREVIEW:
-{file_data.get('full_text', '')[:1500]}...
-"""
-        
-        else:
-            context = "No file context available."
+        for i, file_data in enumerate(files_data, 1):
+            if "error" in file_data:
+                continue
+                
+            context += f"FILE {i}: {file_data.get('filename', 'Unknown')}\n"
+            context += f"Type: {file_data.get('type', 'Unknown').upper()}\n"
+            context += f"Summary: {file_data.get('summary', 'N/A')}\n"
+            
+            if file_data.get('type') == 'excel':
+                context += "EXCEL STRUCTURE:\n"
+                for sheet_name, sheet_info in file_data.get("sheets", {}).items():
+                    context += f"  Sheet '{sheet_name}': {sheet_info['rows']} rows × {sheet_info['columns']} columns\n"
+                    context += f"  Columns: {', '.join(sheet_info['column_names'][:10])}{'...' if len(sheet_info['column_names']) > 10 else ''}\n"
+                    
+                    if sheet_info.get('summary_stats'):
+                        context += f"  Numeric columns with stats: {', '.join(sheet_info['summary_stats'].keys())}\n"
+                    
+                    # Include sample data
+                    if sheet_info.get('sample_data'):
+                        context += f"  Sample data (first 2 rows): {json.dumps(sheet_info['sample_data'][:2], indent=2)}\n"
+                        
+            elif file_data.get('type') in ['word', 'pdf']:
+                word_count = file_data.get('word_count', 0)
+                context += f"Content length: {word_count} words\n"
+                if file_data.get('type') == 'word' and file_data.get('tables'):
+                    context += f"Contains {len(file_data['tables'])} table(s)\n"
+                    
+                # Include text preview
+                full_text = file_data.get('full_text', '')
+                if full_text:
+                    preview = full_text[:1200] + "..." if len(full_text) > 1200 else full_text
+                    context += f"Content preview:\n{preview}\n"
+            
+            context += "\n" + "-"*50 + "\n"
         
         return base_msg + context
     
-    def send_message(self, user_message: str, file_context: Optional[Dict[str, Any]] = None, 
+    def send_message(self, user_message: str, files_context: List[Dict[str, Any]] = None, 
                     conversation_history: List[Dict[str, str]] = None) -> Optional[str]:
-        """Send message to SF Assist API with file context"""
+        """Send message with enhanced context handling"""
         try:
             session_id = str(uuid.uuid4())
             
-            # Create system message with file context
-            if file_context:
-                sys_msg = self.create_system_message(file_context)
-            else:
-                sys_msg = "You are a helpful AI assistant. Provide accurate, concise answers."
+            # Create enhanced system message
+            sys_msg = self.create_enhanced_system_message(files_context or [])
             
-            # Build message history
+            # Build conversation with better context management
             messages = []
             
-            # Add conversation history if available
+            # Add recent conversation history (last 8 messages for better context)
             if conversation_history:
-                messages.extend(conversation_history)
+                messages.extend(conversation_history[-8:])
             
             # Add current user message
             messages.append({
-                "role": "user",
+                "role": "user", 
                 "content": user_message
             })
             
@@ -266,9 +290,7 @@ CONTENT PREVIEW:
                     "model": self.model,
                     "sys_msg": sys_msg,
                     "limit_convs": "0",
-                    "prompt": {
-                        "messages": messages
-                    },
+                    "prompt": {"messages": messages},
                     "app_lvl_prefix": "",
                     "user_id": "",
                     "session_id": session_id
@@ -281,18 +303,14 @@ CONTENT PREVIEW:
                 "Authorization": f'Snowflake Token="{self.api_key}"'
             }
             
-            response = requests.post(self.api_url, headers=headers, json=payload, verify=False)
+            response = requests.post(self.api_url, headers=headers, json=payload, verify=False, timeout=60)
             
             if response.status_code == 200:
                 raw = response.text
-                
                 if "end_of_stream" in raw:
                     answer, _, _ = raw.partition("end_of_stream")
-                    bot_reply = answer.strip()
-                else:
-                    bot_reply = raw.strip()
-                
-                return bot_reply
+                    return answer.strip()
+                return raw.strip()
             else:
                 st.error(f"API Error {response.status_code}: {response.text}")
                 return None
@@ -301,190 +319,336 @@ CONTENT PREVIEW:
             st.error(f"Request failed: {str(e)}")
             return None
 
+def create_quick_questions():
+    """Define quick questions for different file types"""
+    return {
+        "📊 Data Analysis": {
+            "What are the key insights from my data?": "Analyze the uploaded files and provide the top 5 key insights with supporting data points and business implications.",
+            "Show me summary statistics": "Provide comprehensive summary statistics for all numeric columns including mean, median, min, max, and distribution insights.",
+            "What trends do you see?": "Identify and explain the main trends, patterns, and correlations in the data with specific examples and metrics.",
+            "Are there any outliers or anomalies?": "Find and analyze any outliers, anomalies, or unusual patterns in the data and explain their potential significance."
+        },
+        "💼 Business Intelligence": {
+            "What's the overall performance?": "Provide an executive summary of overall performance metrics with key KPIs and business insights.",
+            "Compare different segments": "Compare and contrast different segments, categories, or groups in the data and highlight significant differences.",
+            "What recommendations do you have?": "Based on the data analysis, provide specific actionable recommendations for business improvement.",
+            "Identify top and bottom performers": "Identify the best and worst performing elements in the data with detailed analysis of contributing factors."
+        },
+        "📈 Financial Analysis": {
+            "Analyze revenue trends": "Perform detailed revenue analysis including growth rates, seasonality, and forecasting insights.",
+            "What about profitability?": "Analyze profitability metrics, margins, and identify factors affecting financial performance.",
+            "Show cost breakdown": "Provide comprehensive cost analysis with categorization and identification of cost-saving opportunities.",
+            "Calculate key financial ratios": "Calculate and interpret important financial ratios and metrics from the available data."
+        },
+        "📋 Document Analysis": {
+            "Summarize the main points": "Provide a comprehensive summary of the main points, findings, and conclusions from the document.",
+            "Extract key data and metrics": "Extract all numerical data, statistics, and key metrics mentioned in the document.",
+            "What are the recommendations?": "Identify and summarize all recommendations, action items, and next steps mentioned in the document.",
+            "Find important dates and deadlines": "Extract all important dates, deadlines, milestones, and time-sensitive information from the document."
+        }
+    }
+
+def render_chat_message(role: str, content: str, timestamp: str):
+    """Render individual chat messages with ChatGPT-like styling"""
+    if role == "user":
+        st.markdown(f"""
+        <div style="display: flex; justify-content: flex-end; margin: 10px 0;">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        color: white; padding: 12px 18px; border-radius: 18px; 
+                        max-width: 80%; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        font-size: 14px; line-height: 1.4;">
+                {content}
+                <div style="font-size: 11px; opacity: 0.8; margin-top: 4px; text-align: right;">
+                    {timestamp}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style="display: flex; justify-content: flex-start; margin: 15px 0;">
+            <div style="background: #f8f9fa; color: #333; padding: 15px 20px; 
+                        border-radius: 18px; max-width: 85%; 
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+                        border-left: 4px solid #4f46e5;
+                        font-size: 14px; line-height: 1.5;">
+                {content.replace('**', '<strong>').replace('**', '</strong>').replace('*', '<em>').replace('*', '</em>')}
+                <div style="font-size: 11px; color: #6b7280; margin-top: 8px;">
+                    🤖 AI Assistant • {timestamp}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
 def main():
-    """Main Streamlit application"""
+    """Enhanced main application with ChatGPT-like interface"""
     
     # Page configuration
     st.set_page_config(
-        page_title="GenAI Data Analyst",
-        page_icon="📊",
-        layout="wide"
+        page_title="AI Data Analyst",
+        page_icon="🤖",
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
     
-    # Title and description
-    st.title("📊 GenAI Data Analyst")
-    st.markdown("Upload your files (Excel, Word, PDF) and ask questions to get AI-powered analysis and insights!")
+    # Custom CSS for ChatGPT-like appearance
+    st.markdown("""
+    <style>
+    .main > div {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    .stChatInput > div {
+        background: white;
+    }
+    .chat-container {
+        height: 60vh;
+        overflow-y: auto;
+        padding: 20px 0;
+        background: #fafafa;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+    .file-upload-container {
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+    .quick-questions {
+        background: white;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        margin: 10px 0;
+    }
+    .stExpander {
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        margin: 5px 0;
+    }
+    .question-btn {
+        width: 100%;
+        text-align: left;
+        padding: 8px 12px;
+        margin: 2px 0;
+        background: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+    }
+    .question-btn:hover {
+        background: #e9ecef;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
     # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "file_data" not in st.session_state:
-        st.session_state.file_data = None
-    if "uploaded_file_name" not in st.session_state:
-        st.session_state.uploaded_file_name = None
+    if "files_data" not in st.session_state:
+        st.session_state.files_data = []
+    if "uploaded_files_names" not in st.session_state:
+        st.session_state.uploaded_files_names = []
     
     # Initialize API client
     api_client = SFAssistAPI()
     
-    # Sidebar for file upload
+    # Header
+    st.markdown("""
+    <div style="text-align: center; padding: 20px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                color: white; border-radius: 10px; margin-bottom: 20px;">
+        <h1 style="margin: 0; font-size: 2.5em;">🤖 AI Data Analyst</h1>
+        <p style="margin: 10px 0 0 0; font-size: 1.1em; opacity: 0.9;">
+            Upload multiple files and chat with your data using AI
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Sidebar for file upload and quick questions
     with st.sidebar:
-        st.header("📁 File Upload")
+        st.markdown('<div class="file-upload-container">', unsafe_allow_html=True)
+        st.header("📁 Upload Files")
         
-        # Determine supported file types based on available libraries
-        supported_types = ['xlsx', 'xls']  # Always support Excel
+        # Determine supported file types
+        supported_types = ['xlsx', 'xls']
         type_descriptions = ["Excel (.xlsx, .xls)"]
         
         if DOCX_AVAILABLE:
-            supported_types.append('docx')
+            supported_types.extend(['docx'])
             type_descriptions.append("Word (.docx)")
         
         if PDF_AVAILABLE:
-            supported_types.append('pdf')
+            supported_types.extend(['pdf'])
             type_descriptions.append("PDF (.pdf)")
         
-        help_text = f"Supported formats: {', '.join(type_descriptions)}"
+        help_text = f"Supported: {', '.join(type_descriptions)}"
         
-        uploaded_file = st.file_uploader(
-            "Upload your file",
+        # Multiple file uploader
+        uploaded_files = st.file_uploader(
+            "Choose files (multiple files supported)",
             type=supported_types,
-            help=help_text
+            help=help_text,
+            accept_multiple_files=True
         )
         
-        if not DOCX_AVAILABLE:
-            st.warning("⚠️ Word document support disabled. Install python-docx>=1.0.1 to enable.")
-        if not PDF_AVAILABLE:
-            st.warning("⚠️ PDF support disabled. Install PyPDF2>=3.0.0 to enable.")
-        
-        if uploaded_file is not None:
-            # Process file if it's new or different
-            if st.session_state.uploaded_file_name != uploaded_file.name:
-                with st.spinner("Processing file..."):
-                    st.session_state.uploaded_file_name = uploaded_file.name
-                    
-                    # Reset chat history when new file is uploaded
-                    st.session_state.messages = []
-                    
-                    # Process based on file type
-                    file_extension = uploaded_file.name.split('.')[-1].lower()
-                    
-                    if file_extension in ['xlsx', 'xls']:
-                        st.session_state.file_data = FileProcessor.process_excel(uploaded_file)
-                    elif file_extension == 'docx':
-                        st.session_state.file_data = FileProcessor.process_word(uploaded_file)
-                    elif file_extension == 'pdf':
-                        st.session_state.file_data = FileProcessor.process_pdf(uploaded_file)
-                    
-                    if st.session_state.file_data and "error" not in st.session_state.file_data:
-                        st.success(f"✅ {uploaded_file.name} processed successfully!")
-                    else:
-                        st.error("❌ Error processing file")
+        # Process uploaded files
+        if uploaded_files:
+            current_file_names = [f.name for f in uploaded_files]
             
-            # Display file information
-            if st.session_state.file_data and "error" not in st.session_state.file_data:
-                st.info(f"**Current File:** {uploaded_file.name}")
-                st.write(f"**Type:** {st.session_state.file_data.get('type', 'Unknown').upper()}")
-                st.write(f"**Summary:** {st.session_state.file_data.get('summary', 'N/A')}")
+            # Check if we have new files
+            if current_file_names != st.session_state.uploaded_files_names:
+                st.session_state.uploaded_files_names = current_file_names
+                st.session_state.files_data = []
                 
-                # Show additional info based on file type
-                if st.session_state.file_data.get('type') == 'excel':
-                    st.write(f"**Sheets:** {', '.join(st.session_state.file_data.get('sheets', {}).keys())}")
-                elif st.session_state.file_data.get('type') == 'word':
-                    st.write(f"**Word Count:** {st.session_state.file_data.get('word_count', 0)}")
-                elif st.session_state.file_data.get('type') == 'pdf':
-                    st.write(f"**Pages:** {st.session_state.file_data.get('page_count', 0)}")
+                # Process each file
+                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
+                    for uploaded_file in uploaded_files:
+                        file_extension = uploaded_file.name.split('.')[-1].lower()
+                        
+                        if file_extension in ['xlsx', 'xls']:
+                            file_data = FileProcessor.process_excel(uploaded_file)
+                        elif file_extension == 'docx':
+                            file_data = FileProcessor.process_word(uploaded_file)
+                        elif file_extension == 'pdf':
+                            file_data = FileProcessor.process_pdf(uploaded_file)
+                        else:
+                            continue
+                            
+                        if file_data and "error" not in file_data:
+                            st.session_state.files_data.append(file_data)
+                
+                if st.session_state.files_data:
+                    st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
+        
+        # Display uploaded files info
+        if st.session_state.files_data:
+            st.markdown("### 📋 Uploaded Files")
+            for file_data in st.session_state.files_data:
+                if "error" not in file_data:
+                    st.markdown(f"""
+                    <div style="background: #e8f5e8; padding: 10px; border-radius: 5px; margin: 5px 0; font-size: 12px;">
+                        <strong>{file_data.get('filename', 'Unknown')}</strong><br>
+                        <em>{file_data.get('type', 'Unknown').upper()}</em><br>
+                        {file_data.get('summary', 'No summary')}
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Library status
+        if not DOCX_AVAILABLE or not PDF_AVAILABLE:
+            st.markdown("### ⚠️ Library Status")
+            if not DOCX_AVAILABLE:
+                st.warning("Word support disabled")
+            if not PDF_AVAILABLE:
+                st.warning("PDF support disabled")
     
-    # Main chat interface
+    # Main chat area
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.header("💬 Chat with your Data")
+        # Chat messages container
+        chat_container = st.container()
         
-        # Chat input
-        if st.session_state.file_data and "error" not in st.session_state.file_data:
-            with st.form("chat_form", clear_on_submit=True):
-                user_query = st.text_area(
-                    "Ask a question about your data:",
-                    height=100,
-                    placeholder="e.g., 'What are the key trends in this data?' or 'Summarize the main findings from the document'"
-                )
-                col_a, col_b = st.columns([1, 4])
-                with col_a:
-                    submitted = st.form_submit_button("Send 🚀", use_container_width=True)
-                with col_b:
-                    clear_chat = st.form_submit_button("Clear Chat 🗑️", use_container_width=True)
-                
-                if clear_chat:
-                    st.session_state.messages = []
-                    st.rerun()
+        with chat_container:
+            if st.session_state.messages:
+                st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+                for role, message, timestamp in st.session_state.messages:
+                    render_chat_message(role, message, timestamp)
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="text-align: center; padding: 40px; color: #6b7280; background: #fafafa; border-radius: 10px; margin: 20px 0;">
+                    <h3>👋 Welcome to AI Data Analyst!</h3>
+                    <p>Upload your files and start asking questions about your data.</p>
+                    <p>Use the quick questions on the right to get started, or type your own question below.</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Chat input at bottom (ChatGPT style)
+        st.markdown("### 💬 Ask about your data")
+        
+        col_input, col_send, col_clear = st.columns([4, 1, 1])
+        
+        with col_input:
+            user_input = st.text_input(
+                "Type your question here...",
+                placeholder="e.g., What are the key insights from my data?",
+                label_visibility="collapsed"
+            )
+        
+        with col_send:
+            send_clicked = st.button("Send 🚀", use_container_width=True)
+        
+        with col_clear:
+            clear_clicked = st.button("Clear 🗑️", use_container_width=True)
+        
+        if clear_clicked:
+            st.session_state.messages = []
+            st.rerun()
+        
+        # Process input
+        if (send_clicked and user_input.strip()) or (user_input and len(user_input) > 0 and st.session_state.get('auto_send', False)):
+            if st.session_state.get('auto_send', False):
+                st.session_state['auto_send'] = False
             
-            # Process message
-            if submitted and user_query.strip():
-                with st.spinner("Analyzing your question..."):
-                    # Get conversation history for context
+            if not st.session_state.files_data:
+                st.warning("Please upload files first to start analysis!")
+            else:
+                with st.spinner("🤔 Analyzing your question..."):
+                    # Get conversation history
                     conversation_history = []
-                    for role, message, timestamp in st.session_state.messages[-6:]:  # Last 3 exchanges
-                        conversation_history.append({
-                            "role": role,
-                            "content": message
-                        })
+                    for role, message, _ in st.session_state.messages[-6:]:
+                        conversation_history.append({"role": role, "content": message})
                     
                     # Send to API
                     response = api_client.send_message(
-                        user_query, 
-                        st.session_state.file_data,
+                        user_input, 
+                        st.session_state.files_data,
                         conversation_history
                     )
                     
                     if response:
-                        # Add to conversation history
                         timestamp = datetime.now().strftime("%H:%M")
-                        st.session_state.messages.append(("user", user_query, timestamp))
+                        st.session_state.messages.append(("user", user_input, timestamp))
                         st.session_state.messages.append(("assistant", response, timestamp))
-        else:
-            st.info("👆 Please upload a file in the sidebar to start chatting with your data!")
+                        st.rerun()
     
     with col2:
-        st.header("🎯 Quick Tips")
-        st.markdown("""
-        **Excel Files:**
-        - "Show me the column names"
-        - "What's the average of [column]?"
-        - "Find trends in the data"
-        - "Create a summary report"
+        st.markdown('<div class="quick-questions">', unsafe_allow_html=True)
+        st.markdown("### 🎯 Quick Questions")
         
-        **Documents:**
-        - "Summarize this document"
-        - "What are the key points?"
-        - "Extract important data"
-        - "Find specific information about [topic]"
+        quick_questions = create_quick_questions()
         
-        **General:**
-        - "Analyze the data quality"
-        - "What insights can you provide?"
-        - "Create recommendations"
-        """)
-    
-    # Display chat history
-    if st.session_state.messages:
-        st.divider()
-        st.header("💭 Conversation History")
+        for category, questions in quick_questions.items():
+            with st.expander(category):
+                for question, detailed_prompt in questions.items():
+                    if st.button(question, key=f"q_{hash(question)}", help="Click to ask this question"):
+                        if not st.session_state.files_data:
+                            st.warning("Upload files first!")
+                        else:
+                            # Auto-send the detailed prompt
+                            with st.spinner("🤔 Analyzing..."):
+                                conversation_history = []
+                                for role, message, _ in st.session_state.messages[-6:]:
+                                    conversation_history.append({"role": role, "content": message})
+                                
+                                response = api_client.send_message(
+                                    detailed_prompt,
+                                    st.session_state.files_data,
+                                    conversation_history
+                                )
+                                
+                                if response:
+                                    timestamp = datetime.now().strftime("%H:%M")
+                                    st.session_state.messages.append(("user", question, timestamp))
+                                    st.session_state.messages.append(("assistant", response, timestamp))
+                                    st.rerun()
         
-        for role, message, timestamp in reversed(st.session_state.messages):
-            with st.container():
-                if role == "user":
-                    st.markdown(f"""
-                    <div style="background-color: #e3f2fd; padding: 10px; border-radius: 10px; margin: 5px 0;">
-                        <strong>🧑 You ({timestamp}):</strong><br>
-                        {message}
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div style="background-color: #f1f8e9; padding: 10px; border-radius: 10px; margin: 5px 0;">
-                        <strong>🤖 AI Analyst ({timestamp}):</strong><br>
-                        {message}
-                    </div>
-                    """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
