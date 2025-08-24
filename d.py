@@ -1344,67 +1344,65 @@ if st.session_state.analysis_running or st.session_state.analysis_results:
         except Exception as e:
             st.info("📊 Health analytics processing...")
 
-# PROGRESSIVE RESULTS SECTION - Sections become available as workflow steps complete
+# PROGRESSIVE RESULTS SECTION - Fixed expander handling
 if st.session_state.analysis_results and not st.session_state.analysis_running:
     results = st.session_state.analysis_results
 
     # 1. CLAIMS DATA - Available after API Fetch + Deidentification
     claims_availability = get_section_availability('claims_data')
-if claims_availability == 'disabled':
-    st.markdown("### 📊 Claims Data")
-    st.info("⏳ This section will be available after API Fetch and Deidentification steps complete")
-else:
-    with st.expander("📊 Claims Data", expanded=False):
-        st.markdown("""
-        <div class="section-box section-available">
-            <div class="section-title">Claims Data Analysis</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Rest of your expander content here...
-        deidentified_data = safe_get(results, 'deidentified_data', {})
-        api_outputs = safe_get(results, 'api_outputs', {})
-        
-        if deidentified_data or api_outputs:
-            tab1, tab2, tab3 = st.tabs(["Medical Claims", "Pharmacy Claims", "MCID Data"])
-
-            with tab1:
-                st.success("✅ Medical claims data processed")
-                if deidentified_data.get('medical'):
-                    with st.expander("View Medical Claims JSON", expanded=False):
-                        st.json(deidentified_data['medical'])
-                else:
-                    st.json({"status": "Medical claims data loaded", "records": "Available for analysis"})
+    
+    if claims_availability == 'disabled':
+        st.markdown("### 📊 Claims Data")
+        st.info("⏳ This section will be available after API Fetch and Deidentification steps complete")
+    else:
+        with st.expander("📊 Claims Data", expanded=False):
+            st.markdown("""
+            <div class="section-box section-available">
+                <div class="section-title">Claims Data Analysis</div>
+            </div>
+            """, unsafe_allow_html=True)
             
-            with tab2:
-                st.success("✅ Pharmacy claims data processed") 
-                if deidentified_data.get('pharmacy'):
-                    with st.expander("View Pharmacy Claims JSON", expanded=False):
-                        st.json(deidentified_data['pharmacy'])
-                else:
-                    st.json({"status": "Pharmacy claims data loaded", "records": "Available for analysis"})
+            # Display claims data
+            deidentified_data = safe_get(results, 'deidentified_data', {})
+            api_outputs = safe_get(results, 'api_outputs', {})
             
-            with tab3:
-                st.success("✅ MCID data processed")
-                if api_outputs.get('mcid'):
-                    with st.expander("View MCID JSON Data", expanded=False):
-                        st.json(api_outputs['mcid'])
-                else:
-                    st.json({"status": "MCID data loaded", "matches": "Available for analysis"})
-        else:
-            st.error("No claims data available")
+            if deidentified_data or api_outputs:
+                tab1, tab2, tab3 = st.tabs(["Medical Claims", "Pharmacy Claims", "MCID Data"])
+                
+                with tab1:
+                    st.success("✅ Medical claims data processed")
+                    if deidentified_data.get('medical'):
+                        with st.expander("View Medical Claims JSON", expanded=False):
+                            st.json(deidentified_data['medical'])
+                    else:
+                        st.json({"status": "Medical claims data loaded", "records": "Available for analysis"})
+                
+                with tab2:
+                    st.success("✅ Pharmacy claims data processed") 
+                    if deidentified_data.get('pharmacy'):
+                        with st.expander("View Pharmacy Claims JSON", expanded=False):
+                            st.json(deidentified_data['pharmacy'])
+                    else:
+                        st.json({"status": "Pharmacy claims data loaded", "records": "Available for analysis"})
+                
+                with tab3:
+                    st.success("✅ MCID data processed")
+                    if api_outputs.get('mcid'):
+                        with st.expander("View MCID JSON Data", expanded=False):
+                            st.json(api_outputs['mcid'])
+                    else:
+                        st.json({"status": "MCID data loaded", "matches": "Available for analysis"})
+            else:
+                st.error("No claims data available")
 
     # 2. CLAIMS DATA ANALYSIS - Available after Field Extraction
     code_analysis_availability = get_section_availability('code_analysis')
     
-    with st.expander(
-        "🔬 Claims Data Analysis", 
-        expanded=False,
-        disabled=(code_analysis_availability == 'disabled')
-    ):
-        if code_analysis_availability == 'disabled':
-            st.info("⏳ This section will be available after Field Extraction step completes")
-        else:
+    if code_analysis_availability == 'disabled':
+        st.markdown("### 🔬 Claims Data Analysis")
+        st.info("⏳ This section will be available after Field Extraction step completes")
+    else:
+        with st.expander("🔬 Claims Data Analysis", expanded=False):
             st.markdown("""
             <div class="section-box section-available">
                 <div class="section-title">Code Meanings Analysis</div>
@@ -1476,14 +1474,11 @@ else:
     # 3. ENTITY EXTRACTION - Available after Entity Extraction
     entity_availability = get_section_availability('entity_extraction')
     
-    with st.expander(
-        "🎯 Entity Extraction", 
-        expanded=False,
-        disabled=(entity_availability == 'disabled')
-    ):
-        if entity_availability == 'disabled':
-            st.info("⏳ This section will be available after Entity Extraction step completes")
-        else:
+    if entity_availability == 'disabled':
+        st.markdown("### 🎯 Entity Extraction")
+        st.info("⏳ This section will be available after Entity Extraction step completes")
+    else:
+        with st.expander("🎯 Entity Extraction", expanded=False):
             st.markdown("""
             <div class="section-box section-available">
                 <div class="section-title">Health Entity Analysis</div>
@@ -1532,14 +1527,11 @@ else:
     # 4. HEALTH TRAJECTORY - Available after Health Trajectory step
     trajectory_availability = get_section_availability('health_trajectory')
     
-    with st.expander(
-        "📈 Health Trajectory", 
-        expanded=False,
-        disabled=(trajectory_availability == 'disabled')
-    ):
-        if trajectory_availability == 'disabled':
-            st.info("⏳ This section will be available after Health Trajectory step completes")
-        else:
+    if trajectory_availability == 'disabled':
+        st.markdown("### 📈 Health Trajectory")
+        st.info("⏳ This section will be available after Health Trajectory step completes")
+    else:
+        with st.expander("📈 Health Trajectory", expanded=False):
             st.markdown("""
             <div class="trajectory-container">
                 <div class="section-title">Predictive Health Analysis</div>
@@ -1568,14 +1560,11 @@ else:
     # 5. HEART ATTACK RISK PREDICTION - Available after Heart Risk Prediction step
     heart_risk_availability = get_section_availability('heart_risk')
     
-    with st.expander(
-        "❤️ Heart Attack Risk Prediction", 
-        expanded=False,
-        disabled=(heart_risk_availability == 'disabled')
-    ):
-        if heart_risk_availability == 'disabled':
-            st.info("⏳ This section will be available after Heart Risk Prediction step completes")
-        else:
+    if heart_risk_availability == 'disabled':
+        st.markdown("### ❤️ Heart Attack Risk Prediction")
+        st.info("⏳ This section will be available after Heart Risk Prediction step completes")
+    else:
+        with st.expander("❤️ Heart Attack Risk Prediction", expanded=False):
             st.markdown("""
             <div class="heart-risk-container">
                 <div class="section-title">Cardiovascular Risk Assessment</div>
