@@ -311,15 +311,35 @@ RESPONSE FORMAT:
             # Build messages array - ensure all are strings
             messages = []
             
-            # Add recent conversation history
+            # Add recent conversation history with robust error handling
             if conversation_history:
-                for msg in conversation_history[-4:]:  # Limit to last 4 messages
-                    if isinstance(msg, dict) and 'content' in msg and 'role' in msg:
-                        if str(msg['content']).strip():
-                            messages.append({
-                                "role": str(msg['role']),
-                                "content": str(msg['content']).strip()
-                            })
+                print(f"Processing {len(conversation_history)} conversation history items")
+                for i, msg in enumerate(conversation_history[-4:]):
+                    try:
+                        if isinstance(msg, dict) and 'content' in msg and 'role' in msg:
+                            content = msg.get('content')
+                            role = msg.get('role')
+                            
+                            # Validate content and role are not None and can be converted to string
+                            if content is not None and role is not None:
+                                content_str = str(content).strip()
+                                role_str = str(role).strip()
+                                
+                                if content_str and role_str:
+                                    messages.append({
+                                        "role": role_str,
+                                        "content": content_str
+                                    })
+                                    print(f"Added history message {i}: role={role_str}, content_length={len(content_str)}")
+                                else:
+                                    print(f"Skipped empty history message {i}")
+                            else:
+                                print(f"Skipped invalid history message {i}: content={content}, role={role}")
+                        else:
+                            print(f"Skipped malformed history message {i}: {type(msg)}")
+                    except Exception as e:
+                        print(f"Error processing history message {i}: {e}")
+                        continue
             
             # Add current user message
             messages.append({
@@ -670,9 +690,21 @@ def main():
                             st.warning("Upload files first!")
                         else:
                             with st.spinner("🤔 Analyzing..."):
+                                # Get conversation history with proper type safety
                                 conversation_history = []
-                                for role, message, _ in st.session_state.messages[-4:]:
-                                    conversation_history.append({"role": role, "content": message})
+                                try:
+                                    print(f"Quick question: Processing {len(st.session_state.messages)} messages from session state")
+                                    for i, (role, message, timestamp) in enumerate(st.session_state.messages[-4:]):
+                                        print(f"Quick question message {i}: role={type(role).__name__}({repr(role)}), message={type(message).__name__}(len={len(str(message)) if message else 0})")
+                                        if message and str(message).strip():
+                                            conversation_history.append({
+                                                "role": str(role), 
+                                                "content": str(message).strip()
+                                            })
+                                    print(f"Quick question: Built conversation history with {len(conversation_history)} messages")
+                                except Exception as e:
+                                    print(f"Error processing conversation history in quick questions: {e}")
+                                    conversation_history = []
                                 
                                 response = api_client.send_message(
                                     detailed_prompt,
@@ -682,8 +714,9 @@ def main():
                                 
                                 if response:
                                     timestamp = datetime.now().strftime("%H:%M")
-                                    st.session_state.messages.append(("user", question, timestamp))
-                                    st.session_state.messages.append(("assistant", response, timestamp))
+                                    # Store with explicit string conversion
+                                    st.session_state.messages.append((str("user"), str(question), str(timestamp)))
+                                    st.session_state.messages.append((str("assistant"), str(response), str(timestamp)))
                                     st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -700,13 +733,8 @@ def main():
     chat_container = st.container()
     
     with chat_container:
-        if st.session_state.messages:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for role, message, timestamp in st.session_state.messages:
-                render_chat_message(role, message, timestamp)
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            # Show welcome message only when no messages exist
+        # Only show welcome message when NO messages exist
+        if not st.session_state.messages:
             if not st.session_state.files_data:
                 st.markdown("""
                 <div style="text-align: center; padding: 80px 50px; background: white; 
@@ -741,6 +769,12 @@ def main():
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+        else:
+            # When messages exist, show only the chat container with messages
+            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+            for role, message, timestamp in st.session_state.messages:
+                render_chat_message(role, message, timestamp)
+            st.markdown('</div>', unsafe_allow_html=True)
     
     # Chat input
     st.markdown("""
