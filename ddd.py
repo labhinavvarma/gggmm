@@ -56,6 +56,141 @@ APP_ID = os.getenv("APP_ID", "edadip")
 APLCTN_CD = os.getenv("APLCTN_CD", "edagnai")
 MODEL = os.getenv("MODEL", "llama3.1-70b")
 
+# Page configuration
+st.set_page_config(
+    page_title="Data Chat - AI File Analysis",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Enhanced CSS similar to medical chatbot
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+    font-family: 'Inter', sans-serif;
+}
+
+.main-header {
+    font-size: 2.8rem;
+    color: #2c3e50;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: glow-pulse 3s ease-in-out infinite;
+}
+
+@keyframes glow-pulse {
+    0%, 100% { filter: drop-shadow(0 0 10px rgba(102, 126, 234, 0.3)); }
+    50% { filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.6)); }
+}
+
+.status-indicator {
+    display: inline-block;
+    padding: 0.4rem 1rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 0.5rem 0;
+}
+
+.status-connected {
+    background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.analysis-summary-box {
+    background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 100%);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 2px solid #28a745;
+    margin: 1rem 0;
+    box-shadow: 0 8px 25px rgba(40, 167, 69, 0.2);
+}
+
+.sidebar-category {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    padding: 0.5rem;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    border-left: 3px solid #007bff;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transition: all 0.3s ease;
+}
+
+.sidebar-category:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+
+.category-prompt-btn {
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.6rem 1rem !important;
+    margin: 0.3rem 0 !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+    transition: all 0.3s ease !important;
+    width: 100% !important;
+    text-align: left !important;
+    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3) !important;
+}
+
+.category-prompt-btn:hover {
+    background: linear-gradient(135deg, #0056b3 0%, #004085 100%) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(0, 123, 255, 0.4) !important;
+}
+
+.file-status {
+    background: linear-gradient(135deg, #e8f5e8 0%, #f0f9ff 100%); 
+    border-left: 5px solid #10b981; 
+    padding: 15px; 
+    border-radius: 10px; 
+    margin: 8px 0; 
+    font-size: 13px; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.chat-stats {
+    text-align: center;
+    padding: 1rem;
+    color: #6c757d;
+    font-style: italic;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 10px;
+    margin: 1rem 0;
+    border: 1px solid #dee2e6;
+}
+
+/* Custom scrollbar */
+.stChatMessage {
+    margin-bottom: 1rem;
+}
+
+.stButton > button {
+    border-radius: 8px;
+    border: none;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+</style>
+""", unsafe_allow_html=True)
+
 class FileProcessor:
     """Handle different file types and extract content"""
     
@@ -412,8 +547,7 @@ RESPONSE FORMAT:
         
         return (base_msg + context)[:8000]  # Reasonable limit for context
     
-    def send_message(self, user_message: str, files_context: List[Dict[str, Any]] = None, 
-                    conversation_history: List[Dict[str, str]] = None) -> Optional[str]:
+    def send_message(self, user_message: str, files_context: List[Dict[str, Any]] = None) -> Optional[str]:
         """Send message with proper error handling - no conversation history to avoid API errors"""
         try:
             sys_msg = self.create_system_message(files_context or [])
@@ -494,220 +628,45 @@ RESPONSE FORMAT:
             return None
 
 def create_quick_questions():
-    """Define quick questions for different file types"""
+    """Define categorized quick questions similar to medical chatbot"""
     return {
-        "Data Analysis": {
-            "What are the key insights from my data?": "Analyze the uploaded files and provide the top 5 key insights with supporting data points.",
-            "Show me summary statistics": "Provide comprehensive summary statistics for all numeric columns.",
-            "What trends do you see?": "Identify and explain the main trends, patterns, and correlations in the data.",
-            "Are there any outliers or anomalies?": "Find and analyze any outliers, anomalies, or unusual patterns in the data.",
-            "Compare different segments": "Compare and contrast different segments, categories, or groups in the data.",
-            "What recommendations do you have?": "Based on the data analysis, provide specific actionable recommendations."
-        },
-        "Document Analysis": {
-            "Summarize the main points": "Provide a comprehensive summary of the main points, findings, and conclusions from the document.",
-            "Extract key data and metrics": "Extract all numerical data, statistics, and key metrics mentioned in the document.",
-            "What are the recommendations?": "Identify and summarize all recommendations, action items, and next steps mentioned in the document.",
-            "Find important dates and deadlines": "Extract all important dates, deadlines, milestones, and time-sensitive information from the document."
-        }
+        "📊 Data Overview": [
+            "What are the key insights from my data?",
+            "Provide a comprehensive data summary",
+            "What's the structure of my uploaded files?",
+            "Show me the main statistics"
+        ],
+        "📈 Statistical Analysis": [
+            "Show me summary statistics for all numeric columns",
+            "What are the data distributions and patterns?",
+            "Identify outliers and anomalies in the data",
+            "Calculate correlation between key variables"
+        ],
+        "🔍 Data Quality": [
+            "Check for missing values and data quality issues",
+            "Are there any data inconsistencies?",
+            "Validate data completeness and accuracy",
+            "Suggest data cleaning recommendations"
+        ],
+        "📋 Detailed Insights": [
+            "What trends do you see in the data?",
+            "Compare different segments or categories",
+            "Find patterns and relationships",
+            "Generate actionable business recommendations"
+        ],
+        "🎯 Custom Analysis": [
+            "Perform a deep dive analysis",
+            "Create a comprehensive data report",
+            "What story does this data tell?",
+            "Provide strategic insights and next steps"
+        ]
     }
 
-def render_chat_message(role: str, content: str, timestamp: str):
-    """Render individual chat messages with enhanced styling"""
-    if role == "user":
-        st.markdown(f"""
-        <div style="display: flex; justify-content: flex-end; margin: 20px 0;">
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                        color: white; padding: 22px 28px; border-radius: 25px 25px 8px 25px; 
-                        max-width: 75%; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-                        font-size: 18px; line-height: 1.6; font-weight: 500;">
-                {content}
-                <div style="font-size: 14px; opacity: 0.85; margin-top: 10px; text-align: right; font-weight: 400;">
-                    You • {timestamp}
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        formatted_content = content.replace('\n', '<br>')
-        
-        try:
-            formatted_content = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', formatted_content)
-            formatted_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', formatted_content)
-            formatted_content = re.sub(r'^\s*[-•]\s*(.+)$', r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
-        except Exception:
-            formatted_content = content.replace('\n', '<br>')
-        
-        st.markdown(f"""
-        <div style="display: flex; justify-content: flex-start; margin: 25px 0;">
-            <div style="display: flex; align-items: flex-start; max-width: 85%;">
-                <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); 
-                            color: white; width: 50px; height: 50px; border-radius: 50%; 
-                            display: flex; align-items: center; justify-content: center; 
-                            margin-right: 18px; font-size: 24px; font-weight: bold;
-                            box-shadow: 0 3px 10px rgba(79, 70, 229, 0.3);">
-                    AI
-                </div>
-                <div style="background: white; color: #1f2937; padding: 28px 32px; 
-                            border-radius: 25px 25px 25px 8px; 
-                            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
-                            border-left: 4px solid #4f46e5;
-                            font-size: 17px; line-height: 1.7; flex: 1;">
-                    <div style="margin-bottom: 18px;">
-                        {formatted_content}
-                    </div>
-                    <div style="font-size: 13px; color: #6b7280; border-top: 1px solid #f3f4f6; 
-                                padding-top: 12px; font-weight: 500;">
-                        Data Chat • {timestamp}
-                    </div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
 def main():
-    """Main application with improved structure and error handling"""
-    
-    # Page configuration
-    st.set_page_config(
-        page_title="Data Chat - AI File Analysis",
-        page_icon="💬",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+    """Main application with improved structure and modern chat interface"""
     
     # Set pandas options
     pd.set_option('future.no_silent_downcasting', True)
-    
-    # Custom CSS
-    st.markdown("""
-    <style>
-    .main > div {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    .chat-container {
-        height: 70vh;
-        overflow-y: auto;
-        padding: 40px 30px;
-        background: transparent;
-        border-radius: 20px;
-        margin-bottom: 30px;
-    }
-    .chat-container::-webkit-scrollbar {
-        width: 8px;
-    }
-    .chat-container::-webkit-scrollbar-track {
-        background: #f1f5f9;
-        border-radius: 10px;
-    }
-    .chat-container::-webkit-scrollbar-thumb {
-        background: #cbd5e1;
-        border-radius: 10px;
-    }
-    .file-upload-container {
-        background: white;
-        padding: 25px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        margin-bottom: 25px;
-        border: 1px solid #e5e7eb;
-    }
-    .quick-questions {
-        background: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 3px 8px rgba(0,0,0,0.08);
-        margin: 20px 0;
-        border: 1px solid #e5e7eb;
-    }
-    .stTextInput > div > div > input {
-        padding: 20px 28px;
-        border-radius: 25px;
-        border: 2px solid #e2e8f0;
-        font-size: 18px;
-        font-weight: 500;
-        background: white;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        transition: all 0.3s ease;
-        height: 60px;
-    }
-    .stTextInput > div > div > input:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15), 0 4px 12px rgba(0,0,0,0.1);
-        outline: none;
-        background: #fefefe;
-    }
-    .stTextInput > div > div > input:hover {
-        border-color: #cbd5e1;
-        box-shadow: 0 6px 16px rgba(0,0,0,0.1);
-    }
-    .stButton > button {
-        border-radius: 25px;
-        border: none;
-        font-weight: 700;
-        font-size: 16px;
-        padding: 18px 32px;
-        height: 60px;
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        transition: all 0.3s ease;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
-        background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
-    }
-    .stButton > button:active {
-        transform: translateY(0px);
-        background: linear-gradient(135deg, #4f5dcf 0%, #5d3a7e 100%);
-    }
-    .chat-input-container {
-        background: white;
-        padding: 25px;
-        border-radius: 20px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        margin: 20px 0;
-        border: 1px solid #f1f5f9;
-    }
-    </style>
-    
-    <script>
-    // Add Enter key functionality
-    document.addEventListener('DOMContentLoaded', function() {
-        function addEnterKeyListener() {
-            const textInput = document.querySelector('input[aria-label="Type your question here..."]');
-            const sendButton = document.querySelector('button[kind="primary"]');
-            
-            if (textInput && sendButton && !textInput.hasAttribute('data-enter-added')) {
-                textInput.setAttribute('data-enter-added', 'true');
-                textInput.addEventListener('keypress', function(event) {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        if (textInput.value.trim()) {
-                            sendButton.click();
-                        }
-                    }
-                });
-            }
-        }
-        
-        // Run initially and on mutations
-        addEnterKeyListener();
-        
-        // Observer for dynamically added elements
-        const observer = new MutationObserver(function() {
-            addEnterKeyListener();
-        });
-        
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-    });
-    </script>
-    """, unsafe_allow_html=True)
     
     # Initialize session state
     if "messages" not in st.session_state:
@@ -718,21 +677,39 @@ def main():
         st.session_state.uploaded_files_names = []
     if "api_client" not in st.session_state:
         st.session_state.api_client = SFAssistAPI()
+    if "selected_prompt" not in st.session_state:
+        st.session_state.selected_prompt = None
     
     # Header
+    st.markdown('<h1 class="main-header">💬 Data Chat</h1>', unsafe_allow_html=True)
+    st.markdown("### AI-Powered File Analysis & Insights")
+    
+    # Connection status
     st.markdown("""
-    <div style="text-align: center; padding: 30px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                color: white; border-radius: 20px; margin-bottom: 30px; box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);">
-        <div style="font-size: 50px; margin-bottom: 15px;">💬</div>
-        <h1 style="margin: 0; font-size: 48px; font-weight: 800;">Data Chat</h1>
-        <p style="margin: 15px 0 0 0; font-size: 20px; opacity: 0.95;">AI-Powered File Analysis & Insights</p>
+    <div class="status-indicator status-connected">
+        ✅ Connected to Data Analysis Engine
     </div>
     """, unsafe_allow_html=True)
     
+    # File summary box
+    if st.session_state.files_data:
+        total_files = len(st.session_state.files_data)
+        file_types = list(set([f.get('type', 'unknown') for f in st.session_state.files_data if 'error' not in f]))
+        
+        st.markdown(f"""
+        <div class="analysis-summary-box">
+            <h4 style="margin: 0 0 0.5rem 0; color: #28a745;">📊 Files Loaded</h4>
+            <p style="margin: 0; color: #155724;">
+                <strong>Total Files:</strong> {total_files} | 
+                <strong>Types:</strong> {', '.join(file_types).upper()} | 
+                <strong>Status:</strong> Ready for Analysis
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
     # Sidebar
     with st.sidebar:
-        st.markdown('<div class="file-upload-container">', unsafe_allow_html=True)
-        st.header("📁 Upload Files")
+        st.title("📁 File Upload")
         
         # Determine supported file types
         supported_types = ['xlsx', 'xls', 'csv']
@@ -810,6 +787,7 @@ def main():
         
         # Display uploaded files
         if st.session_state.files_data:
+            st.markdown("---")
             st.markdown("### 📋 Uploaded Files")
             for file_data in st.session_state.files_data:
                 if "error" not in file_data:
@@ -820,9 +798,7 @@ def main():
                         "pdf": "📕"
                     }.get(file_data.get('type'), "📄")
                     st.markdown(f"""
-                    <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f9ff 100%); 
-                                border-left: 5px solid #10b981; padding: 15px; border-radius: 10px; 
-                                margin: 8px 0; font-size: 13px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                    <div class="file-status">
                         <div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 8px;">
                             {file_icon} {file_data.get('filename', 'Unknown')}
                         </div>
@@ -832,99 +808,134 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            st.info("No files uploaded yet.")
+            st.info("Upload files to start analysis")
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("---")
         
         # Quick Questions
-        st.markdown('<div class="quick-questions">', unsafe_allow_html=True)
-        st.markdown("### 🎯 Quick Questions")
+        st.title("🎯 Quick Questions")
         
         quick_questions = create_quick_questions()
         
         for category, questions in quick_questions.items():
-            with st.expander(category):
-                for question, detailed_prompt in questions.items():
-                    if st.button(question, key=f"q_{hash(question)}", use_container_width=True):
+            with st.expander(category, expanded=False):
+                for i, question in enumerate(questions):
+                    if st.button(question, key=f"q_{category}_{i}", use_container_width=True):
                         if not st.session_state.files_data:
                             st.warning("Upload files first!")
                         else:
-                            with st.spinner("Analyzing..."):
-                                # Send only current message to API (no conversation history)
-                                response = st.session_state.api_client.send_message(
-                                    detailed_prompt,
-                                    st.session_state.files_data
-                                )
-                                
-                                if response:
-                                    timestamp = datetime.now().strftime("%H:%M")
-                                    # Store in UI history for display
-                                    st.session_state.messages.append(("user", question, timestamp))
-                                    st.session_state.messages.append(("assistant", response, timestamp))
-                                    st.rerun()
+                            st.session_state.selected_prompt = question
+                            st.rerun()
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("---")
+        
+        # Clear chat button
+        if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
+            st.session_state.messages = []
+            st.success("Chat history cleared!")
+            st.rerun()
     
-    # Main chat area - display conversation history
-    chat_container = st.container()
-    
-    with chat_container:
-        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-        if st.session_state.messages:
-            for role, message, timestamp in st.session_state.messages:
-                render_chat_message(role, message, timestamp)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Chat input
-    st.markdown("""
-    <div class="chat-input-container">
-        <h3 style="font-size: 24px; font-weight: 700; color: #1f2937; margin-bottom: 20px; 
-                   display: flex; align-items: center;">
-            <span style="font-size: 28px; margin-right: 10px;">💬</span> Ask a question about your data
-        </h3>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col_input, col_send, col_clear = st.columns([5, 1, 1])
-    
-    with col_input:
-        user_input = st.text_input(
-            "Type your question here...",
-            placeholder="e.g., What are the key insights from my data?",
-            label_visibility="collapsed",
-            key="user_input"
-        )
-    
-    with col_send:
-        send_clicked = st.button("Send", use_container_width=True, type="primary")
-    
-    with col_clear:
-        clear_clicked = st.button("Clear", use_container_width=True)
-    
-    
-    # Handle clear button
-    if clear_clicked:
-        st.session_state.messages = []
+    # Handle selected prompt
+    if st.session_state.selected_prompt:
+        user_question = st.session_state.selected_prompt
+        st.session_state.messages.append({"role": "user", "content": user_question})
+        
+        with st.spinner("Processing your request..."):
+            try:
+                response = st.session_state.api_client.send_message(
+                    user_question,
+                    st.session_state.files_data
+                )
+                if response:
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+        
+        st.session_state.selected_prompt = None
         st.rerun()
     
-    # Process input
-    if send_clicked and user_input.strip():
+    # Chat interface
+    st.markdown("### 💬 Chat with Your Data")
+    
+    # Add search functionality for chat history
+    if st.session_state.messages:
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            search_term = st.text_input(
+                "🔍 Search chat history:", 
+                placeholder="Search questions and answers...",
+                help="Search through your chat history to find specific topics"
+            )
+        with col2:
+            if st.button("Clear Search", key="clear_search"):
+                st.rerun()
+        
+        st.markdown("---")
+    
+    # Display chat messages
+    if st.session_state.messages:
+        # Filter messages by search term if provided
+        filtered_messages = st.session_state.messages
+        if 'search_term' in locals() and search_term:
+            filtered_messages = []
+            for msg in st.session_state.messages:
+                if search_term.lower() in msg["content"].lower():
+                    filtered_messages.append(msg)
+            
+            if filtered_messages:
+                st.success(f"🎯 Found {len(filtered_messages)} message(s) matching '{search_term}'")
+            else:
+                st.warning(f"❌ No results found for '{search_term}'. Try different keywords.")
+        
+        # Display messages in chat format (newest first)
+        for message in reversed(filtered_messages):
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+        
+        # Show message count
+        if not ('search_term' in locals() and search_term):
+            st.markdown(f"""
+            <div class="chat-stats">
+                📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
+        
+        # Show example questions when no chat history
+        st.markdown("### 💡 Try asking:")
+        st.markdown("• What are the key insights from my data?")
+        st.markdown("• Show me summary statistics")
+        st.markdown("• What trends do you see?")
+        st.markdown("• Check for data quality issues")
+        st.markdown("• Generate a comprehensive report")
+    
+    # Chat input at bottom
+    user_question = st.chat_input("💬 Ask a question about your data...")
+    
+    if user_question:
         if not st.session_state.files_data:
             st.warning("Please upload files first to start analysis!")
         else:
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": user_question})
+            
             with st.spinner("Analyzing your question..."):
-                # Send only current message to API (no conversation history)
-                response = st.session_state.api_client.send_message(
-                    user_input, 
-                    st.session_state.files_data
-                )
-                
-                if response:
-                    timestamp = datetime.now().strftime("%H:%M")
-                    # Store in UI history for display
-                    st.session_state.messages.append(("user", user_input, timestamp))
-                    st.session_state.messages.append(("assistant", response, timestamp))
-                    st.rerun()
+                try:
+                    # Send only current message to API (no conversation history)
+                    response = st.session_state.api_client.send_message(
+                        user_question, 
+                        st.session_state.files_data
+                    )
+                    
+                    if response:
+                        # Store in UI history for display
+                        st.session_state.messages.append({"role": "assistant", "content": response})
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
