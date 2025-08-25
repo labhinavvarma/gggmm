@@ -100,7 +100,10 @@ class FileProcessor:
                 numeric_cols = df.select_dtypes(include=['number']).columns
                 for col in numeric_cols:
                     try:
-                        valid_data = df[col].dropna()
+                        # Ensure column is properly numeric and handle mixed types
+                        col_data = pd.to_numeric(df[col], errors='coerce')
+                        valid_data = col_data.dropna()
+                        
                         if len(valid_data) > 0:
                             stats = {
                                 "mean": float(valid_data.mean()),
@@ -181,7 +184,10 @@ class FileProcessor:
             numeric_cols = df.select_dtypes(include=['number']).columns
             for col in numeric_cols:
                 try:
-                    valid_data = df[col].dropna()
+                    # Ensure column is properly numeric and handle mixed types
+                    col_data = pd.to_numeric(df[col], errors='coerce')
+                    valid_data = col_data.dropna()
+                    
                     if len(valid_data) > 0:
                         stats = {
                             "mean": float(valid_data.mean()),
