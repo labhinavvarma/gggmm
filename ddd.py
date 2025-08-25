@@ -64,7 +64,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Enhanced CSS styling
+# Enhanced CSS styling - FIXED VERSION
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -235,15 +235,20 @@ st.markdown("""
     max-width: 75%;
     box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     border-left: 4px solid #4f46e5;
-    font-size: 12px;
+    font-size: 16px;
     line-height: 1.6;
 }
 
-.assistant-message h1, .assistant-message h2, .assistant-message h3 {
+.assistant-message h1, .assistant-message h2, .assistant-message h3,
+.assistant-message h4, .assistant-message h5, .assistant-message h6 {
     color: #2c3e50;
-    margin-top: 1em;
-    margin-bottom: 0.5em;
+    margin: 1em 0 0.5em 0;
+    line-height: 1.4;
 }
+
+.assistant-message h1 { font-size: 20px; font-weight: 800; }
+.assistant-message h2 { font-size: 18px; font-weight: 700; }
+.assistant-message h3 { font-size: 17px; font-weight: 600; }
 
 .assistant-message strong {
     color: #4f46e5;
@@ -509,7 +514,7 @@ class SFAssistAPI:
         self.session_id = str(uuid.uuid4())
     
     def create_system_message(self, files_data: List[Dict[str, Any]]) -> str:
-        """Create system message with file context"""
+        """Create system message with file context - UPDATED to discourage large headers"""
         base_msg = """You are Data Chat - an expert AI assistant that analyzes uploaded files and provides insights, statistics, and recommendations.
 
 CORE RESPONSIBILITIES:
@@ -528,14 +533,16 @@ IMPORTANT: DO NOT PROVIDE ANY CODE OR PROGRAMMING SYNTAX
 
 COMMUNICATION STYLE:
 • Professional business language only
-• Use structured formatting with bullet points and headers
+• Use structured formatting with bullet points and numbered lists
+• Avoid using markdown headers (##, ###) - use **bold text** for emphasis instead
 • Include specific numbers, percentages, and data points
 • Provide both summaries and detailed breakdowns
 • Focus on business value and actionable insights
-• Use chart descriptions instead of code to create charts
+• Use descriptive text instead of large headers
 
 RESPONSE FORMAT:
 • Start with key findings summary
+• Use **bold** for section emphasis (not ## headers)
 • Provide detailed analysis with numbers
 • End with actionable recommendations
 • Use business terminology, not technical jargon
@@ -685,7 +692,7 @@ RESPONSE FORMAT:
             return None
 
 def render_custom_message(role: str, content: str):
-    """Render custom styled chat messages"""
+    """Render custom styled chat messages - FIXED VERSION"""
     if role == "user":
         st.markdown(f"""
         <div class="user-message-container">
@@ -695,14 +702,17 @@ def render_custom_message(role: str, content: str):
         </div>
         """, unsafe_allow_html=True)
     else:
+        # Simple approach: Just replace newlines and format basic styles, avoid header conversion
         formatted_content = content.replace('\n', '<br>')
         try:
-            formatted_content = re.sub(r'^### (.+)$', r'<h3 style="color: #2c3e50; margin: 1.2em 0 0.6em 0; font-weight: 600;">\1</h3>', formatted_content, flags=re.MULTILINE)
-            formatted_content = re.sub(r'^## (.+)$', r'<h2 style="color: #2c3e50; margin: 1.4em 0 0.7em 0; font-weight: 700;">\1</h2>', formatted_content, flags=re.MULTILINE)
-            formatted_content = re.sub(r'^# (.+)$', r'<h1 style="color: #2c3e50; margin: 1.5em 0 0.8em 0; font-weight: 800;">\1</h1>', formatted_content, flags=re.MULTILINE)
+            # Only format bold and italic, skip header conversion to avoid font size issues
             formatted_content = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', formatted_content)
             formatted_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', formatted_content)
             formatted_content = re.sub(r'^\s*[-•]\s*(.+)$', r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
+            
+            # Optional: If you want to keep some header styling but with normal sizes, uncomment below:
+            # formatted_content = re.sub(r'^#{1,3}\s*(.+)$', r'<strong style="display: block; margin: 0.8em 0 0.4em 0;">\1</strong>', formatted_content, flags=re.MULTILINE)
+            
         except Exception:
             formatted_content = content.replace('\n', '<br>')
         
