@@ -51,7 +51,7 @@ except ImportError:
 
 # Configuration - Use environment variables for security
 API_URL = os.getenv("API_URL", "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete")
-API_KEY = os.getenv("API_KEY", "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0")  # Default for demo only
+API_KEY = os.getenv("API_KEY", "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0")
 APP_ID = os.getenv("APP_ID", "edadip")
 APLCTN_CD = os.getenv("APLCTN_CD", "edagnai")
 MODEL = os.getenv("MODEL", "llama3.1-70b")
@@ -64,7 +64,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Enhanced CSS similar to medical chatbot
+# Enhanced CSS styling
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -115,42 +115,6 @@ st.markdown("""
     box-shadow: 0 8px 25px rgba(40, 167, 69, 0.2);
 }
 
-.sidebar-category {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 0.5rem;
-    border-radius: 8px;
-    margin: 0.5rem 0;
-    border-left: 3px solid #007bff;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    transition: all 0.3s ease;
-}
-
-.sidebar-category:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-}
-
-.category-prompt-btn {
-    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 0.6rem 1rem !important;
-    margin: 0.3rem 0 !important;
-    font-size: 0.85rem !important;
-    font-weight: 500 !important;
-    transition: all 0.3s ease !important;
-    width: 100% !important;
-    text-align: left !important;
-    box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3) !important;
-}
-
-.category-prompt-btn:hover {
-    background: linear-gradient(135deg, #0056b3 0%, #004085 100%) !important;
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 20px rgba(0, 123, 255, 0.4) !important;
-}
-
 .file-status {
     background: linear-gradient(135deg, #e8f5e8 0%, #f0f9ff 100%); 
     border-left: 5px solid #10b981; 
@@ -172,11 +136,6 @@ st.markdown("""
     border: 1px solid #dee2e6;
 }
 
-/* Custom scrollbar */
-.stChatMessage {
-    margin-bottom: 1rem;
-}
-
 .stButton > button {
     border-radius: 8px;
     border: none;
@@ -189,7 +148,6 @@ st.markdown("""
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
-/* Enhanced Chat Input Styling */
 .stChatInput > div {
     background: white;
     border-radius: 25px;
@@ -228,7 +186,6 @@ st.markdown("""
     box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4) !important;
 }
 
-/* Individual Chat Message Styling */
 .user-message-container {
     display: flex;
     justify-content: flex-end;
@@ -312,7 +269,6 @@ class FileProcessor:
         """Process Excel files and return structured data"""
         try:
             pd.set_option('future.no_silent_downcasting', True)
-            
             excel_data = pd.read_excel(file, sheet_name=None)
             
             result = {
@@ -324,10 +280,8 @@ class FileProcessor:
             }
             
             for sheet_name, df in excel_data.items():
-                # Clean column names
                 df.columns = df.columns.astype(str).str.strip()
                 
-                # Handle missing values properly
                 df_clean = df.copy()
                 for col in df_clean.columns:
                     if df_clean[col].dtype == 'object':
@@ -344,11 +298,9 @@ class FileProcessor:
                     "summary_stats": {}
                 }
                 
-                # Add summary statistics for numeric columns
                 numeric_cols = df.select_dtypes(include=['number']).columns
                 for col in numeric_cols:
                     try:
-                        # Ensure column is properly numeric and handle mixed types
                         col_data = pd.to_numeric(df[col], errors='coerce')
                         valid_data = col_data.dropna()
                         
@@ -385,7 +337,6 @@ class FileProcessor:
         try:
             pd.set_option('future.no_silent_downcasting', True)
             
-            # Try different encodings if UTF-8 fails
             encodings_to_try = ['utf-8', 'latin-1', 'cp1252']
             df = None
             
@@ -408,10 +359,8 @@ class FileProcessor:
                 "raw_data": {}
             }
             
-            # Clean column names
             df.columns = df.columns.astype(str).str.strip()
             
-            # Handle missing values properly
             df_clean = df.copy()
             for col in df_clean.columns:
                 if df_clean[col].dtype == 'object':
@@ -428,11 +377,9 @@ class FileProcessor:
                 "summary_stats": {}
             }
             
-            # Add summary statistics for numeric columns
             numeric_cols = df.select_dtypes(include=['number']).columns
             for col in numeric_cols:
                 try:
-                    # Ensure column is properly numeric and handle mixed types
                     col_data = pd.to_numeric(df[col], errors='coerce')
                     valid_data = col_data.dropna()
                     
@@ -518,7 +465,6 @@ class FileProcessor:
             pages_text = []
             full_text = ""
             
-            # Limit to 10 pages to prevent memory issues
             pages_to_process = min(10, len(pdf_reader.pages))
             
             for page_num in range(pages_to_process):
@@ -560,7 +506,7 @@ class SFAssistAPI:
         self.app_id = APP_ID
         self.aplctn_cd = APLCTN_CD
         self.model = MODEL
-        self.session_id = str(uuid.uuid4())  # Maintain session consistency
+        self.session_id = str(uuid.uuid4())
     
     def create_system_message(self, files_data: List[Dict[str, Any]]) -> str:
         """Create system message with file context"""
@@ -658,14 +604,13 @@ RESPONSE FORMAT:
                 context += f"FILE {i}: Error processing file data\n\n"
                 continue
         
-        return (base_msg + context)[:8000]  # Reasonable limit for context
+        return (base_msg + context)[:8000]
     
     def send_message(self, user_message: str, files_context: List[Dict[str, Any]] = None) -> Optional[str]:
         """Send message with proper error handling - no conversation history to avoid API errors"""
         try:
             sys_msg = self.create_system_message(files_context or [])
             
-            # Build messages array - ONLY current message to avoid data type conflicts
             messages = [
                 {
                     "role": "user",
@@ -699,7 +644,6 @@ RESPONSE FORMAT:
             
             logger.info(f"Sending request with {len(messages)} messages")
             
-            # Use verify=True for production security
             verify_ssl = os.getenv("VERIFY_SSL", "false").lower() == "true"
             
             response = requests.post(
@@ -751,1196 +695,14 @@ def render_custom_message(role: str, content: str):
         </div>
         """, unsafe_allow_html=True)
     else:
-        # Format assistant content
         formatted_content = content.replace('\n', '<br>')
         try:
-            # Convert markdown headings to HTML headings
-            formatted_content = re.sub(r'^### (.+)
-        
-        st.markdown(f"""
-        <div class="assistant-message-container">
-            <div class="assistant-avatar">
-                AI
-            </div>
-            <div class="assistant-message">
-                {formatted_content}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-def create_quick_questions():
-    """Define categorized quick questions similar to medical chatbot"""
-    return {
-        "📊 Data Overview": [
-            "What are the key insights from my data?",
-            "Provide a comprehensive data summary",
-            "What's the structure of my uploaded files?",
-            "Show me the main statistics"
-        ],
-        "📈 Statistical Analysis": [
-            "Show me summary statistics for all numeric columns",
-            "What are the data distributions and patterns?",
-            "Identify outliers and anomalies in the data",
-            "Calculate correlation between key variables"
-        ],
-        "🔍 Data Quality": [
-            "Check for missing values and data quality issues",
-            "Are there any data inconsistencies?",
-            "Validate data completeness and accuracy",
-            "Suggest data cleaning recommendations"
-        ],
-        "📋 Detailed Insights": [
-            "What trends do you see in the data?",
-            "Compare different segments or categories",
-            "Find patterns and relationships",
-            "Generate actionable business recommendations"
-        ],
-        "🎯 Custom Analysis": [
-            "Perform a deep dive analysis",
-            "Create a comprehensive data report",
-            "What story does this data tell?",
-            "Provide strategic insights and next steps"
-        ]
-    }
-
-def main():
-    """Main application with improved structure and modern chat interface"""
-    
-    # Set pandas options
-    pd.set_option('future.no_silent_downcasting', True)
-    
-    # Initialize session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "files_data" not in st.session_state:
-        st.session_state.files_data = []
-    if "uploaded_files_names" not in st.session_state:
-        st.session_state.uploaded_files_names = []
-    if "api_client" not in st.session_state:
-        st.session_state.api_client = SFAssistAPI()
-    if "selected_prompt" not in st.session_state:
-        st.session_state.selected_prompt = None
-    
-    # Header
-    st.markdown('<h1 class="main-header">💬 Data Chat</h1>', unsafe_allow_html=True)
-    st.markdown("### AI-Powered File Analysis & Insights")
-    
-    # Connection status
-    st.markdown("""
-    <div class="status-indicator status-connected">
-        ✅ Connected to Data Analysis Engine
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # File summary box
-    if st.session_state.files_data:
-        total_files = len(st.session_state.files_data)
-        file_types = list(set([f.get('type', 'unknown') for f in st.session_state.files_data if 'error' not in f]))
-        
-        st.markdown(f"""
-        <div class="analysis-summary-box">
-            <h4 style="margin: 0 0 0.5rem 0; color: #28a745;">📊 Files Loaded</h4>
-            <p style="margin: 0; color: #155724;">
-                <strong>Total Files:</strong> {total_files} | 
-                <strong>Types:</strong> {', '.join(file_types).upper()} | 
-                <strong>Status:</strong> Ready for Analysis
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Sidebar
-    with st.sidebar:
-        st.title("📁 File Upload")
-        
-        # Determine supported file types
-        supported_types = ['xlsx', 'xls', 'csv']
-        type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
-        
-        if DOCX_AVAILABLE:
-            supported_types.extend(['docx'])
-            type_descriptions.append("Word (.docx)")
-        
-        if PDF_AVAILABLE:
-            supported_types.extend(['pdf'])
-            type_descriptions.append("PDF (.pdf)")
-        
-        help_text = f"Supported: {', '.join(type_descriptions)}"
-        
-        # File uploader
-        uploaded_files = st.file_uploader(
-            "Choose files (multiple files supported)",
-            type=supported_types,
-            help=help_text,
-            accept_multiple_files=True
-        )
-        
-        # Process uploaded files
-        if uploaded_files:
-            current_file_names = [f.name for f in uploaded_files]
-            
-            if current_file_names != st.session_state.uploaded_files_names:
-                st.session_state.uploaded_files_names = current_file_names
-                st.session_state.files_data = []
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, uploaded_file in enumerate(uploaded_files):
-                    progress = (i + 1) / len(uploaded_files)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {uploaded_file.name}...")
-                    
-                    file_extension = uploaded_file.name.split('.')[-1].lower()
-                    
-                    try:
-                        if file_extension in ['xlsx', 'xls']:
-                            file_data = FileProcessor.process_excel(uploaded_file)
-                        elif file_extension == 'csv':
-                            file_data = FileProcessor.process_csv(uploaded_file)
-                        elif file_extension == 'docx' and DOCX_AVAILABLE:
-                            file_data = FileProcessor.process_word(uploaded_file)
-                        elif file_extension == 'pdf' and PDF_AVAILABLE:
-                            file_data = FileProcessor.process_pdf(uploaded_file)
-                        else:
-                            logger.warning(f"Unsupported file type: {file_extension}")
-                            continue
-                            
-                        if file_data and "error" not in file_data:
-                            st.session_state.files_data.append(file_data)
-                        else:
-                            error_msg = file_data.get("error", "Unknown error") if file_data else "No data returned"
-                            st.error(f"Failed to process {uploaded_file.name}: {error_msg}")
-                            
-                    except Exception as e:
-                        logger.error(f"Exception processing {uploaded_file.name}: {str(e)}")
-                        st.error(f"Error processing {uploaded_file.name}: {str(e)}")
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                if st.session_state.files_data:
-                    st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
-                else:
-                    st.error("❌ No files were processed successfully. Please check file formats.")
-        elif st.session_state.uploaded_files_names:
-            st.session_state.uploaded_files_names = []
-            st.session_state.files_data = []
-        
-        # Display uploaded files
-        if st.session_state.files_data:
-            st.markdown("---")
-            st.markdown("### 📋 Uploaded Files")
-            for file_data in st.session_state.files_data:
-                if "error" not in file_data:
-                    file_icon = {
-                        "excel": "📊", 
-                        "csv": "📈", 
-                        "word": "📄", 
-                        "pdf": "📕"
-                    }.get(file_data.get('type'), "📄")
-                    st.markdown(f"""
-                    <div class="file-status">
-                        <div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 8px;">
-                            {file_icon} {file_data.get('filename', 'Unknown')}
-                        </div>
-                        <div style="color: #374151; font-size: 12px;">
-                            {file_data.get('summary', 'No summary')}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.info("Upload files to start analysis")
-        
-        st.markdown("---")
-        
-        # Quick Questions
-        st.title("🎯 Quick Questions")
-        
-        quick_questions = create_quick_questions()
-        
-        for category, questions in quick_questions.items():
-            with st.expander(category, expanded=False):
-                for i, question in enumerate(questions):
-                    if st.button(question, key=f"q_{category}_{i}", use_container_width=True):
-                        if not st.session_state.files_data:
-                            st.warning("Upload files first!")
-                        else:
-                            st.session_state.selected_prompt = question
-                            st.rerun()
-        
-        st.markdown("---")
-        
-        # Clear chat button
-        if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
-            st.session_state.messages = []
-            st.success("Chat history cleared!")
-            st.rerun()
-    
-    # Handle selected prompt
-    if st.session_state.selected_prompt:
-        user_question = st.session_state.selected_prompt
-        st.session_state.messages.append({"role": "user", "content": user_question})
-        
-        with st.spinner("Processing your request..."):
-            try:
-                response = st.session_state.api_client.send_message(
-                    user_question,
-                    st.session_state.files_data
-                )
-                if response:
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-        
-        st.session_state.selected_prompt = None
-        st.rerun()
-    
-    # Chat interface
-    st.markdown("### 💬 Chat with Your Data")
-    
-    # Display chat messages
-    if st.session_state.messages:
-        # Display messages in chat format (chronological order - oldest first)
-        for message in st.session_state.messages:
-            render_custom_message(message["role"], message["content"])
-        
-        # Show message count
-        st.markdown(f"""
-        <div class="chat-stats">
-            📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
-        
-        # Show example questions when no chat history
-        st.markdown("### 💡 Try asking:")
-        st.markdown("• What are the key insights from my data?")
-        st.markdown("• Show me summary statistics")
-        st.markdown("• What trends do you see?")
-        st.markdown("• Check for data quality issues")
-        st.markdown("• Generate a comprehensive report")
-    
-    # Chat input at bottom
-    user_question = st.chat_input("💬 Ask a question about your data...")
-    
-    if user_question:
-        if not st.session_state.files_data:
-            st.warning("Please upload files first to start analysis!")
-        else:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": user_question})
-            
-            with st.spinner("Analyzing your question..."):
-                try:
-                    # Send only current message to API (no conversation history)
-                    response = st.session_state.api_client.send_message(
-                        user_question, 
-                        st.session_state.files_data
-                    )
-                    
-                    if response:
-                        # Store in UI history for display
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-
-if __name__ == "__main__":
-    main(), r'<h3 style="color: #2c3e50; margin: 1.2em 0 0.6em 0; font-weight: 600;">\1</h3>', formatted_content, flags=re.MULTILINE)
-            formatted_content = re.sub(r'^## (.+)
-        
-        st.markdown(f"""
-        <div class="assistant-message-container">
-            <div class="assistant-avatar">
-                AI
-            </div>
-            <div class="assistant-message">
-                {formatted_content}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-def create_quick_questions():
-    """Define categorized quick questions similar to medical chatbot"""
-    return {
-        "📊 Data Overview": [
-            "What are the key insights from my data?",
-            "Provide a comprehensive data summary",
-            "What's the structure of my uploaded files?",
-            "Show me the main statistics"
-        ],
-        "📈 Statistical Analysis": [
-            "Show me summary statistics for all numeric columns",
-            "What are the data distributions and patterns?",
-            "Identify outliers and anomalies in the data",
-            "Calculate correlation between key variables"
-        ],
-        "🔍 Data Quality": [
-            "Check for missing values and data quality issues",
-            "Are there any data inconsistencies?",
-            "Validate data completeness and accuracy",
-            "Suggest data cleaning recommendations"
-        ],
-        "📋 Detailed Insights": [
-            "What trends do you see in the data?",
-            "Compare different segments or categories",
-            "Find patterns and relationships",
-            "Generate actionable business recommendations"
-        ],
-        "🎯 Custom Analysis": [
-            "Perform a deep dive analysis",
-            "Create a comprehensive data report",
-            "What story does this data tell?",
-            "Provide strategic insights and next steps"
-        ]
-    }
-
-def main():
-    """Main application with improved structure and modern chat interface"""
-    
-    # Set pandas options
-    pd.set_option('future.no_silent_downcasting', True)
-    
-    # Initialize session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "files_data" not in st.session_state:
-        st.session_state.files_data = []
-    if "uploaded_files_names" not in st.session_state:
-        st.session_state.uploaded_files_names = []
-    if "api_client" not in st.session_state:
-        st.session_state.api_client = SFAssistAPI()
-    if "selected_prompt" not in st.session_state:
-        st.session_state.selected_prompt = None
-    
-    # Header
-    st.markdown('<h1 class="main-header">💬 Data Chat</h1>', unsafe_allow_html=True)
-    st.markdown("### AI-Powered File Analysis & Insights")
-    
-    # Connection status
-    st.markdown("""
-    <div class="status-indicator status-connected">
-        ✅ Connected to Data Analysis Engine
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # File summary box
-    if st.session_state.files_data:
-        total_files = len(st.session_state.files_data)
-        file_types = list(set([f.get('type', 'unknown') for f in st.session_state.files_data if 'error' not in f]))
-        
-        st.markdown(f"""
-        <div class="analysis-summary-box">
-            <h4 style="margin: 0 0 0.5rem 0; color: #28a745;">📊 Files Loaded</h4>
-            <p style="margin: 0; color: #155724;">
-                <strong>Total Files:</strong> {total_files} | 
-                <strong>Types:</strong> {', '.join(file_types).upper()} | 
-                <strong>Status:</strong> Ready for Analysis
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Sidebar
-    with st.sidebar:
-        st.title("📁 File Upload")
-        
-        # Determine supported file types
-        supported_types = ['xlsx', 'xls', 'csv']
-        type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
-        
-        if DOCX_AVAILABLE:
-            supported_types.extend(['docx'])
-            type_descriptions.append("Word (.docx)")
-        
-        if PDF_AVAILABLE:
-            supported_types.extend(['pdf'])
-            type_descriptions.append("PDF (.pdf)")
-        
-        help_text = f"Supported: {', '.join(type_descriptions)}"
-        
-        # File uploader
-        uploaded_files = st.file_uploader(
-            "Choose files (multiple files supported)",
-            type=supported_types,
-            help=help_text,
-            accept_multiple_files=True
-        )
-        
-        # Process uploaded files
-        if uploaded_files:
-            current_file_names = [f.name for f in uploaded_files]
-            
-            if current_file_names != st.session_state.uploaded_files_names:
-                st.session_state.uploaded_files_names = current_file_names
-                st.session_state.files_data = []
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, uploaded_file in enumerate(uploaded_files):
-                    progress = (i + 1) / len(uploaded_files)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {uploaded_file.name}...")
-                    
-                    file_extension = uploaded_file.name.split('.')[-1].lower()
-                    
-                    try:
-                        if file_extension in ['xlsx', 'xls']:
-                            file_data = FileProcessor.process_excel(uploaded_file)
-                        elif file_extension == 'csv':
-                            file_data = FileProcessor.process_csv(uploaded_file)
-                        elif file_extension == 'docx' and DOCX_AVAILABLE:
-                            file_data = FileProcessor.process_word(uploaded_file)
-                        elif file_extension == 'pdf' and PDF_AVAILABLE:
-                            file_data = FileProcessor.process_pdf(uploaded_file)
-                        else:
-                            logger.warning(f"Unsupported file type: {file_extension}")
-                            continue
-                            
-                        if file_data and "error" not in file_data:
-                            st.session_state.files_data.append(file_data)
-                        else:
-                            error_msg = file_data.get("error", "Unknown error") if file_data else "No data returned"
-                            st.error(f"Failed to process {uploaded_file.name}: {error_msg}")
-                            
-                    except Exception as e:
-                        logger.error(f"Exception processing {uploaded_file.name}: {str(e)}")
-                        st.error(f"Error processing {uploaded_file.name}: {str(e)}")
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                if st.session_state.files_data:
-                    st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
-                else:
-                    st.error("❌ No files were processed successfully. Please check file formats.")
-        elif st.session_state.uploaded_files_names:
-            st.session_state.uploaded_files_names = []
-            st.session_state.files_data = []
-        
-        # Display uploaded files
-        if st.session_state.files_data:
-            st.markdown("---")
-            st.markdown("### 📋 Uploaded Files")
-            for file_data in st.session_state.files_data:
-                if "error" not in file_data:
-                    file_icon = {
-                        "excel": "📊", 
-                        "csv": "📈", 
-                        "word": "📄", 
-                        "pdf": "📕"
-                    }.get(file_data.get('type'), "📄")
-                    st.markdown(f"""
-                    <div class="file-status">
-                        <div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 8px;">
-                            {file_icon} {file_data.get('filename', 'Unknown')}
-                        </div>
-                        <div style="color: #374151; font-size: 12px;">
-                            {file_data.get('summary', 'No summary')}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.info("Upload files to start analysis")
-        
-        st.markdown("---")
-        
-        # Quick Questions
-        st.title("🎯 Quick Questions")
-        
-        quick_questions = create_quick_questions()
-        
-        for category, questions in quick_questions.items():
-            with st.expander(category, expanded=False):
-                for i, question in enumerate(questions):
-                    if st.button(question, key=f"q_{category}_{i}", use_container_width=True):
-                        if not st.session_state.files_data:
-                            st.warning("Upload files first!")
-                        else:
-                            st.session_state.selected_prompt = question
-                            st.rerun()
-        
-        st.markdown("---")
-        
-        # Clear chat button
-        if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
-            st.session_state.messages = []
-            st.success("Chat history cleared!")
-            st.rerun()
-    
-    # Handle selected prompt
-    if st.session_state.selected_prompt:
-        user_question = st.session_state.selected_prompt
-        st.session_state.messages.append({"role": "user", "content": user_question})
-        
-        with st.spinner("Processing your request..."):
-            try:
-                response = st.session_state.api_client.send_message(
-                    user_question,
-                    st.session_state.files_data
-                )
-                if response:
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-        
-        st.session_state.selected_prompt = None
-        st.rerun()
-    
-    # Chat interface
-    st.markdown("### 💬 Chat with Your Data")
-    
-    # Display chat messages
-    if st.session_state.messages:
-        # Display messages in chat format (chronological order - oldest first)
-        for message in st.session_state.messages:
-            render_custom_message(message["role"], message["content"])
-        
-        # Show message count
-        st.markdown(f"""
-        <div class="chat-stats">
-            📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
-        
-        # Show example questions when no chat history
-        st.markdown("### 💡 Try asking:")
-        st.markdown("• What are the key insights from my data?")
-        st.markdown("• Show me summary statistics")
-        st.markdown("• What trends do you see?")
-        st.markdown("• Check for data quality issues")
-        st.markdown("• Generate a comprehensive report")
-    
-    # Chat input at bottom
-    user_question = st.chat_input("💬 Ask a question about your data...")
-    
-    if user_question:
-        if not st.session_state.files_data:
-            st.warning("Please upload files first to start analysis!")
-        else:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": user_question})
-            
-            with st.spinner("Analyzing your question..."):
-                try:
-                    # Send only current message to API (no conversation history)
-                    response = st.session_state.api_client.send_message(
-                        user_question, 
-                        st.session_state.files_data
-                    )
-                    
-                    if response:
-                        # Store in UI history for display
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-
-if __name__ == "__main__":
-    main(), r'<h2 style="color: #2c3e50; margin: 1.4em 0 0.7em 0; font-weight: 700;">\1</h2>', formatted_content, flags=re.MULTILINE)
-            formatted_content = re.sub(r'^# (.+)
-        
-        st.markdown(f"""
-        <div class="assistant-message-container">
-            <div class="assistant-avatar">
-                AI
-            </div>
-            <div class="assistant-message">
-                {formatted_content}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-def create_quick_questions():
-    """Define categorized quick questions similar to medical chatbot"""
-    return {
-        "📊 Data Overview": [
-            "What are the key insights from my data?",
-            "Provide a comprehensive data summary",
-            "What's the structure of my uploaded files?",
-            "Show me the main statistics"
-        ],
-        "📈 Statistical Analysis": [
-            "Show me summary statistics for all numeric columns",
-            "What are the data distributions and patterns?",
-            "Identify outliers and anomalies in the data",
-            "Calculate correlation between key variables"
-        ],
-        "🔍 Data Quality": [
-            "Check for missing values and data quality issues",
-            "Are there any data inconsistencies?",
-            "Validate data completeness and accuracy",
-            "Suggest data cleaning recommendations"
-        ],
-        "📋 Detailed Insights": [
-            "What trends do you see in the data?",
-            "Compare different segments or categories",
-            "Find patterns and relationships",
-            "Generate actionable business recommendations"
-        ],
-        "🎯 Custom Analysis": [
-            "Perform a deep dive analysis",
-            "Create a comprehensive data report",
-            "What story does this data tell?",
-            "Provide strategic insights and next steps"
-        ]
-    }
-
-def main():
-    """Main application with improved structure and modern chat interface"""
-    
-    # Set pandas options
-    pd.set_option('future.no_silent_downcasting', True)
-    
-    # Initialize session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "files_data" not in st.session_state:
-        st.session_state.files_data = []
-    if "uploaded_files_names" not in st.session_state:
-        st.session_state.uploaded_files_names = []
-    if "api_client" not in st.session_state:
-        st.session_state.api_client = SFAssistAPI()
-    if "selected_prompt" not in st.session_state:
-        st.session_state.selected_prompt = None
-    
-    # Header
-    st.markdown('<h1 class="main-header">💬 Data Chat</h1>', unsafe_allow_html=True)
-    st.markdown("### AI-Powered File Analysis & Insights")
-    
-    # Connection status
-    st.markdown("""
-    <div class="status-indicator status-connected">
-        ✅ Connected to Data Analysis Engine
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # File summary box
-    if st.session_state.files_data:
-        total_files = len(st.session_state.files_data)
-        file_types = list(set([f.get('type', 'unknown') for f in st.session_state.files_data if 'error' not in f]))
-        
-        st.markdown(f"""
-        <div class="analysis-summary-box">
-            <h4 style="margin: 0 0 0.5rem 0; color: #28a745;">📊 Files Loaded</h4>
-            <p style="margin: 0; color: #155724;">
-                <strong>Total Files:</strong> {total_files} | 
-                <strong>Types:</strong> {', '.join(file_types).upper()} | 
-                <strong>Status:</strong> Ready for Analysis
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Sidebar
-    with st.sidebar:
-        st.title("📁 File Upload")
-        
-        # Determine supported file types
-        supported_types = ['xlsx', 'xls', 'csv']
-        type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
-        
-        if DOCX_AVAILABLE:
-            supported_types.extend(['docx'])
-            type_descriptions.append("Word (.docx)")
-        
-        if PDF_AVAILABLE:
-            supported_types.extend(['pdf'])
-            type_descriptions.append("PDF (.pdf)")
-        
-        help_text = f"Supported: {', '.join(type_descriptions)}"
-        
-        # File uploader
-        uploaded_files = st.file_uploader(
-            "Choose files (multiple files supported)",
-            type=supported_types,
-            help=help_text,
-            accept_multiple_files=True
-        )
-        
-        # Process uploaded files
-        if uploaded_files:
-            current_file_names = [f.name for f in uploaded_files]
-            
-            if current_file_names != st.session_state.uploaded_files_names:
-                st.session_state.uploaded_files_names = current_file_names
-                st.session_state.files_data = []
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, uploaded_file in enumerate(uploaded_files):
-                    progress = (i + 1) / len(uploaded_files)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {uploaded_file.name}...")
-                    
-                    file_extension = uploaded_file.name.split('.')[-1].lower()
-                    
-                    try:
-                        if file_extension in ['xlsx', 'xls']:
-                            file_data = FileProcessor.process_excel(uploaded_file)
-                        elif file_extension == 'csv':
-                            file_data = FileProcessor.process_csv(uploaded_file)
-                        elif file_extension == 'docx' and DOCX_AVAILABLE:
-                            file_data = FileProcessor.process_word(uploaded_file)
-                        elif file_extension == 'pdf' and PDF_AVAILABLE:
-                            file_data = FileProcessor.process_pdf(uploaded_file)
-                        else:
-                            logger.warning(f"Unsupported file type: {file_extension}")
-                            continue
-                            
-                        if file_data and "error" not in file_data:
-                            st.session_state.files_data.append(file_data)
-                        else:
-                            error_msg = file_data.get("error", "Unknown error") if file_data else "No data returned"
-                            st.error(f"Failed to process {uploaded_file.name}: {error_msg}")
-                            
-                    except Exception as e:
-                        logger.error(f"Exception processing {uploaded_file.name}: {str(e)}")
-                        st.error(f"Error processing {uploaded_file.name}: {str(e)}")
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                if st.session_state.files_data:
-                    st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
-                else:
-                    st.error("❌ No files were processed successfully. Please check file formats.")
-        elif st.session_state.uploaded_files_names:
-            st.session_state.uploaded_files_names = []
-            st.session_state.files_data = []
-        
-        # Display uploaded files
-        if st.session_state.files_data:
-            st.markdown("---")
-            st.markdown("### 📋 Uploaded Files")
-            for file_data in st.session_state.files_data:
-                if "error" not in file_data:
-                    file_icon = {
-                        "excel": "📊", 
-                        "csv": "📈", 
-                        "word": "📄", 
-                        "pdf": "📕"
-                    }.get(file_data.get('type'), "📄")
-                    st.markdown(f"""
-                    <div class="file-status">
-                        <div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 8px;">
-                            {file_icon} {file_data.get('filename', 'Unknown')}
-                        </div>
-                        <div style="color: #374151; font-size: 12px;">
-                            {file_data.get('summary', 'No summary')}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.info("Upload files to start analysis")
-        
-        st.markdown("---")
-        
-        # Quick Questions
-        st.title("🎯 Quick Questions")
-        
-        quick_questions = create_quick_questions()
-        
-        for category, questions in quick_questions.items():
-            with st.expander(category, expanded=False):
-                for i, question in enumerate(questions):
-                    if st.button(question, key=f"q_{category}_{i}", use_container_width=True):
-                        if not st.session_state.files_data:
-                            st.warning("Upload files first!")
-                        else:
-                            st.session_state.selected_prompt = question
-                            st.rerun()
-        
-        st.markdown("---")
-        
-        # Clear chat button
-        if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
-            st.session_state.messages = []
-            st.success("Chat history cleared!")
-            st.rerun()
-    
-    # Handle selected prompt
-    if st.session_state.selected_prompt:
-        user_question = st.session_state.selected_prompt
-        st.session_state.messages.append({"role": "user", "content": user_question})
-        
-        with st.spinner("Processing your request..."):
-            try:
-                response = st.session_state.api_client.send_message(
-                    user_question,
-                    st.session_state.files_data
-                )
-                if response:
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-        
-        st.session_state.selected_prompt = None
-        st.rerun()
-    
-    # Chat interface
-    st.markdown("### 💬 Chat with Your Data")
-    
-    # Display chat messages
-    if st.session_state.messages:
-        # Display messages in chat format (chronological order - oldest first)
-        for message in st.session_state.messages:
-            render_custom_message(message["role"], message["content"])
-        
-        # Show message count
-        st.markdown(f"""
-        <div class="chat-stats">
-            📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
-        
-        # Show example questions when no chat history
-        st.markdown("### 💡 Try asking:")
-        st.markdown("• What are the key insights from my data?")
-        st.markdown("• Show me summary statistics")
-        st.markdown("• What trends do you see?")
-        st.markdown("• Check for data quality issues")
-        st.markdown("• Generate a comprehensive report")
-    
-    # Chat input at bottom
-    user_question = st.chat_input("💬 Ask a question about your data...")
-    
-    if user_question:
-        if not st.session_state.files_data:
-            st.warning("Please upload files first to start analysis!")
-        else:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": user_question})
-            
-            with st.spinner("Analyzing your question..."):
-                try:
-                    # Send only current message to API (no conversation history)
-                    response = st.session_state.api_client.send_message(
-                        user_question, 
-                        st.session_state.files_data
-                    )
-                    
-                    if response:
-                        # Store in UI history for display
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-
-if __name__ == "__main__":
-    main(), r'<h1 style="color: #2c3e50; margin: 1.5em 0 0.8em 0; font-weight: 800;">\1</h1>', formatted_content, flags=re.MULTILINE)
-            
-            # Convert bold and italic text
+            formatted_content = re.sub(r'^### (.+)$', r'<h3 style="color: #2c3e50; margin: 1.2em 0 0.6em 0; font-weight: 600;">\1</h3>', formatted_content, flags=re.MULTILINE)
+            formatted_content = re.sub(r'^## (.+)$', r'<h2 style="color: #2c3e50; margin: 1.4em 0 0.7em 0; font-weight: 700;">\1</h2>', formatted_content, flags=re.MULTILINE)
+            formatted_content = re.sub(r'^# (.+)$', r'<h1 style="color: #2c3e50; margin: 1.5em 0 0.8em 0; font-weight: 800;">\1</h1>', formatted_content, flags=re.MULTILINE)
             formatted_content = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', formatted_content)
             formatted_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', formatted_content)
-            
-            # Convert bullet points
-            formatted_content = re.sub(r'^\s*[-•]\s*(.+)
-        
-        st.markdown(f"""
-        <div class="assistant-message-container">
-            <div class="assistant-avatar">
-                AI
-            </div>
-            <div class="assistant-message">
-                {formatted_content}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-def create_quick_questions():
-    """Define categorized quick questions similar to medical chatbot"""
-    return {
-        "📊 Data Overview": [
-            "What are the key insights from my data?",
-            "Provide a comprehensive data summary",
-            "What's the structure of my uploaded files?",
-            "Show me the main statistics"
-        ],
-        "📈 Statistical Analysis": [
-            "Show me summary statistics for all numeric columns",
-            "What are the data distributions and patterns?",
-            "Identify outliers and anomalies in the data",
-            "Calculate correlation between key variables"
-        ],
-        "🔍 Data Quality": [
-            "Check for missing values and data quality issues",
-            "Are there any data inconsistencies?",
-            "Validate data completeness and accuracy",
-            "Suggest data cleaning recommendations"
-        ],
-        "📋 Detailed Insights": [
-            "What trends do you see in the data?",
-            "Compare different segments or categories",
-            "Find patterns and relationships",
-            "Generate actionable business recommendations"
-        ],
-        "🎯 Custom Analysis": [
-            "Perform a deep dive analysis",
-            "Create a comprehensive data report",
-            "What story does this data tell?",
-            "Provide strategic insights and next steps"
-        ]
-    }
-
-def main():
-    """Main application with improved structure and modern chat interface"""
-    
-    # Set pandas options
-    pd.set_option('future.no_silent_downcasting', True)
-    
-    # Initialize session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "files_data" not in st.session_state:
-        st.session_state.files_data = []
-    if "uploaded_files_names" not in st.session_state:
-        st.session_state.uploaded_files_names = []
-    if "api_client" not in st.session_state:
-        st.session_state.api_client = SFAssistAPI()
-    if "selected_prompt" not in st.session_state:
-        st.session_state.selected_prompt = None
-    
-    # Header
-    st.markdown('<h1 class="main-header">💬 Data Chat</h1>', unsafe_allow_html=True)
-    st.markdown("### AI-Powered File Analysis & Insights")
-    
-    # Connection status
-    st.markdown("""
-    <div class="status-indicator status-connected">
-        ✅ Connected to Data Analysis Engine
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # File summary box
-    if st.session_state.files_data:
-        total_files = len(st.session_state.files_data)
-        file_types = list(set([f.get('type', 'unknown') for f in st.session_state.files_data if 'error' not in f]))
-        
-        st.markdown(f"""
-        <div class="analysis-summary-box">
-            <h4 style="margin: 0 0 0.5rem 0; color: #28a745;">📊 Files Loaded</h4>
-            <p style="margin: 0; color: #155724;">
-                <strong>Total Files:</strong> {total_files} | 
-                <strong>Types:</strong> {', '.join(file_types).upper()} | 
-                <strong>Status:</strong> Ready for Analysis
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Sidebar
-    with st.sidebar:
-        st.title("📁 File Upload")
-        
-        # Determine supported file types
-        supported_types = ['xlsx', 'xls', 'csv']
-        type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
-        
-        if DOCX_AVAILABLE:
-            supported_types.extend(['docx'])
-            type_descriptions.append("Word (.docx)")
-        
-        if PDF_AVAILABLE:
-            supported_types.extend(['pdf'])
-            type_descriptions.append("PDF (.pdf)")
-        
-        help_text = f"Supported: {', '.join(type_descriptions)}"
-        
-        # File uploader
-        uploaded_files = st.file_uploader(
-            "Choose files (multiple files supported)",
-            type=supported_types,
-            help=help_text,
-            accept_multiple_files=True
-        )
-        
-        # Process uploaded files
-        if uploaded_files:
-            current_file_names = [f.name for f in uploaded_files]
-            
-            if current_file_names != st.session_state.uploaded_files_names:
-                st.session_state.uploaded_files_names = current_file_names
-                st.session_state.files_data = []
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, uploaded_file in enumerate(uploaded_files):
-                    progress = (i + 1) / len(uploaded_files)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing {uploaded_file.name}...")
-                    
-                    file_extension = uploaded_file.name.split('.')[-1].lower()
-                    
-                    try:
-                        if file_extension in ['xlsx', 'xls']:
-                            file_data = FileProcessor.process_excel(uploaded_file)
-                        elif file_extension == 'csv':
-                            file_data = FileProcessor.process_csv(uploaded_file)
-                        elif file_extension == 'docx' and DOCX_AVAILABLE:
-                            file_data = FileProcessor.process_word(uploaded_file)
-                        elif file_extension == 'pdf' and PDF_AVAILABLE:
-                            file_data = FileProcessor.process_pdf(uploaded_file)
-                        else:
-                            logger.warning(f"Unsupported file type: {file_extension}")
-                            continue
-                            
-                        if file_data and "error" not in file_data:
-                            st.session_state.files_data.append(file_data)
-                        else:
-                            error_msg = file_data.get("error", "Unknown error") if file_data else "No data returned"
-                            st.error(f"Failed to process {uploaded_file.name}: {error_msg}")
-                            
-                    except Exception as e:
-                        logger.error(f"Exception processing {uploaded_file.name}: {str(e)}")
-                        st.error(f"Error processing {uploaded_file.name}: {str(e)}")
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                if st.session_state.files_data:
-                    st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
-                else:
-                    st.error("❌ No files were processed successfully. Please check file formats.")
-        elif st.session_state.uploaded_files_names:
-            st.session_state.uploaded_files_names = []
-            st.session_state.files_data = []
-        
-        # Display uploaded files
-        if st.session_state.files_data:
-            st.markdown("---")
-            st.markdown("### 📋 Uploaded Files")
-            for file_data in st.session_state.files_data:
-                if "error" not in file_data:
-                    file_icon = {
-                        "excel": "📊", 
-                        "csv": "📈", 
-                        "word": "📄", 
-                        "pdf": "📕"
-                    }.get(file_data.get('type'), "📄")
-                    st.markdown(f"""
-                    <div class="file-status">
-                        <div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 8px;">
-                            {file_icon} {file_data.get('filename', 'Unknown')}
-                        </div>
-                        <div style="color: #374151; font-size: 12px;">
-                            {file_data.get('summary', 'No summary')}
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-        else:
-            st.info("Upload files to start analysis")
-        
-        st.markdown("---")
-        
-        # Quick Questions
-        st.title("🎯 Quick Questions")
-        
-        quick_questions = create_quick_questions()
-        
-        for category, questions in quick_questions.items():
-            with st.expander(category, expanded=False):
-                for i, question in enumerate(questions):
-                    if st.button(question, key=f"q_{category}_{i}", use_container_width=True):
-                        if not st.session_state.files_data:
-                            st.warning("Upload files first!")
-                        else:
-                            st.session_state.selected_prompt = question
-                            st.rerun()
-        
-        st.markdown("---")
-        
-        # Clear chat button
-        if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
-            st.session_state.messages = []
-            st.success("Chat history cleared!")
-            st.rerun()
-    
-    # Handle selected prompt
-    if st.session_state.selected_prompt:
-        user_question = st.session_state.selected_prompt
-        st.session_state.messages.append({"role": "user", "content": user_question})
-        
-        with st.spinner("Processing your request..."):
-            try:
-                response = st.session_state.api_client.send_message(
-                    user_question,
-                    st.session_state.files_data
-                )
-                if response:
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-        
-        st.session_state.selected_prompt = None
-        st.rerun()
-    
-    # Chat interface
-    st.markdown("### 💬 Chat with Your Data")
-    
-    # Display chat messages
-    if st.session_state.messages:
-        # Display messages in chat format (chronological order - oldest first)
-        for message in st.session_state.messages:
-            render_custom_message(message["role"], message["content"])
-        
-        # Show message count
-        st.markdown(f"""
-        <div class="chat-stats">
-            📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
-        
-        # Show example questions when no chat history
-        st.markdown("### 💡 Try asking:")
-        st.markdown("• What are the key insights from my data?")
-        st.markdown("• Show me summary statistics")
-        st.markdown("• What trends do you see?")
-        st.markdown("• Check for data quality issues")
-        st.markdown("• Generate a comprehensive report")
-    
-    # Chat input at bottom
-    user_question = st.chat_input("💬 Ask a question about your data...")
-    
-    if user_question:
-        if not st.session_state.files_data:
-            st.warning("Please upload files first to start analysis!")
-        else:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": user_question})
-            
-            with st.spinner("Analyzing your question..."):
-                try:
-                    # Send only current message to API (no conversation history)
-                    response = st.session_state.api_client.send_message(
-                        user_question, 
-                        st.session_state.files_data
-                    )
-                    
-                    if response:
-                        # Store in UI history for display
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-
-if __name__ == "__main__":
-    main(), r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
+            formatted_content = re.sub(r'^\s*[-•]\s*(.+)$', r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
         except Exception:
             formatted_content = content.replace('\n', '<br>')
         
@@ -1956,7 +718,7 @@ if __name__ == "__main__":
         """, unsafe_allow_html=True)
 
 def create_quick_questions():
-    """Define categorized quick questions similar to medical chatbot"""
+    """Define categorized quick questions"""
     return {
         "📊 Data Overview": [
             "What are the key insights from my data?",
@@ -1993,10 +755,8 @@ def create_quick_questions():
 def main():
     """Main application with improved structure and modern chat interface"""
     
-    # Set pandas options
     pd.set_option('future.no_silent_downcasting', True)
     
-    # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "files_data" not in st.session_state:
@@ -2008,18 +768,15 @@ def main():
     if "selected_prompt" not in st.session_state:
         st.session_state.selected_prompt = None
     
-    # Header
     st.markdown('<h1 class="main-header">💬 Data Chat</h1>', unsafe_allow_html=True)
     st.markdown("### AI-Powered File Analysis & Insights")
     
-    # Connection status
     st.markdown("""
     <div class="status-indicator status-connected">
         ✅ Connected to Data Analysis Engine
     </div>
     """, unsafe_allow_html=True)
     
-    # File summary box
     if st.session_state.files_data:
         total_files = len(st.session_state.files_data)
         file_types = list(set([f.get('type', 'unknown') for f in st.session_state.files_data if 'error' not in f]))
@@ -2035,11 +792,9 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-    # Sidebar
     with st.sidebar:
         st.title("📁 File Upload")
         
-        # Determine supported file types
         supported_types = ['xlsx', 'xls', 'csv']
         type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
         
@@ -2053,7 +808,6 @@ def main():
         
         help_text = f"Supported: {', '.join(type_descriptions)}"
         
-        # File uploader
         uploaded_files = st.file_uploader(
             "Choose files (multiple files supported)",
             type=supported_types,
@@ -2061,7 +815,6 @@ def main():
             accept_multiple_files=True
         )
         
-        # Process uploaded files
         if uploaded_files:
             current_file_names = [f.name for f in uploaded_files]
             
@@ -2113,7 +866,6 @@ def main():
             st.session_state.uploaded_files_names = []
             st.session_state.files_data = []
         
-        # Display uploaded files
         if st.session_state.files_data:
             st.markdown("---")
             st.markdown("### 📋 Uploaded Files")
@@ -2140,7 +892,6 @@ def main():
         
         st.markdown("---")
         
-        # Quick Questions
         st.title("🎯 Quick Questions")
         
         quick_questions = create_quick_questions()
@@ -2157,13 +908,11 @@ def main():
         
         st.markdown("---")
         
-        # Clear chat button
         if st.button("🗑️ Clear Chat History", key="clear_chat", use_container_width=True):
             st.session_state.messages = []
             st.success("Chat history cleared!")
             st.rerun()
     
-    # Handle selected prompt
     if st.session_state.selected_prompt:
         user_question = st.session_state.selected_prompt
         st.session_state.messages.append({"role": "user", "content": user_question})
@@ -2183,16 +932,12 @@ def main():
         st.session_state.selected_prompt = None
         st.rerun()
     
-    # Chat interface
     st.markdown("### 💬 Chat with Your Data")
     
-    # Display chat messages
     if st.session_state.messages:
-        # Display messages in chat format (chronological order - oldest first)
         for message in st.session_state.messages:
             render_custom_message(message["role"], message["content"])
         
-        # Show message count
         st.markdown(f"""
         <div class="chat-stats">
             📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
@@ -2201,7 +946,6 @@ def main():
     else:
         st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
         
-        # Show example questions when no chat history
         st.markdown("### 💡 Try asking:")
         st.markdown("• What are the key insights from my data?")
         st.markdown("• Show me summary statistics")
@@ -2209,26 +953,22 @@ def main():
         st.markdown("• Check for data quality issues")
         st.markdown("• Generate a comprehensive report")
     
-    # Chat input at bottom
     user_question = st.chat_input("💬 Ask a question about your data...")
     
     if user_question:
         if not st.session_state.files_data:
             st.warning("Please upload files first to start analysis!")
         else:
-            # Add user message
             st.session_state.messages.append({"role": "user", "content": user_question})
             
             with st.spinner("Analyzing your question..."):
                 try:
-                    # Send only current message to API (no conversation history)
                     response = st.session_state.api_client.send_message(
                         user_question, 
                         st.session_state.files_data
                     )
                     
                     if response:
-                        # Store in UI history for display
                         st.session_state.messages.append({"role": "assistant", "content": response})
                         st.rerun()
                         
