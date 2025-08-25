@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -591,10 +590,9 @@ def main():
         height: 70vh;
         overflow-y: auto;
         padding: 40px 30px;
-        background: linear-gradient(to bottom, #fafafa 0%, #f0f9ff 100%);
+        background: transparent;
         border-radius: 20px;
         margin-bottom: 30px;
-        border: 1px solid #e5e7eb;
     }
     .chat-container::-webkit-scrollbar {
         width: 8px;
@@ -624,28 +622,91 @@ def main():
         border: 1px solid #e5e7eb;
     }
     .stTextInput > div > div > input {
-        padding: 18px 24px;
-        border-radius: 30px;
-        border: 3px solid #e5e7eb;
-        font-size: 17px;
+        padding: 20px 28px;
+        border-radius: 25px;
+        border: 2px solid #e2e8f0;
+        font-size: 18px;
         font-weight: 500;
         background: white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        transition: all 0.3s ease;
+        height: 60px;
     }
     .stTextInput > div > div > input:focus {
         border-color: #667eea;
-        box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.15);
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15), 0 4px 12px rgba(0,0,0,0.1);
         outline: none;
+        background: #fefefe;
+    }
+    .stTextInput > div > div > input:hover {
+        border-color: #cbd5e1;
+        box-shadow: 0 6px 16px rgba(0,0,0,0.1);
     }
     .stButton > button {
         border-radius: 25px;
         border: none;
         font-weight: 700;
-        font-size: 15px;
-        padding: 12px 24px;
-        box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+        font-size: 16px;
+        padding: 18px 32px;
+        height: 60px;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+    }
+    .stButton > button:active {
+        transform: translateY(0px);
+        background: linear-gradient(135deg, #4f5dcf 0%, #5d3a7e 100%);
+    }
+    .chat-input-container {
+        background: white;
+        padding: 25px;
+        border-radius: 20px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        margin: 20px 0;
+        border: 1px solid #f1f5f9;
     }
     </style>
+    
+    <script>
+    // Add Enter key functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        function addEnterKeyListener() {
+            const textInput = document.querySelector('input[aria-label="Type your question here..."]');
+            const sendButton = document.querySelector('button[kind="primary"]');
+            
+            if (textInput && sendButton && !textInput.hasAttribute('data-enter-added')) {
+                textInput.setAttribute('data-enter-added', 'true');
+                textInput.addEventListener('keypress', function(event) {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        if (textInput.value.trim()) {
+                            sendButton.click();
+                        }
+                    }
+                });
+            }
+        }
+        
+        // Run initially and on mutations
+        addEnterKeyListener();
+        
+        // Observer for dynamically added elements
+        const observer = new MutationObserver(function() {
+            addEnterKeyListener();
+        });
+        
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    });
+    </script>
     """, unsafe_allow_html=True)
     
     # Initialize session state
@@ -803,20 +864,6 @@ def main():
                                     st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Library status
-        missing_libraries = []
-        if not DOCX_AVAILABLE:
-            missing_libraries.append("Word (.docx)")
-        if not PDF_AVAILABLE:
-            missing_libraries.append("PDF (.pdf)")
-            
-        if missing_libraries:
-            st.markdown("### ⚠️ Optional Libraries")
-            st.info(f"Install these for full support: {', '.join(missing_libraries)}")
-        else:
-            st.markdown("### ✅ All Libraries Available")
-            st.success("Full file format support enabled!")
     
     # Main chat area - display conversation history
     chat_container = st.container()
@@ -830,10 +877,10 @@ def main():
     
     # Chat input
     st.markdown("""
-    <div style="margin: 40px 0 20px 0;">
-        <h3 style="font-size: 24px; font-weight: 700; color: #1f2937; margin-bottom: 15px; 
+    <div class="chat-input-container">
+        <h3 style="font-size: 24px; font-weight: 700; color: #1f2937; margin-bottom: 20px; 
                    display: flex; align-items: center;">
-            <span style="font-size: 28px; margin-right: 10px;">💬</span> Chat with your data
+            <span style="font-size: 28px; margin-right: 10px;">💬</span> Ask a question about your data
         </h3>
     </div>
     """, unsafe_allow_html=True)
@@ -849,7 +896,7 @@ def main():
         )
     
     with col_send:
-        send_clicked = st.button("Send", use_container_width=True)
+        send_clicked = st.button("Send", use_container_width=True, type="primary")
     
     with col_clear:
         clear_clicked = st.button("Clear", use_container_width=True)
