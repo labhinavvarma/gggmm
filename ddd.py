@@ -78,11 +78,11 @@ class FileProcessor:
                         df_clean[col] = df_clean[col].fillna(0)
                 
                 sheet_info = {
-                    "rows": len(df),
-                    "columns": len(df.columns),
-                    "column_names": df.columns.tolist(),
+                    "rows": int(len(df)),
+                    "columns": int(len(df.columns)),
+                    "column_names": [str(col) for col in df.columns.tolist()],
                     "sample_data": df_clean.head(3).to_dict('records'),
-                    "data_types": {k: str(v) for k, v in df.dtypes.to_dict().items()},
+                    "data_types": {str(k): str(v) for k, v in df.dtypes.to_dict().items()},
                     "summary_stats": {}
                 }
                 
@@ -92,7 +92,7 @@ class FileProcessor:
                     try:
                         valid_data = df[col].dropna()
                         if len(valid_data) > 0:
-                            sheet_info["summary_stats"][col] = {
+                            stats = {
                                 "mean": float(valid_data.mean()),
                                 "median": float(valid_data.median()),
                                 "min": float(valid_data.min()),
@@ -100,6 +100,8 @@ class FileProcessor:
                                 "count": int(valid_data.count()),
                                 "null_count": int(df[col].isnull().sum())
                             }
+                            # Convert all stats to strings to avoid type issues
+                            sheet_info["summary_stats"][str(col)] = {str(k): str(v) for k, v in stats.items()}
                     except Exception:
                         continue
                 
@@ -220,11 +222,26 @@ CORE RESPONSIBILITIES:
 • Answer questions accurately based on the available data
 • Explain findings in clear, understandable terms
 
+IMPORTANT: DO NOT PROVIDE ANY CODE OR PROGRAMMING SYNTAX
+• Never include Python, SQL, R, or any programming code
+• Never show technical implementation details
+• Never provide code snippets, functions, or scripts
+• Focus only on business insights, analysis, and recommendations
+• Use plain English explanations and business terminology
+
 COMMUNICATION STYLE:
-• Professional yet conversational tone
-• Use structured formatting for clarity
-• Include specific numbers and data points
+• Professional business language only
+• Use structured formatting with bullet points and headers
+• Include specific numbers, percentages, and data points
 • Provide both summaries and detailed breakdowns
+• Focus on business value and actionable insights
+• Use charts descriptions instead of code to create charts
+
+RESPONSE FORMAT:
+• Start with key findings summary
+• Provide detailed analysis with numbers
+• End with actionable recommendations
+• Use business terminology, not technical jargon
 
 """
         
@@ -237,26 +254,48 @@ COMMUNICATION STYLE:
             if "error" in file_data:
                 continue
                 
-            context += f"FILE {i}: {file_data.get('filename', 'Unknown')}\n"
-            context += f"Type: {file_data.get('type', 'Unknown').upper()}\n"
-            context += f"Summary: {file_data.get('summary', 'N/A')}\n"
-            
-            if file_data.get('type') == 'excel':
-                for sheet_name, sheet_info in file_data.get("sheets", {}).items():
-                    context += f"  Sheet '{sheet_name}': {sheet_info['rows']} rows × {sheet_info['columns']} columns\n"
-                    context += f"  Columns: {', '.join(sheet_info['column_names'][:5])}...\n"
-                        
-            elif file_data.get('type') in ['word', 'pdf']:
-                word_count = file_data.get('word_count', 0)
-                context += f"Content length: {word_count} words\n"
+            try:
+                # Ensure all data is string-safe
+                filename = str(file_data.get('filename', 'Unknown'))
+                file_type = str(file_data.get('type', 'Unknown')).upper()
+                summary = str(file_data.get('summary', 'N/A'))
                 
-                # Include text preview
-                full_text = file_data.get('full_text', '')
-                if full_text:
-                    preview = full_text[:800] + "..." if len(full_text) > 800 else full_text
-                    context += f"Content preview:\n{preview}\n"
-            
-            context += "\n" + "-"*40 + "\n"
+                context += f"FILE {i}: {filename}\n"
+                context += f"Type: {file_type}\n"
+                context += f"Summary: {summary}\n"
+                
+                if file_data.get('type') == 'excel':
+                    sheets = file_data.get("sheets", {})
+                    for sheet_name, sheet_info in sheets.items():
+                        try:
+                            rows = str(sheet_info.get('rows', 0))
+                            columns = str(sheet_info.get('columns', 0))
+                            col_names = sheet_info.get('column_names', [])
+                            col_names_str = ', '.join([str(col) for col in col_names[:5]])
+                            
+                            context += f"  Sheet '{str(sheet_name)}': {rows} rows × {columns} columns\n"
+                            context += f"  Columns: {col_names_str}...\n"
+                        except Exception:
+                            context += f"  Sheet '{str(sheet_name)}': Data available\n"
+                            
+                elif file_data.get('type') in ['word', 'pdf']:
+                    try:
+                        word_count = str(file_data.get('word_count', 0))
+                        context += f"Content length: {word_count} words\n"
+                        
+                        # Include text preview - ensure it's a string
+                        full_text = str(file_data.get('full_text', ''))
+                        if full_text and full_text.strip():
+                            preview = full_text[:800] + "..." if len(full_text) > 800 else full_text
+                            context += f"Content preview:\n{preview}\n"
+                    except Exception:
+                        context += "Content: Text available\n"
+                
+                context += "\n" + "-"*40 + "\n"
+            except Exception as e:
+                # Skip problematic file data
+                context += f"FILE {i}: Error processing file data - {str(e)}\n"
+                continue
         
         return (base_msg + context)[:6000]  # Limit total length
     
@@ -269,14 +308,14 @@ COMMUNICATION STYLE:
             # Create system message
             sys_msg = self.create_system_message(files_context or [])
             
-            # Build messages array
+            # Build messages array - ensure all are strings
             messages = []
             
             # Add recent conversation history
             if conversation_history:
                 for msg in conversation_history[-4:]:  # Limit to last 4 messages
                     if isinstance(msg, dict) and 'content' in msg and 'role' in msg:
-                        if msg['content'].strip():
+                        if str(msg['content']).strip():
                             messages.append({
                                 "role": str(msg['role']),
                                 "content": str(msg['content']).strip()
@@ -288,21 +327,21 @@ COMMUNICATION STYLE:
                 "content": str(user_message).strip()
             })
             
-            # Build payload
+            # Build payload with all string values to avoid type comparison errors
             payload = {
                 "query": {
                     "aplctn_cd": str(self.aplctn_cd),
                     "app_id": str(self.app_id),
                     "api_key": str(self.api_key),
-                    "method": "cortex",
+                    "method": str("cortex"),
                     "model": str(self.model),
                     "sys_msg": str(sys_msg),
-                    "limit_convs": "0",
+                    "limit_convs": str("0"),  # Ensure this is a string
                     "prompt": {
                         "messages": messages
                     },
-                    "app_lvl_prefix": "edadip",
-                    "user_id": "",
+                    "app_lvl_prefix": str("enhanced_data_analyst"),
+                    "user_id": str("data_analyst_enhanced"),
                     "session_id": str(session_id)
                 }
             }
@@ -313,6 +352,15 @@ COMMUNICATION STYLE:
                 "Authorization": f'Snowflake Token="{str(self.api_key)}"'
             }
             
+            # Debug: Print payload types to identify the issue
+            print("=== PAYLOAD DEBUG ===")
+            for key, value in payload["query"].items():
+                print(f"{key}: {type(value).__name__} = {repr(value)}")
+            print("=== MESSAGES DEBUG ===")
+            for i, msg in enumerate(messages):
+                print(f"Message {i}: role={type(msg['role']).__name__}({repr(msg['role'])}), content={type(msg['content']).__name__}(length={len(msg['content'])})")
+            print("=====================")
+            
             response = requests.post(
                 self.api_url, 
                 headers=headers, 
@@ -321,6 +369,10 @@ COMMUNICATION STYLE:
                 timeout=30
             )
             
+            print(f"Response status: {response.status_code}")
+            if response.status_code != 200:
+                print(f"Response content: {response.text}")
+            
             if response.status_code == 200:
                 raw = response.text
                 if "end_of_stream" in raw:
@@ -328,10 +380,13 @@ COMMUNICATION STYLE:
                     return answer.strip()
                 return raw.strip()
             else:
-                st.error(f"API Error {response.status_code}: {response.text}")
+                error_msg = f"API Error {response.status_code}: {response.text}"
+                st.error(error_msg)
                 return None
                 
         except Exception as e:
+            print(f"Exception in send_message: {str(e)}")
+            print(f"Exception type: {type(e).__name__}")
             st.error(f"Request failed: {str(e)}")
             return None
 
