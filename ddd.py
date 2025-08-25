@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -648,16 +649,14 @@ def main():
     """, unsafe_allow_html=True)
     
     # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
     if "files_data" not in st.session_state:
         st.session_state.files_data = []
     if "uploaded_files_names" not in st.session_state:
         st.session_state.uploaded_files_names = []
     if "api_client" not in st.session_state:
         st.session_state.api_client = SFAssistAPI()
-    if "current_response" not in st.session_state:
-        st.session_state.current_response = ""
-    if "current_question" not in st.session_state:
-        st.session_state.current_question = ""
     
     # Header
     st.markdown("""
@@ -790,14 +789,17 @@ def main():
                             st.warning("Upload files first!")
                         else:
                             with st.spinner("Analyzing..."):
+                                # Send only current message to API (no conversation history)
                                 response = st.session_state.api_client.send_message(
                                     detailed_prompt,
                                     st.session_state.files_data
                                 )
                                 
                                 if response:
-                                    st.session_state.current_question = question
-                                    st.session_state.current_response = response
+                                    timestamp = datetime.now().strftime("%H:%M")
+                                    # Store in UI history for display
+                                    st.session_state.messages.append(("user", question, timestamp))
+                                    st.session_state.messages.append(("assistant", response, timestamp))
                                     st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -816,29 +818,15 @@ def main():
             st.markdown("### ✅ All Libraries Available")
             st.success("Full file format support enabled!")
     
-    # Main response area - show only current question and response
-    if st.session_state.current_question or st.session_state.current_response:
+    # Main chat area - display conversation history
+    chat_container = st.container()
+    
+    with chat_container:
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-        
-        if st.session_state.current_question:
-            current_time = datetime.now().strftime("%H:%M")
-            render_chat_message("user", st.session_state.current_question, current_time)
-        
-        if st.session_state.current_response:
-            current_time = datetime.now().strftime("%H:%M")
-            render_chat_message("assistant", st.session_state.current_response, current_time)
-            
+        if st.session_state.messages:
+            for role, message, timestamp in st.session_state.messages:
+                render_chat_message(role, message, timestamp)
         st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        # Show welcome message when no interaction yet
-        st.markdown("""
-        <div style="text-align: center; padding: 60px; background: linear-gradient(to bottom, #fafafa 0%, #f0f9ff 100%); 
-                    border-radius: 20px; margin: 30px 0; border: 1px solid #e5e7eb;">
-            <h2 style="color: #4b5563; margin-bottom: 20px;">Welcome to Data Chat!</h2>
-            <p style="color: #6b7280; font-size: 18px;">Upload your files and ask questions to get AI-powered insights</p>
-            <p style="color: #9ca3af; font-size: 16px; margin-top: 15px;">Supported formats: Excel, CSV, Word, PDF</p>
-        </div>
-        """, unsafe_allow_html=True)
     
     # Chat input
     st.markdown("""
@@ -850,7 +838,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    col_input, col_send = st.columns([5, 1])
+    col_input, col_send, col_clear = st.columns([5, 1, 1])
     
     with col_input:
         user_input = st.text_input(
@@ -863,6 +851,14 @@ def main():
     with col_send:
         send_clicked = st.button("Send", use_container_width=True)
     
+    with col_clear:
+        clear_clicked = st.button("Clear", use_container_width=True)
+    
+    
+    # Handle clear button
+    if clear_clicked:
+        st.session_state.messages = []
+        st.rerun()
     
     # Process input
     if send_clicked and user_input.strip():
@@ -870,14 +866,17 @@ def main():
             st.warning("Please upload files first to start analysis!")
         else:
             with st.spinner("Analyzing your question..."):
+                # Send only current message to API (no conversation history)
                 response = st.session_state.api_client.send_message(
                     user_input, 
                     st.session_state.files_data
                 )
                 
                 if response:
-                    st.session_state.current_question = user_input
-                    st.session_state.current_response = response
+                    timestamp = datetime.now().strftime("%H:%M")
+                    # Store in UI history for display
+                    st.session_state.messages.append(("user", user_input, timestamp))
+                    st.session_state.messages.append(("assistant", response, timestamp))
                     st.rerun()
 
 if __name__ == "__main__":
