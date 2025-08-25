@@ -123,6 +123,90 @@ class FileProcessor:
             
         except Exception as e:
             return {"type": "csv", "filename": file.name, "error": str(e)}
+    
+    @staticmethod
+    def process_word(file) -> Dict[str, Any]:
+        """Process Word documents and extract text"""
+        if not DOCX_AVAILABLE:
+            return {
+                "type": "word", 
+                "filename": file.name,
+                "error": "python-docx library not available"
+            }
+            
+        try:
+            doc = docx.Document(file)
+            
+            paragraphs = []
+            tables_data = []
+            
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    paragraphs.append(para.text.strip())
+            
+            for table in doc.tables:
+                table_data = []
+                for row in table.rows:
+                    row_data = [cell.text.strip() for cell in row.cells]
+                    table_data.append(row_data)
+                tables_data.append(table_data)
+            
+            full_text = "\n".join(paragraphs)
+            
+            return {
+                "type": "word",
+                "filename": file.name,
+                "paragraphs": paragraphs[:50],  # Limit paragraphs
+                "tables": tables_data,
+                "full_text": full_text[:5000],  # Limit text length
+                "summary": f"Word document '{file.name}' with {len(paragraphs)} paragraphs, {len(tables_data)} tables, and {len(full_text.split())} words",
+                "word_count": len(full_text.split())
+            }
+            
+        except Exception as e:
+            return {"type": "word", "filename": file.name, "error": str(e)}
+    
+    @staticmethod
+    def process_pdf(file) -> Dict[str, Any]:
+        """Process PDF files and extract text"""
+        if not PDF_AVAILABLE:
+            return {
+                "type": "pdf", 
+                "filename": file.name,
+                "error": "PyPDF2 library not available"
+            }
+            
+        try:
+            pdf_reader = PyPDF2.PdfReader(file)
+            pages_text = []
+            full_text = ""
+            
+            for page_num, page in enumerate(pdf_reader.pages[:10]):  # Limit to 10 pages
+                try:
+                    page_text = page.extract_text()
+                    pages_text.append({
+                        "page": page_num + 1,
+                        "text": page_text.strip()[:1000]  # Limit page text
+                    })
+                    full_text += page_text + "\n"
+                except Exception as e:
+                    pages_text.append({
+                        "page": page_num + 1,
+                        "text": f"Error extracting text: {str(e)}"
+                    })
+            
+            return {
+                "type": "pdf",
+                "filename": file.name,
+                "pages": pages_text,
+                "full_text": full_text[:5000],  # Limit text length
+                "summary": f"PDF document '{file.name}' with {len(pdf_reader.pages)} pages and {len(full_text.split())} words",
+                "page_count": len(pdf_reader.pages),
+                "word_count": len(full_text.split())
+            }
+            
+        except Exception as e:
+            return {"type": "pdf", "filename": file.name, "error": str(e)}
         """Process Excel files and return structured data"""
         try:
             # Set pandas options to avoid warnings
