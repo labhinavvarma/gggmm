@@ -235,7 +235,7 @@ st.markdown("""
     max-width: 75%;
     box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     border-left: 4px solid #4f46e5;
-    font-size: 16px;
+    font-size: 12px;
     line-height: 1.6;
 }
 
