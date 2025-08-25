@@ -7,18 +7,25 @@ import numpy as np
 import io
 import base64
 import re
+import os
+import logging
 from typing import Dict, Any, List, Optional
 import time
 from datetime import datetime
 import warnings
 
-# Suppress warnings
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Suppress specific warnings
 warnings.filterwarnings('ignore', message='Data Validation extension is not supported')
 warnings.filterwarnings('ignore', message='Mean of empty slice')
 warnings.filterwarnings('ignore', message='Downcasting object dtype arrays')
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
 
+# Handle urllib3 warnings safely
 try:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -29,187 +36,33 @@ except (ImportError, AttributeError):
 try:
     import PyPDF2
     PDF_AVAILABLE = True
+    logger.info("PyPDF2 available - PDF support enabled")
 except ImportError:
     PDF_AVAILABLE = False
-    print("PyPDF2 not available - PDF support disabled")
+    logger.warning("PyPDF2 not available - PDF support disabled")
 
 try:
     import docx
     DOCX_AVAILABLE = True
-    print("python-docx available - Word support enabled")
+    logger.info("python-docx available - Word support enabled")
 except ImportError:
     DOCX_AVAILABLE = False
-    print("python-docx not available - Word support disabled")
+    logger.warning("python-docx not available - Word support disabled")
 
-# === Configuration ===
-API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
-API_KEY = "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0"
-APP_ID = "edadip"
-APLCTN_CD = "edagnai"
-MODEL = "llama3.1-70b"
+# Configuration - Use environment variables for security
+API_URL = os.getenv("API_URL", "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete")
+API_KEY = os.getenv("API_KEY", "78a799ea-a0f6-11ef-a0ce-15a449f7a8b0")  # Default for demo only
+APP_ID = os.getenv("APP_ID", "edadip")
+APLCTN_CD = os.getenv("APLCTN_CD", "edagnai")
+MODEL = os.getenv("MODEL", "llama3.1-70b")
 
 class FileProcessor:
     """Handle different file types and extract content"""
     
     @staticmethod
-    def process_csv(file) -> Dict[str, Any]:
-        """Process CSV files and return structured data"""
-        try:
-            # Set pandas options to avoid warnings
-            pd.set_option('future.no_silent_downcasting', True)
-            
-            # Try different encodings if UTF-8 fails
-            try:
-                df = pd.read_csv(file, encoding='utf-8')
-            except UnicodeDecodeError:
-                file.seek(0)  # Reset file pointer
-                try:
-                    df = pd.read_csv(file, encoding='latin-1')
-                except UnicodeDecodeError:
-                    file.seek(0)  # Reset file pointer
-                    df = pd.read_csv(file, encoding='cp1252')
-            
-            result = {
-                "type": "csv",
-                "filename": file.name,
-                "summary": "",
-                "raw_data": {}
-            }
-            
-            # Clean column names
-            df.columns = df.columns.astype(str).str.strip()
-            
-            # Handle missing values properly
-            df_clean = df.copy()
-            for col in df_clean.columns:
-                if df_clean[col].dtype == 'object':
-                    df_clean[col] = df_clean[col].fillna('').astype(str)
-                else:
-                    df_clean[col] = df_clean[col].fillna(0)
-            
-            sheet_info = {
-                "rows": int(len(df)),
-                "columns": int(len(df.columns)),
-                "column_names": [str(col) for col in df.columns.tolist()],
-                "sample_data": df_clean.head(3).to_dict('records'),
-                "data_types": {str(k): str(v) for k, v in df.dtypes.to_dict().items()},
-                "summary_stats": {}
-            }
-            
-            # Add summary statistics for numeric columns
-            numeric_cols = df.select_dtypes(include=['number']).columns
-            for col in numeric_cols:
-                try:
-                    valid_data = df[col].dropna()
-                    if len(valid_data) > 0:
-                        stats = {
-                            "mean": float(valid_data.mean()),
-                            "median": float(valid_data.median()),
-                            "min": float(valid_data.min()),
-                            "max": float(valid_data.max()),
-                            "count": int(valid_data.count()),
-                            "null_count": int(df[col].isnull().sum())
-                        }
-                        # Convert all stats to strings to avoid type issues
-                        sheet_info["summary_stats"][str(col)] = {str(k): str(v) for k, v in stats.items()}
-                except Exception:
-                    continue
-            
-            result["sheet_info"] = sheet_info
-            result["raw_data"]["main"] = df_clean.head(100).to_dict('records')  # Limit to 100 rows
-            result["summary"] = f"CSV file '{file.name}' with {len(df)} rows and {len(df.columns)} columns"
-            
-            return result
-            
-        except Exception as e:
-            return {"type": "csv", "filename": file.name, "error": str(e)}
-    
-    @staticmethod
-    def process_word(file) -> Dict[str, Any]:
-        """Process Word documents and extract text"""
-        if not DOCX_AVAILABLE:
-            return {
-                "type": "word", 
-                "filename": file.name,
-                "error": "python-docx library not available"
-            }
-            
-        try:
-            doc = docx.Document(file)
-            
-            paragraphs = []
-            tables_data = []
-            
-            for para in doc.paragraphs:
-                if para.text.strip():
-                    paragraphs.append(para.text.strip())
-            
-            for table in doc.tables:
-                table_data = []
-                for row in table.rows:
-                    row_data = [cell.text.strip() for cell in row.cells]
-                    table_data.append(row_data)
-                tables_data.append(table_data)
-            
-            full_text = "\n".join(paragraphs)
-            
-            return {
-                "type": "word",
-                "filename": file.name,
-                "paragraphs": paragraphs[:50],  # Limit paragraphs
-                "tables": tables_data,
-                "full_text": full_text[:5000],  # Limit text length
-                "summary": f"Word document '{file.name}' with {len(paragraphs)} paragraphs, {len(tables_data)} tables, and {len(full_text.split())} words",
-                "word_count": len(full_text.split())
-            }
-            
-        except Exception as e:
-            return {"type": "word", "filename": file.name, "error": str(e)}
-    
-    @staticmethod
-    def process_pdf(file) -> Dict[str, Any]:
-        """Process PDF files and extract text"""
-        if not PDF_AVAILABLE:
-            return {
-                "type": "pdf", 
-                "filename": file.name,
-                "error": "PyPDF2 library not available"
-            }
-            
-        try:
-            pdf_reader = PyPDF2.PdfReader(file)
-            pages_text = []
-            full_text = ""
-            
-            for page_num, page in enumerate(pdf_reader.pages[:10]):  # Limit to 10 pages
-                try:
-                    page_text = page.extract_text()
-                    pages_text.append({
-                        "page": page_num + 1,
-                        "text": page_text.strip()[:1000]  # Limit page text
-                    })
-                    full_text += page_text + "\n"
-                except Exception as e:
-                    pages_text.append({
-                        "page": page_num + 1,
-                        "text": f"Error extracting text: {str(e)}"
-                    })
-            
-            return {
-                "type": "pdf",
-                "filename": file.name,
-                "pages": pages_text,
-                "full_text": full_text[:5000],  # Limit text length
-                "summary": f"PDF document '{file.name}' with {len(pdf_reader.pages)} pages and {len(full_text.split())} words",
-                "page_count": len(pdf_reader.pages),
-                "word_count": len(full_text.split())
-            }
-            
-        except Exception as e:
-            return {"type": "pdf", "filename": file.name, "error": str(e)}
+    def process_excel(file) -> Dict[str, Any]:
         """Process Excel files and return structured data"""
         try:
-            # Set pandas options to avoid warnings
             pd.set_option('future.no_silent_downcasting', True)
             
             excel_data = pd.read_excel(file, sheet_name=None)
@@ -257,13 +110,13 @@ class FileProcessor:
                                 "count": int(valid_data.count()),
                                 "null_count": int(df[col].isnull().sum())
                             }
-                            # Convert all stats to strings to avoid type issues
                             sheet_info["summary_stats"][str(col)] = {str(k): str(v) for k, v in stats.items()}
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"Error processing stats for column {col}: {e}")
                         continue
                 
                 result["sheets"][sheet_name] = sheet_info
-                result["raw_data"][sheet_name] = df_clean.head(100).to_dict('records')  # Limit to 100 rows
+                result["raw_data"][sheet_name] = df_clean.head(100).to_dict('records')
                 
             total_rows = sum(info["rows"] for info in result["sheets"].values())
             total_sheets = len(result["sheets"])
@@ -272,25 +125,30 @@ class FileProcessor:
             return result
             
         except Exception as e:
+            logger.error(f"Error processing Excel file {file.name}: {e}")
             return {"type": "excel", "filename": file.name, "error": str(e)}
     
     @staticmethod
     def process_csv(file) -> Dict[str, Any]:
         """Process CSV files and return structured data"""
         try:
-            # Set pandas options to avoid warnings
             pd.set_option('future.no_silent_downcasting', True)
             
             # Try different encodings if UTF-8 fails
-            try:
-                df = pd.read_csv(file, encoding='utf-8')
-            except UnicodeDecodeError:
-                file.seek(0)  # Reset file pointer
+            encodings_to_try = ['utf-8', 'latin-1', 'cp1252']
+            df = None
+            
+            for encoding in encodings_to_try:
                 try:
-                    df = pd.read_csv(file, encoding='latin-1')
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding=encoding)
+                    logger.info(f"Successfully read CSV with {encoding} encoding")
+                    break
                 except UnicodeDecodeError:
-                    file.seek(0)  # Reset file pointer
-                    df = pd.read_csv(file, encoding='cp1252')
+                    continue
+            
+            if df is None:
+                raise ValueError("Could not read CSV file with any encoding")
             
             result = {
                 "type": "csv",
@@ -333,18 +191,19 @@ class FileProcessor:
                             "count": int(valid_data.count()),
                             "null_count": int(df[col].isnull().sum())
                         }
-                        # Convert all stats to strings to avoid type issues
                         sheet_info["summary_stats"][str(col)] = {str(k): str(v) for k, v in stats.items()}
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Error processing stats for column {col}: {e}")
                     continue
             
             result["sheet_info"] = sheet_info
-            result["raw_data"]["main"] = df_clean.head(100).to_dict('records')  # Limit to 100 rows
+            result["raw_data"]["main"] = df_clean.head(100).to_dict('records')
             result["summary"] = f"CSV file '{file.name}' with {len(df)} rows and {len(df.columns)} columns"
             
             return result
             
         except Exception as e:
+            logger.error(f"Error processing CSV file {file.name}: {e}")
             return {"type": "csv", "filename": file.name, "error": str(e)}
     
     @staticmethod
@@ -354,7 +213,7 @@ class FileProcessor:
             return {
                 "type": "word", 
                 "filename": file.name,
-                "error": "python-docx library not available"
+                "error": "python-docx library not available. Install with: pip install python-docx"
             }
             
         try:
@@ -379,14 +238,15 @@ class FileProcessor:
             return {
                 "type": "word",
                 "filename": file.name,
-                "paragraphs": paragraphs[:50],  # Limit paragraphs
+                "paragraphs": paragraphs[:50],
                 "tables": tables_data,
-                "full_text": full_text[:5000],  # Limit text length
+                "full_text": full_text[:5000],
                 "summary": f"Word document '{file.name}' with {len(paragraphs)} paragraphs, {len(tables_data)} tables, and {len(full_text.split())} words",
                 "word_count": len(full_text.split())
             }
             
         except Exception as e:
+            logger.error(f"Error processing Word file {file.name}: {e}")
             return {"type": "word", "filename": file.name, "error": str(e)}
     
     @staticmethod
@@ -396,7 +256,7 @@ class FileProcessor:
             return {
                 "type": "pdf", 
                 "filename": file.name,
-                "error": "PyPDF2 library not available"
+                "error": "PyPDF2 library not available. Install with: pip install PyPDF2"
             }
             
         try:
@@ -404,15 +264,20 @@ class FileProcessor:
             pages_text = []
             full_text = ""
             
-            for page_num, page in enumerate(pdf_reader.pages[:10]):  # Limit to 10 pages
+            # Limit to 10 pages to prevent memory issues
+            pages_to_process = min(10, len(pdf_reader.pages))
+            
+            for page_num in range(pages_to_process):
                 try:
+                    page = pdf_reader.pages[page_num]
                     page_text = page.extract_text()
                     pages_text.append({
                         "page": page_num + 1,
-                        "text": page_text.strip()[:1000]  # Limit page text
+                        "text": page_text.strip()[:1000]
                     })
                     full_text += page_text + "\n"
                 except Exception as e:
+                    logger.warning(f"Error extracting text from page {page_num + 1}: {e}")
                     pages_text.append({
                         "page": page_num + 1,
                         "text": f"Error extracting text: {str(e)}"
@@ -422,17 +287,18 @@ class FileProcessor:
                 "type": "pdf",
                 "filename": file.name,
                 "pages": pages_text,
-                "full_text": full_text[:5000],  # Limit text length
+                "full_text": full_text[:5000],
                 "summary": f"PDF document '{file.name}' with {len(pdf_reader.pages)} pages and {len(full_text.split())} words",
                 "page_count": len(pdf_reader.pages),
                 "word_count": len(full_text.split())
             }
             
         except Exception as e:
+            logger.error(f"Error processing PDF file {file.name}: {e}")
             return {"type": "pdf", "filename": file.name, "error": str(e)}
 
 class SFAssistAPI:
-    """Enhanced API client with better conversation handling"""
+    """Enhanced API client with better error handling and security"""
     
     def __init__(self):
         self.api_url = API_URL
@@ -440,6 +306,7 @@ class SFAssistAPI:
         self.app_id = APP_ID
         self.aplctn_cd = APLCTN_CD
         self.model = MODEL
+        self.session_id = str(uuid.uuid4())  # Maintain session consistency
     
     def create_system_message(self, files_data: List[Dict[str, Any]]) -> str:
         """Create system message with file context"""
@@ -465,14 +332,13 @@ COMMUNICATION STYLE:
 • Include specific numbers, percentages, and data points
 • Provide both summaries and detailed breakdowns
 • Focus on business value and actionable insights
-• Use charts descriptions instead of code to create charts
+• Use chart descriptions instead of code to create charts
 
 RESPONSE FORMAT:
 • Start with key findings summary
 • Provide detailed analysis with numbers
 • End with actionable recommendations
 • Use business terminology, not technical jargon
-
 """
         
         if not files_data:
@@ -482,10 +348,10 @@ RESPONSE FORMAT:
         
         for i, file_data in enumerate(files_data, 1):
             if "error" in file_data:
+                context += f"FILE {i}: {file_data.get('filename', 'Unknown')} - Error: {file_data['error']}\n\n"
                 continue
                 
             try:
-                # Ensure all data is string-safe
                 filename = str(file_data.get('filename', 'Unknown'))
                 file_type = str(file_data.get('type', 'Unknown')).upper()
                 summary = str(file_data.get('summary', 'N/A'))
@@ -497,89 +363,88 @@ RESPONSE FORMAT:
                 if file_data.get('type') == 'excel':
                     sheets = file_data.get("sheets", {})
                     for sheet_name, sheet_info in sheets.items():
-                        try:
-                            rows = str(sheet_info.get('rows', 0))
-                            columns = str(sheet_info.get('columns', 0))
-                            col_names = sheet_info.get('column_names', [])
-                            col_names_str = ', '.join([str(col) for col in col_names[:5]])
-                            
-                            context += f"  Sheet '{str(sheet_name)}': {rows} rows × {columns} columns\n"
-                            context += f"  Columns: {col_names_str}...\n"
-                        except Exception:
-                            context += f"  Sheet '{str(sheet_name)}': Data available\n"
-                
-                elif file_data.get('type') == 'csv':
-                    try:
-                        sheet_info = file_data.get("sheet_info", {})
                         rows = str(sheet_info.get('rows', 0))
                         columns = str(sheet_info.get('columns', 0))
                         col_names = sheet_info.get('column_names', [])
                         col_names_str = ', '.join([str(col) for col in col_names[:5]])
+                        if len(col_names) > 5:
+                            col_names_str += "..."
                         
-                        context += f"  CSV Data: {rows} rows × {columns} columns\n"
-                        context += f"  Columns: {col_names_str}...\n"
-                        
-                        # Add summary stats if available
-                        summary_stats = sheet_info.get('summary_stats', {})
-                        if summary_stats:
-                            context += f"  Numeric columns with stats: {', '.join(summary_stats.keys())}\n"
-                    except Exception:
-                        context += "  CSV Data: Available\n"
+                        context += f"  Sheet '{str(sheet_name)}': {rows} rows × {columns} columns\n"
+                        context += f"  Columns: {col_names_str}\n"
+                
+                elif file_data.get('type') == 'csv':
+                    sheet_info = file_data.get("sheet_info", {})
+                    rows = str(sheet_info.get('rows', 0))
+                    columns = str(sheet_info.get('columns', 0))
+                    col_names = sheet_info.get('column_names', [])
+                    col_names_str = ', '.join([str(col) for col in col_names[:5]])
+                    if len(col_names) > 5:
+                        col_names_str += "..."
+                    
+                    context += f"  CSV Data: {rows} rows × {columns} columns\n"
+                    context += f"  Columns: {col_names_str}\n"
+                    
+                    summary_stats = sheet_info.get('summary_stats', {})
+                    if summary_stats:
+                        context += f"  Numeric columns with stats: {', '.join(summary_stats.keys())}\n"
                             
                 elif file_data.get('type') in ['word', 'pdf']:
-                    try:
-                        word_count = str(file_data.get('word_count', 0))
-                        context += f"Content length: {word_count} words\n"
-                        
-                        # Include text preview - ensure it's a string
-                        full_text = str(file_data.get('full_text', ''))
-                        if full_text and full_text.strip():
-                            preview = full_text[:800] + "..." if len(full_text) > 800 else full_text
-                            context += f"Content preview:\n{preview}\n"
-                    except Exception:
-                        context += "Content: Text available\n"
+                    word_count = str(file_data.get('word_count', 0))
+                    context += f"  Content length: {word_count} words\n"
+                    
+                    full_text = str(file_data.get('full_text', ''))
+                    if full_text and full_text.strip():
+                        preview = full_text[:500] + "..." if len(full_text) > 500 else full_text
+                        context += f"  Content preview: {preview}\n"
                 
                 context += "\n" + "-"*40 + "\n"
             except Exception as e:
-                # Skip problematic file data
-                context += f"FILE {i}: Error processing file data - {str(e)}\n"
+                logger.error(f"Error processing file data for context: {e}")
+                context += f"FILE {i}: Error processing file data\n\n"
                 continue
         
-        return (base_msg + context)[:6000]  # Limit total length
+        return (base_msg + context)[:8000]  # Reasonable limit for context
     
     def send_message(self, user_message: str, files_context: List[Dict[str, Any]] = None, 
                     conversation_history: List[Dict[str, str]] = None) -> Optional[str]:
-        """Send message with proper error handling - NO CONVERSATION HISTORY"""
+        """Send message with proper error handling and conversation support"""
         try:
-            session_id = str(uuid.uuid4())
-            
-            # Create system message
             sys_msg = self.create_system_message(files_context or [])
             
-            # Build messages array - ONLY current message, no history
-            messages = [
-                {
-                    "role": "user",
-                    "content": str(user_message).strip()
-                }
-            ]
+            # Build messages array with conversation history
+            messages = []
             
-            # Build payload with all string values to avoid type comparison errors
+            # Add conversation history if provided (last 4 messages to keep context reasonable)
+            if conversation_history:
+                for msg in conversation_history[-4:]:
+                    if msg.get('role') and msg.get('content'):
+                        messages.append({
+                            "role": str(msg['role']),
+                            "content": str(msg['content']).strip()
+                        })
+            
+            # Add current message
+            messages.append({
+                "role": "user",
+                "content": str(user_message).strip()
+            })
+            
             payload = {
                 "query": {
                     "aplctn_cd": str(self.aplctn_cd),
                     "app_id": str(self.app_id),
                     "api_key": str(self.api_key),
-                    "method": str("cortex"),
+                    "method": "cortex",
                     "model": str(self.model),
                     "sys_msg": str(sys_msg),
-                    "limit_convs": str("0"),  # Ensure this is a string
+                    "limit_convs": "0",
                     "prompt": {
                         "messages": messages
                     },
-                    "app_lvl_prefix": str("enhanced_data_analyst"),
-                    "user_id": str("data_analyst_enhanced"),
-                    "session_id": str(session_id)
+                    "app_lvl_prefix": "enhanced_data_analyst",
+                    "user_id": "data_analyst_enhanced",
+                    "session_id": str(self.session_id)
                 }
             }
             
@@ -589,23 +454,20 @@ RESPONSE FORMAT:
                 "Authorization": f'Snowflake Token="{str(self.api_key)}"'
             }
             
-            # Debug: Print payload types to identify the issue
-            print("=== PAYLOAD DEBUG ===")
-            print(f"Messages count: {len(messages)}")
-            print(f"Current message: {messages[0]['content'][:50]}...")
-            print("=====================")
+            logger.info(f"Sending request with {len(messages)} messages")
+            
+            # Use verify=True for production security
+            verify_ssl = os.getenv("VERIFY_SSL", "false").lower() == "true"
             
             response = requests.post(
                 self.api_url, 
                 headers=headers, 
                 json=payload, 
-                verify=False, 
-                timeout=30
+                verify=verify_ssl, 
+                timeout=60
             )
             
-            print(f"Response status: {response.status_code}")
-            if response.status_code != 200:
-                print(f"Response content: {response.text}")
+            logger.info(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 raw = response.text
@@ -614,20 +476,31 @@ RESPONSE FORMAT:
                     return answer.strip()
                 return raw.strip()
             else:
-                error_msg = f"API Error {response.status_code}: {response.text}"
+                error_msg = f"API Error {response.status_code}: {response.text[:500]}"
+                logger.error(error_msg)
                 st.error(error_msg)
                 return None
                 
+        except requests.exceptions.Timeout:
+            error_msg = "Request timed out. Please try again."
+            logger.error(error_msg)
+            st.error(error_msg)
+            return None
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Request failed: {str(e)}"
+            logger.error(error_msg)
+            st.error(error_msg)
+            return None
         except Exception as e:
-            print(f"Exception in send_message: {str(e)}")
-            print(f"Exception type: {type(e).__name__}")
-            st.error(f"Request failed: {str(e)}")
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(error_msg)
+            st.error(error_msg)
             return None
 
 def create_quick_questions():
     """Define quick questions for different file types"""
     return {
-        "📊 Data Analysis": {
+        "Data Analysis": {
             "What are the key insights from my data?": "Analyze the uploaded files and provide the top 5 key insights with supporting data points.",
             "Show me summary statistics": "Provide comprehensive summary statistics for all numeric columns.",
             "What trends do you see?": "Identify and explain the main trends, patterns, and correlations in the data.",
@@ -635,7 +508,7 @@ def create_quick_questions():
             "Compare different segments": "Compare and contrast different segments, categories, or groups in the data.",
             "What recommendations do you have?": "Based on the data analysis, provide specific actionable recommendations."
         },
-        "📋 Document Analysis": {
+        "Document Analysis": {
             "Summarize the main points": "Provide a comprehensive summary of the main points, findings, and conclusions from the document.",
             "Extract key data and metrics": "Extract all numerical data, statistics, and key metrics mentioned in the document.",
             "What are the recommendations?": "Identify and summarize all recommendations, action items, and next steps mentioned in the document.",
@@ -660,16 +533,13 @@ def render_chat_message(role: str, content: str, timestamp: str):
         </div>
         """, unsafe_allow_html=True)
     else:
-        # Simple content formatting
         formatted_content = content.replace('\n', '<br>')
         
-        # Handle bold and italic text safely
         try:
             formatted_content = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', formatted_content)
             formatted_content = re.sub(r'\*(.*?)\*', r'<em>\1</em>', formatted_content)
             formatted_content = re.sub(r'^\s*[-•]\s*(.+)$', r'&nbsp;&nbsp;• \1', formatted_content, flags=re.MULTILINE)
         except Exception:
-            # If regex fails, just use the original content
             formatted_content = content.replace('\n', '<br>')
         
         st.markdown(f"""
@@ -680,7 +550,7 @@ def render_chat_message(role: str, content: str, timestamp: str):
                             display: flex; align-items: center; justify-content: center; 
                             margin-right: 18px; font-size: 24px; font-weight: bold;
                             box-shadow: 0 3px 10px rgba(79, 70, 229, 0.3);">
-                    🤖
+                    AI
                 </div>
                 <div style="background: white; color: #1f2937; padding: 28px 32px; 
                             border-radius: 25px 25px 25px 8px; 
@@ -692,7 +562,7 @@ def render_chat_message(role: str, content: str, timestamp: str):
                     </div>
                     <div style="font-size: 13px; color: #6b7280; border-top: 1px solid #f3f4f6; 
                                 padding-top: 12px; font-weight: 500;">
-                        💬 Data Chat • {timestamp}
+                        Data Chat • {timestamp}
                     </div>
                 </div>
             </div>
@@ -700,11 +570,11 @@ def render_chat_message(role: str, content: str, timestamp: str):
         """, unsafe_allow_html=True)
 
 def main():
-    """Main application with stable functionality"""
+    """Main application with improved structure and error handling"""
     
     # Page configuration
     st.set_page_config(
-        page_title="Data Chat",
+        page_title="Data Chat - AI File Analysis",
         page_icon="💬",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -756,12 +626,6 @@ def main():
         margin: 20px 0;
         border: 1px solid #e5e7eb;
     }
-    .stExpander {
-        border: 2px solid #e5e7eb;
-        border-radius: 12px;
-        margin: 10px 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
     .stTextInput > div > div > input {
         padding: 18px 24px;
         border-radius: 30px;
@@ -784,10 +648,6 @@ def main():
         padding: 12px 24px;
         box-shadow: 0 3px 6px rgba(0,0,0,0.1);
     }
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -798,9 +658,8 @@ def main():
         st.session_state.files_data = []
     if "uploaded_files_names" not in st.session_state:
         st.session_state.uploaded_files_names = []
-    
-    # Initialize API client
-    api_client = SFAssistAPI()
+    if "api_client" not in st.session_state:
+        st.session_state.api_client = SFAssistAPI()
     
     # Header
     st.markdown("""
@@ -808,7 +667,7 @@ def main():
                 color: white; border-radius: 20px; margin-bottom: 30px; box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);">
         <div style="font-size: 50px; margin-bottom: 15px;">💬</div>
         <h1 style="margin: 0; font-size: 48px; font-weight: 800;">Data Chat</h1>
-        <p style="margin: 15px 0 0 0; font-size: 20px; opacity: 0.95;">Chat with your files using AI</p>
+        <p style="margin: 15px 0 0 0; font-size: 20px; opacity: 0.95;">AI-Powered File Analysis & Insights</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -818,7 +677,7 @@ def main():
         st.header("📁 Upload Files")
         
         # Determine supported file types
-        supported_types = ['xlsx', 'xls', 'csv']  # Always support Excel and CSV
+        supported_types = ['xlsx', 'xls', 'csv']
         type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
         
         if DOCX_AVAILABLE:
@@ -843,51 +702,51 @@ def main():
         if uploaded_files:
             current_file_names = [f.name for f in uploaded_files]
             
-            # Check if we have new files or need to reprocess
             if current_file_names != st.session_state.uploaded_files_names:
                 st.session_state.uploaded_files_names = current_file_names
-                st.session_state.files_data = []  # Reset files data
+                st.session_state.files_data = []
                 
-                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
-                    for uploaded_file in uploaded_files:
-                        file_extension = uploaded_file.name.split('.')[-1].lower()
-                        
-                        try:
-                            print(f"Processing file: {uploaded_file.name} (type: {file_extension})")
-                            
-                            if file_extension in ['xlsx', 'xls']:
-                                file_data = FileProcessor.process_excel(uploaded_file)
-                            elif file_extension == 'csv':
-                                file_data = FileProcessor.process_csv(uploaded_file)
-                            elif file_extension == 'docx' and DOCX_AVAILABLE:
-                                file_data = FileProcessor.process_word(uploaded_file)
-                            elif file_extension == 'pdf' and PDF_AVAILABLE:
-                                file_data = FileProcessor.process_pdf(uploaded_file)
-                            else:
-                                print(f"Unsupported file type: {file_extension}")
-                                continue
-                                
-                            print(f"File data result: {type(file_data)}, has error: {'error' in file_data}")
-                            
-                            if file_data and "error" not in file_data:
-                                st.session_state.files_data.append(file_data)
-                                print(f"Successfully added {uploaded_file.name} to files_data")
-                            else:
-                                error_msg = file_data.get("error", "Unknown error") if file_data else "No data returned"
-                                st.error(f"Failed to process {uploaded_file.name}: {error_msg}")
-                                
-                        except Exception as e:
-                            print(f"Exception processing {uploaded_file.name}: {str(e)}")
-                            st.error(f"Error processing {uploaded_file.name}: {str(e)}")
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                print(f"Total files processed: {len(st.session_state.files_data)}")
+                for i, uploaded_file in enumerate(uploaded_files):
+                    progress = (i + 1) / len(uploaded_files)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing {uploaded_file.name}...")
+                    
+                    file_extension = uploaded_file.name.split('.')[-1].lower()
+                    
+                    try:
+                        if file_extension in ['xlsx', 'xls']:
+                            file_data = FileProcessor.process_excel(uploaded_file)
+                        elif file_extension == 'csv':
+                            file_data = FileProcessor.process_csv(uploaded_file)
+                        elif file_extension == 'docx' and DOCX_AVAILABLE:
+                            file_data = FileProcessor.process_word(uploaded_file)
+                        elif file_extension == 'pdf' and PDF_AVAILABLE:
+                            file_data = FileProcessor.process_pdf(uploaded_file)
+                        else:
+                            logger.warning(f"Unsupported file type: {file_extension}")
+                            continue
+                            
+                        if file_data and "error" not in file_data:
+                            st.session_state.files_data.append(file_data)
+                        else:
+                            error_msg = file_data.get("error", "Unknown error") if file_data else "No data returned"
+                            st.error(f"Failed to process {uploaded_file.name}: {error_msg}")
+                            
+                    except Exception as e:
+                        logger.error(f"Exception processing {uploaded_file.name}: {str(e)}")
+                        st.error(f"Error processing {uploaded_file.name}: {str(e)}")
+                
+                progress_bar.empty()
+                status_text.empty()
                 
                 if st.session_state.files_data:
                     st.success(f"✅ {len(st.session_state.files_data)} file(s) processed successfully!")
                 else:
                     st.error("❌ No files were processed successfully. Please check file formats.")
         elif st.session_state.uploaded_files_names:
-            # Files were removed
             st.session_state.uploaded_files_names = []
             st.session_state.files_data = []
         
@@ -915,10 +774,7 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            if st.session_state.uploaded_files_names:
-                st.warning("Files uploaded but not processed correctly.")
-            else:
-                st.info("No files uploaded yet.")
+            st.info("No files uploaded yet.")
         
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -935,56 +791,52 @@ def main():
                         if not st.session_state.files_data:
                             st.warning("Upload files first!")
                         else:
-                            with st.spinner("🤔 Analyzing..."):
-                                # Send to API without conversation history
-                                response = api_client.send_message(
+                            with st.spinner("Analyzing..."):
+                                conversation_history = []
+                                for role, message, _ in st.session_state.messages[-4:]:
+                                    conversation_history.append({"role": role, "content": message})
+                                
+                                response = st.session_state.api_client.send_message(
                                     detailed_prompt,
-                                    st.session_state.files_data
+                                    st.session_state.files_data,
+                                    conversation_history
                                 )
                                 
                                 if response:
                                     timestamp = datetime.now().strftime("%H:%M")
-                                    # Store with explicit string conversion
-                                    st.session_state.messages.append((str("user"), str(question), str(timestamp)))
-                                    st.session_state.messages.append((str("assistant"), str(response), str(timestamp)))
+                                    st.session_state.messages.append(("user", question, timestamp))
+                                    st.session_state.messages.append(("assistant", response, timestamp))
                                     st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Library status - only show if there are issues
+        # Library status
         missing_libraries = []
         if not DOCX_AVAILABLE:
-            missing_libraries.append("📄 Word (.docx)")
+            missing_libraries.append("Word (.docx)")
         if not PDF_AVAILABLE:
-            missing_libraries.append("📕 PDF (.pdf)")
+            missing_libraries.append("PDF (.pdf)")
             
         if missing_libraries:
             st.markdown("### ⚠️ Optional Libraries")
             st.info(f"Install these for full support: {', '.join(missing_libraries)}")
-            
-            if not DOCX_AVAILABLE:
-                st.markdown("**Install Word support:** `pip install python-docx`")
-            if not PDF_AVAILABLE:
-                st.markdown("**Install PDF support:** `pip install PyPDF2`")
         else:
-            # Show success status
             st.markdown("### ✅ All Libraries Available")
-            st.success("Excel, CSV, Word, and PDF support fully enabled!")
+            st.success("Full file format support enabled!")
     
     # Main chat area
     chat_container = st.container()
     
     with chat_container:
-        # Always show chat container, no welcome boxes
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
         if st.session_state.messages:
             for role, message, timestamp in st.session_state.messages:
                 render_chat_message(role, message, timestamp)
         else:
-            # Show simple message when no chats exist
             st.markdown("""
             <div style="text-align: center; padding: 40px; color: #6b7280;">
-                <h3 style="color: #4b5563;">Upload files in the sidebar and start chatting!</h3>
+                <h3 style="color: #4b5563;">Upload files and start chatting with your data!</h3>
+                <p>Supported formats: Excel, CSV, Word, PDF</p>
             </div>
             """, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1005,14 +857,15 @@ def main():
         user_input = st.text_input(
             "Type your question here...",
             placeholder="e.g., What are the key insights from my data?",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="user_input"
         )
     
     with col_send:
-        send_clicked = st.button("Send 🚀", use_container_width=True)
+        send_clicked = st.button("Send", use_container_width=True)
     
     with col_clear:
-        clear_clicked = st.button("Clear 🗑️", use_container_width=True)
+        clear_clicked = st.button("Clear", use_container_width=True)
     
     if clear_clicked:
         st.session_state.messages = []
@@ -1023,14 +876,12 @@ def main():
         if not st.session_state.files_data:
             st.warning("Please upload files first to start analysis!")
         else:
-            with st.spinner("🤔 Analyzing your question..."):
-                # Get conversation history
+            with st.spinner("Analyzing your question..."):
                 conversation_history = []
                 for role, message, _ in st.session_state.messages[-4:]:
                     conversation_history.append({"role": role, "content": message})
                 
-                # Send to API
-                response = api_client.send_message(
+                response = st.session_state.api_client.send_message(
                     user_input, 
                     st.session_state.files_data,
                     conversation_history
