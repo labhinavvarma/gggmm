@@ -31,12 +31,15 @@ try:
     PDF_AVAILABLE = True
 except ImportError:
     PDF_AVAILABLE = False
+    print("PyPDF2 not available - PDF support disabled")
 
 try:
     import docx
     DOCX_AVAILABLE = True
+    print("python-docx available - Word support enabled")
 except ImportError:
     DOCX_AVAILABLE = False
+    print("python-docx not available - Word support disabled")
 
 # === Configuration ===
 API_URL = "https://sfassist.edagenaidev.awsdns.internal.das/api/cortex/complete"
@@ -49,7 +52,77 @@ class FileProcessor:
     """Handle different file types and extract content"""
     
     @staticmethod
-    def process_excel(file) -> Dict[str, Any]:
+    def process_csv(file) -> Dict[str, Any]:
+        """Process CSV files and return structured data"""
+        try:
+            # Set pandas options to avoid warnings
+            pd.set_option('future.no_silent_downcasting', True)
+            
+            # Try different encodings if UTF-8 fails
+            try:
+                df = pd.read_csv(file, encoding='utf-8')
+            except UnicodeDecodeError:
+                file.seek(0)  # Reset file pointer
+                try:
+                    df = pd.read_csv(file, encoding='latin-1')
+                except UnicodeDecodeError:
+                    file.seek(0)  # Reset file pointer
+                    df = pd.read_csv(file, encoding='cp1252')
+            
+            result = {
+                "type": "csv",
+                "filename": file.name,
+                "summary": "",
+                "raw_data": {}
+            }
+            
+            # Clean column names
+            df.columns = df.columns.astype(str).str.strip()
+            
+            # Handle missing values properly
+            df_clean = df.copy()
+            for col in df_clean.columns:
+                if df_clean[col].dtype == 'object':
+                    df_clean[col] = df_clean[col].fillna('').astype(str)
+                else:
+                    df_clean[col] = df_clean[col].fillna(0)
+            
+            sheet_info = {
+                "rows": int(len(df)),
+                "columns": int(len(df.columns)),
+                "column_names": [str(col) for col in df.columns.tolist()],
+                "sample_data": df_clean.head(3).to_dict('records'),
+                "data_types": {str(k): str(v) for k, v in df.dtypes.to_dict().items()},
+                "summary_stats": {}
+            }
+            
+            # Add summary statistics for numeric columns
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            for col in numeric_cols:
+                try:
+                    valid_data = df[col].dropna()
+                    if len(valid_data) > 0:
+                        stats = {
+                            "mean": float(valid_data.mean()),
+                            "median": float(valid_data.median()),
+                            "min": float(valid_data.min()),
+                            "max": float(valid_data.max()),
+                            "count": int(valid_data.count()),
+                            "null_count": int(df[col].isnull().sum())
+                        }
+                        # Convert all stats to strings to avoid type issues
+                        sheet_info["summary_stats"][str(col)] = {str(k): str(v) for k, v in stats.items()}
+                except Exception:
+                    continue
+            
+            result["sheet_info"] = sheet_info
+            result["raw_data"]["main"] = df_clean.head(100).to_dict('records')  # Limit to 100 rows
+            result["summary"] = f"CSV file '{file.name}' with {len(df)} rows and {len(df.columns)} columns"
+            
+            return result
+            
+        except Exception as e:
+            return {"type": "csv", "filename": file.name, "error": str(e)}
         """Process Excel files and return structured data"""
         try:
             # Set pandas options to avoid warnings
@@ -277,6 +350,24 @@ RESPONSE FORMAT:
                             context += f"  Columns: {col_names_str}...\n"
                         except Exception:
                             context += f"  Sheet '{str(sheet_name)}': Data available\n"
+                
+                elif file_data.get('type') == 'csv':
+                    try:
+                        sheet_info = file_data.get("sheet_info", {})
+                        rows = str(sheet_info.get('rows', 0))
+                        columns = str(sheet_info.get('columns', 0))
+                        col_names = sheet_info.get('column_names', [])
+                        col_names_str = ', '.join([str(col) for col in col_names[:5]])
+                        
+                        context += f"  CSV Data: {rows} rows × {columns} columns\n"
+                        context += f"  Columns: {col_names_str}...\n"
+                        
+                        # Add summary stats if available
+                        summary_stats = sheet_info.get('summary_stats', {})
+                        if summary_stats:
+                            context += f"  Numeric columns with stats: {', '.join(summary_stats.keys())}\n"
+                    except Exception:
+                        context += "  CSV Data: Available\n"
                             
                 elif file_data.get('type') in ['word', 'pdf']:
                     try:
@@ -604,8 +695,8 @@ def main():
         st.header("📁 Upload Files")
         
         # Determine supported file types
-        supported_types = ['xlsx', 'xls']
-        type_descriptions = ["Excel (.xlsx, .xls)"]
+        supported_types = ['xlsx', 'xls', 'csv']  # Always support Excel and CSV
+        type_descriptions = ["Excel (.xlsx, .xls)", "CSV (.csv)"]
         
         if DOCX_AVAILABLE:
             supported_types.extend(['docx'])
@@ -640,6 +731,8 @@ def main():
                         try:
                             if file_extension in ['xlsx', 'xls']:
                                 file_data = FileProcessor.process_excel(uploaded_file)
+                            elif file_extension == 'csv':
+                                file_data = FileProcessor.process_csv(uploaded_file)
                             elif file_extension == 'docx':
                                 file_data = FileProcessor.process_word(uploaded_file)
                             elif file_extension == 'pdf':
@@ -660,7 +753,12 @@ def main():
             st.markdown("### 📋 Uploaded Files")
             for file_data in st.session_state.files_data:
                 if "error" not in file_data:
-                    file_icon = {"excel": "📊", "word": "📄", "pdf": "📕"}.get(file_data.get('type'), "📄")
+                    file_icon = {
+                        "excel": "📊", 
+                        "csv": "📈", 
+                        "word": "📄", 
+                        "pdf": "📕"
+                    }.get(file_data.get('type'), "📄")
                     st.markdown(f"""
                     <div style="background: linear-gradient(135deg, #e8f5e8 0%, #f0f9ff 100%); 
                                 border-left: 5px solid #10b981; padding: 15px; border-radius: 10px; 
@@ -721,13 +819,25 @@ def main():
         
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Library status
-        if not DOCX_AVAILABLE or not PDF_AVAILABLE:
-            st.markdown("### ⚠️ Library Status")
+        # Library status - only show if there are issues
+        missing_libraries = []
+        if not DOCX_AVAILABLE:
+            missing_libraries.append("📄 Word (.docx)")
+        if not PDF_AVAILABLE:
+            missing_libraries.append("📕 PDF (.pdf)")
+            
+        if missing_libraries:
+            st.markdown("### ⚠️ Optional Libraries")
+            st.info(f"Install these for full support: {', '.join(missing_libraries)}")
+            
             if not DOCX_AVAILABLE:
-                st.warning("Word support disabled")
+                st.markdown("**Install Word support:** `pip install python-docx`")
             if not PDF_AVAILABLE:
-                st.warning("PDF support disabled")
+                st.markdown("**Install PDF support:** `pip install PyPDF2`")
+        else:
+            # Show success status
+            st.markdown("### ✅ All Libraries Available")
+            st.success("Excel, CSV, Word, and PDF support fully enabled!")
     
     # Main chat area
     chat_container = st.container()
@@ -748,7 +858,7 @@ def main():
                     <p style="font-size: 20px; color: #4b5563; margin: 25px 0; font-weight: 500;">
                         Upload your files in the sidebar to get started</p>
                     <p style="font-size: 17px; color: #6b7280; opacity: 0.9;">
-                        Supports Excel, Word, and PDF files for comprehensive analysis</p>
+                        Supports Excel, CSV, Word, and PDF files for comprehensive analysis</p>
                 </div>
                 """, unsafe_allow_html=True)
             else:
