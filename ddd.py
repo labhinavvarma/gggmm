@@ -987,47 +987,18 @@ def main():
     # Chat interface
     st.markdown("### 💬 Chat with Your Data")
     
-    # Add search functionality for chat history
-    if st.session_state.messages:
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            search_term = st.text_input(
-                "🔍 Search chat history:", 
-                placeholder="Search questions and answers...",
-                help="Search through your chat history to find specific topics"
-            )
-        with col2:
-            if st.button("Clear Search", key="clear_search"):
-                st.rerun()
-        
-        st.markdown("---")
-    
     # Display chat messages
     if st.session_state.messages:
-        # Filter messages by search term if provided
-        filtered_messages = st.session_state.messages
-        if 'search_term' in locals() and search_term:
-            filtered_messages = []
-            for msg in st.session_state.messages:
-                if search_term.lower() in msg["content"].lower():
-                    filtered_messages.append(msg)
-            
-            if filtered_messages:
-                st.success(f"🎯 Found {len(filtered_messages)} message(s) matching '{search_term}'")
-            else:
-                st.warning(f"❌ No results found for '{search_term}'. Try different keywords.")
-        
         # Display messages in chat format (chronological order - oldest first)
-        for message in filtered_messages:
+        for message in st.session_state.messages:
             render_custom_message(message["role"], message["content"])
         
         # Show message count
-        if not ('search_term' in locals() and search_term):
-            st.markdown(f"""
-            <div class="chat-stats">
-                📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="chat-stats">
+            📊 <strong>Total Messages:</strong> {len(st.session_state.messages)} messages
+        </div>
+        """, unsafe_allow_html=True)
     else:
         st.info("🚀 Start a conversation! Upload files and use the quick prompts in the sidebar or type your question below.")
         
