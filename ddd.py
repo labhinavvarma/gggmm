@@ -305,12 +305,11 @@ COMMUNICATION STYLE:
             # Create enhanced system message
             sys_msg = self.create_enhanced_system_message(files_context or [])
             
-            # Build conversation with better context management
+            # Build messages array with conversation history
             messages = []
             
             # Add recent conversation history (last 6 messages for better context)
             if conversation_history:
-                # Ensure all messages have proper string content
                 for msg in conversation_history[-6:]:
                     if isinstance(msg.get('content'), str) and msg.get('content').strip():
                         messages.append({
@@ -320,11 +319,11 @@ COMMUNICATION STYLE:
             
             # Add current user message
             messages.append({
-                "role": "user", 
+                "role": "user",
                 "content": str(user_message).strip()
             })
             
-            # Build payload with correct data types
+            # Build payload in the correct format
             payload = {
                 "query": {
                     "aplctn_cd": str(self.aplctn_cd),
@@ -333,10 +332,12 @@ COMMUNICATION STYLE:
                     "method": "cortex",
                     "model": str(self.model),
                     "sys_msg": str(sys_msg)[:8000],  # Limit system message length
-                    "limit_convs": 0,  # Integer instead of string
-                    "prompt": {"messages": messages},
-                    "app_lvl_prefix": "",
-                    "user_id": "",
+                    "limit_convs": "0",  # Keep as string
+                    "prompt": {
+                        "messages": messages
+                    },
+                    "app_lvl_prefix": "enhanced_data_analyst",
+                    "user_id": "data_analyst_enhanced",
                     "session_id": str(session_id)
                 }
             }
@@ -349,7 +350,7 @@ COMMUNICATION STYLE:
             
             # Debug logging
             print(f"Sending request to: {self.api_url}")
-            print(f"Payload keys: {list(payload['query'].keys())}")
+            print(f"Payload structure: {json.dumps(payload, indent=2)[:500]}...")
             print(f"Message count: {len(messages)}")
             print(f"System message length: {len(sys_msg)}")
             
@@ -389,19 +390,9 @@ def create_quick_questions():
             "What are the key insights from my data?": "Analyze the uploaded files and provide the top 5 key insights with supporting data points and business implications.",
             "Show me summary statistics": "Provide comprehensive summary statistics for all numeric columns including mean, median, min, max, and distribution insights.",
             "What trends do you see?": "Identify and explain the main trends, patterns, and correlations in the data with specific examples and metrics.",
-            "Are there any outliers or anomalies?": "Find and analyze any outliers, anomalies, or unusual patterns in the data and explain their potential significance."
-        },
-        "💼 Business Intelligence": {
-            "What's the overall performance?": "Provide an executive summary of overall performance metrics with key KPIs and business insights.",
+            "Are there any outliers or anomalies?": "Find and analyze any outliers, anomalies, or unusual patterns in the data and explain their potential significance.",
             "Compare different segments": "Compare and contrast different segments, categories, or groups in the data and highlight significant differences.",
-            "What recommendations do you have?": "Based on the data analysis, provide specific actionable recommendations for business improvement.",
-            "Identify top and bottom performers": "Identify the best and worst performing elements in the data with detailed analysis of contributing factors."
-        },
-        "📈 Financial Analysis": {
-            "Analyze revenue trends": "Perform detailed revenue analysis including growth rates, seasonality, and forecasting insights.",
-            "What about profitability?": "Analyze profitability metrics, margins, and identify factors affecting financial performance.",
-            "Show cost breakdown": "Provide comprehensive cost analysis with categorization and identification of cost-saving opportunities.",
-            "Calculate key financial ratios": "Calculate and interpret important financial ratios and metrics from the available data."
+            "What recommendations do you have?": "Based on the data analysis, provide specific actionable recommendations for improvement."
         },
         "📋 Document Analysis": {
             "Summarize the main points": "Provide a comprehensive summary of the main points, findings, and conclusions from the document.",
@@ -749,40 +740,53 @@ def main():
                 render_chat_message(role, message, timestamp)
             st.markdown('</div>', unsafe_allow_html=True)
         else:
-            st.markdown("""
-            <div style="text-align: center; padding: 80px 50px; background: white; 
-                        border-radius: 25px; margin: 40px 0; 
-                        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-                        border: 1px solid #e5e7eb;">
-                <div style="font-size: 60px; margin-bottom: 20px;">🤖</div>
-                <h1 style="color: #1f2937; font-size: 32px; font-weight: 800; margin-bottom: 20px; 
-                           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                           -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
-                           background-clip: text;">
-                    Welcome to AI Data Analyst!
-                </h1>
-                <p style="font-size: 20px; color: #4b5563; margin: 25px 0; font-weight: 500;">
-                    Upload your files in the sidebar and start asking questions about your data.
-                </p>
-                <p style="font-size: 17px; color: #6b7280; opacity: 0.9; margin-bottom: 40px;">
-                    Use the quick questions in the sidebar to get started, or type your own question below.
-                </p>
-                <div style="margin-top: 40px;">
-                    <span style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); 
-                                 padding: 12px 20px; border-radius: 25px; margin: 0 8px; 
-                                 font-size: 15px; font-weight: 600; color: #1565c0;
-                                 box-shadow: 0 3px 8px rgba(21, 101, 192, 0.2);">📊 Data Analysis</span>
-                    <span style="background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%); 
-                                 padding: 12px 20px; border-radius: 25px; margin: 0 8px; 
-                                 font-size: 15px; font-weight: 600; color: #7b1fa2;
-                                 box-shadow: 0 3px 8px rgba(123, 31, 162, 0.2);">💼 Business Intelligence</span>
-                    <span style="background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%); 
-                                 padding: 12px 20px; border-radius: 25px; margin: 0 8px; 
-                                 font-size: 15px; font-weight: 600; color: #2e7d32;
-                                 box-shadow: 0 3px 8px rgba(46, 125, 50, 0.2);">📈 Financial Analysis</span>
+            # Only show welcome message when no messages exist
+            if not st.session_state.files_data:
+                st.markdown("""
+                <div style="text-align: center; padding: 80px 50px; background: white; 
+                            border-radius: 25px; margin: 40px 0; 
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+                            border: 1px solid #e5e7eb;">
+                    <div style="font-size: 60px; margin-bottom: 20px;">🤖</div>
+                    <h1 style="color: #1f2937; font-size: 32px; font-weight: 800; margin-bottom: 20px; 
+                               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                               -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
+                               background-clip: text;">
+                        Welcome to AI Data Analyst!
+                    </h1>
+                    <p style="font-size: 20px; color: #4b5563; margin: 25px 0; font-weight: 500;">
+                        Upload your files in the sidebar to get started
+                    </p>
+                    <p style="font-size: 17px; color: #6b7280; opacity: 0.9; margin-bottom: 40px;">
+                        Supports Excel, Word, and PDF files for comprehensive data analysis
+                    </p>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="text-align: center; padding: 60px 50px; background: white; 
+                            border-radius: 25px; margin: 40px 0; 
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+                            border: 1px solid #e5e7eb;">
+                    <div style="font-size: 50px; margin-bottom: 15px;">🚀</div>
+                    <h2 style="color: #1f2937; font-size: 28px; font-weight: 700; margin-bottom: 15px;">
+                        Ready to analyze your data!
+                    </h2>
+                    <p style="font-size: 18px; color: #4b5563; margin: 20px 0;">
+                        Your files are uploaded and processed. Use the quick questions in the sidebar or ask your own questions below.
+                    </p>
+                    <div style="margin-top: 30px;">
+                        <span style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); 
+                                     padding: 10px 18px; border-radius: 25px; margin: 0 8px; 
+                                     font-size: 14px; font-weight: 600; color: #1565c0;
+                                     box-shadow: 0 3px 8px rgba(21, 101, 192, 0.2);">📊 Data Analysis</span>
+                        <span style="background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%); 
+                                     padding: 10px 18px; border-radius: 25px; margin: 0 8px; 
+                                     font-size: 14px; font-weight: 600; color: #7b1fa2;
+                                     box-shadow: 0 3px 8px rgba(123, 31, 162, 0.2);">📋 Document Analysis</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
     
     # Chat input at bottom (ChatGPT style) - Full width
     st.markdown("""
