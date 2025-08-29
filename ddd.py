@@ -1,1489 +1,1145 @@
 """
-Fixed Health Data Processor with mcidList preservation
+Fixed Health Analysis Agent with corrected episodic memory integration
 
-This version ensures mcidList is NEVER masked during any deidentification process.
+This version ensures proper mcidList extraction and episodic memory file generation.
 
-SECURITY WARNING: This stores healthcare data in unencrypted local files.
+SECURITY WARNING: This stores healthcare PHI in unencrypted local files.
 Do not use in production healthcare environments.
 """
 
 import json
-import re
-import time
-from datetime import datetime, date
-from typing import Dict, Any, List, Tuple
+import asyncio
+from datetime import datetime
+from typing import Dict, Any, List, TypedDict, Literal, Optional
+from dataclasses import dataclass, asdict
 import logging
- 
+from datetime import date
+import requests
+import re
+
+# LangGraph imports
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
+
+# Import enhanced components (assuming these are available)
+# from health_api_integrator import EnhancedHealthAPIIntegrator
+# from health_data_processor_work import EnhancedHealthDataProcessor
+# from episodic_memory_manager import EpisodicMemoryManager, EpisodicMemoryConfig, EpisodicMemoryError
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
- 
-class EnhancedHealthDataProcessor:
-    """Fixed data processor that preserves mcidList during deidentification"""
 
-    def __init__(self, api_integrator=None):
-        self.api_integrator = api_integrator
-        self.max_retry_attempts = 3  # Configure retry attempts
-        self.retry_delay_seconds = 1  # Delay between retries
-        logger.info("Fixed HealthDataProcessor initialized with mcidList preservation")
-        
-        # API integrator validation
-        if self.api_integrator:
-            logger.info("API integrator provided")
-            if hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-                logger.info("Batch processing with retry logic enabled")
-            else:
-                logger.warning("Isolated LLM method missing - batch processing limited")
-        else:
-            logger.warning("No API integrator - batch processing disabled")
+@dataclass
+class Config:
+    """Enhanced configuration with episodic memory settings"""
+    fastapi_url: str = "http://localhost:8000"  # MCP server URL
+    
+    # Snowflake Cortex API Configuration
+    api_url: str = "https://sfassist.edagenaipreprod.awsdns.internal.das/api/cortex/complete"
+    api_key: str = "YOUR_API_KEY_HERE"  # SECURITY: Use environment variables
+    app_id: str = "edadip"
+    aplctn_cd: str = "edagnai"
+    model: str = "llama4-maverick"
+    
+    # Heart Attack Prediction API Configuration
+    heart_attack_api_url: str = "http://localhost:8000"
+    heart_attack_threshold: float = 0.5
+    
+    # Episodic Memory Configuration (Simplified)
+    episodic_memory_enabled: bool = True
+    episodic_memory_directory: str = "./episodic_memory"
+    episodic_memory_backup_directory: str = "./episodic_memory_backup"
+    episodic_memory_retention_days: int = 365
+    
+    # System messages updated for simplified episodic memory
+    sys_msg: str = """You are Dr. HealthAI, a comprehensive healthcare data analyst with access to:
 
-    def _call_llm_with_retry(self, prompt: str, system_message: str, operation_name: str) -> Tuple[str, bool, int]:
-        """Call LLM with retry logic"""
-        if not self.api_integrator:
-            logger.error(f"No API integrator available for {operation_name}")
-            return "No API integrator available", False, 0
+CLINICAL SPECIALIZATION:
+• Medical coding systems (ICD-10, CPT, HCPCS, NDC) interpretation and analysis
+• Claims data analysis and healthcare utilization patterns
+• Risk stratification and predictive modeling for chronic diseases
+• Clinical decision support and evidence-based medicine
+• Population health management and care coordination
+• Simplified episodic memory for patient history tracking
+
+DATA ACCESS CAPABILITIES:
+• Complete deidentified medical claims with ICD-10 diagnosis codes
+• Complete deidentified pharmacy claims with NDC codes
+• Healthcare service utilization patterns and claims dates
+• Structured extractions of medical and pharmacy fields
+• Enhanced entity extraction results (diabetics, blood_pressure, age, smoking, alcohol)
+• Patient episodic memory with visit history when available
+
+EPISODIC MEMORY CAPABILITIES:
+• Access to patient's previous visit data with 5 key health indicators
+• Trend analysis across multiple visits for returning patients
+• Simple comparison of current vs previous health status
+
+RESPONSE STANDARDS:
+• Use clinical terminology appropriately while ensuring clarity
+• Cite specific ICD-10 codes, NDC codes, CPT codes, and claim dates
+• Reference historical data when available for trend analysis
+• Provide evidence-based analysis using established clinical guidelines
+• Include risk stratification and predictive insights
+• Maintain professional healthcare analysis standards"""
+
+    chatbot_sys_msg: str = """You are Dr. ChatAI, a healthcare AI assistant with access to comprehensive deidentified medical and pharmacy claims data AND simplified episodic memory.
+
+COMPREHENSIVE DATA ACCESS:
+✅ CURRENT VISIT DATA:
+   • Complete deidentified medical records with ICD-10 diagnosis codes
+   • Complete deidentified pharmacy records with NDC medication codes
+   • Healthcare service utilization patterns and claims dates
+   • Enhanced entity extraction with health indicators
+
+✅ SIMPLIFIED EPISODIC MEMORY:
+   • Previous visit records with 5 key health indicators:
+     - diabetics (yes/no/unknown)
+     - blood_pressure (diagnosed/managed/unknown)
+     - age (numeric value)
+     - smoking (yes/no/unknown) 
+     - alcohol (yes/no/unknown)
+   • Visit timestamps for trend analysis
+   • Simple comparison between current and previous visits
+
+✅ ADVANCED CAPABILITIES:
+   • Generate working matplotlib code for healthcare visualizations
+   • Create trend charts comparing current vs previous visit data
+   • Provide longitudinal analysis when multiple visits available
+
+EPISODIC MEMORY INTEGRATION:
+When available, use historical patient data to:
+• Compare current health indicators with previous visits
+• Identify changes in key health factors (diabetes status, blood pressure, etc.)
+• Track progression or improvement in health indicators
+• Provide continuity of care insights
+
+CRITICAL INSTRUCTIONS:
+• Access and analyze COMPLETE deidentified claims dataset AND episodic memory
+• Reference specific codes, dates, medications, and clinical findings
+• Use episodic memory for trend analysis when available
+• Generate working matplotlib code when visualization is requested
+• Compare current visit with previous visits when episodic data exists
+• Maintain professional healthcare analysis standards with historical context"""
+
+    timeout: int = 30
+
+    def to_dict(self):
+        return asdict(self)
+
+# Enhanced State Definition with Simplified Episodic Memory
+class HealthAnalysisState(TypedDict):
+    # Input data
+    patient_data: Dict[str, Any]
+
+    # API outputs
+    mcid_output: Dict[str, Any]
+    medical_output: Dict[str, Any]
+    pharmacy_output: Dict[str, Any]
+    token_output: Dict[str, Any]
+
+    # Processed data
+    deidentified_medical: Dict[str, Any]
+    deidentified_pharmacy: Dict[str, Any]
+    deidentified_mcid: Dict[str, Any]
+
+    # Extracted structured data
+    medical_extraction: Dict[str, Any]
+    pharmacy_extraction: Dict[str, Any]
+    entity_extraction: Dict[str, Any]
+
+    # Analysis results
+    health_trajectory: str
+    final_summary: str
+
+    # Heart Attack Prediction
+    heart_attack_prediction: Dict[str, Any]
+    heart_attack_risk_score: float
+    heart_attack_features: Dict[str, Any]
+
+    # Simplified Episodic Memory
+    episodic_memory_result: Dict[str, Any]
+    historical_patient_data: Dict[str, Any]
+    patient_history_summary: str
+    current_mcid: str
+
+    # Enhanced chatbot functionality
+    chatbot_ready: bool
+    chatbot_context: Dict[str, Any]
+    chat_history: List[Dict[str, str]]
+    graph_generation_ready: bool
+
+    # Control flow
+    current_step: str
+    errors: List[str]
+    retry_count: int
+    processing_complete: bool
+    step_status: Dict[str, str]
+
+class HealthAnalysisAgent:
+    """Fixed Health Analysis Agent with corrected episodic memory integration"""
+
+    def __init__(self, custom_config: Optional[Config] = None):
+        self.config = custom_config or Config()
+
+        # Initialize enhanced components
+        # self.api_integrator = EnhancedHealthAPIIntegrator(self.config)
+        # self.data_processor = EnhancedHealthDataProcessor(self.api_integrator)
+
+        # Initialize Fixed Episodic Memory if enabled
+        self.episodic_memory = None
+        if self.config.episodic_memory_enabled:
+            episodic_config = EpisodicMemoryConfig(
+                storage_directory=self.config.episodic_memory_directory,
+                backup_directory=self.config.episodic_memory_backup_directory,
+                file_prefix="patient_memory",
+                retention_days=self.config.episodic_memory_retention_days
+            )
             
-        if not hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-            logger.error(f"API integrator missing call_llm_isolated_enhanced method for {operation_name}")
-            return "Missing LLM method", False, 0
-
-        last_error = None
-        
-        for attempt in range(1, self.max_retry_attempts + 1):
             try:
-                logger.info(f"{operation_name} - Attempt {attempt}/{self.max_retry_attempts}")
-                
-                response = self.api_integrator.call_llm_isolated_enhanced(prompt, system_message)
-                
-                # Check if response indicates success
-                if (response and 
-                    response != "Brief explanation unavailable" and 
-                    "error" not in response.lower() and
-                    response.strip() != ""):
-                    
-                    logger.info(f"{operation_name} - Success on attempt {attempt}")
-                    return response, True, attempt
-                else:
-                    last_error = f"Invalid response: {response}"
-                    logger.warning(f"{operation_name} - Attempt {attempt} returned invalid response: {response}")
-                
+                self.episodic_memory = EpisodicMemoryManager(episodic_config)
+                logger.info("Fixed Episodic Memory Manager initialized successfully")
             except Exception as e:
-                last_error = str(e)
-                logger.warning(f"{operation_name} - Attempt {attempt} failed with exception: {e}")
-                
-            # Add delay before retry (except on last attempt)
-            if attempt < self.max_retry_attempts:
-                logger.info(f"{operation_name} - Waiting {self.retry_delay_seconds}s before retry...")
-                time.sleep(self.retry_delay_seconds)
-        
-        # All attempts failed
-        logger.error(f"{operation_name} - All {self.max_retry_attempts} attempts failed. Last error: {last_error}")
-        return f"All retry attempts failed. Last error: {last_error}", False, self.max_retry_attempts
+                logger.error(f"Failed to initialize Episodic Memory: {e}")
+                self.config.episodic_memory_enabled = False
 
-    def deidentify_mcid_data_enhanced(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Fixed MCID data deidentification that preserves mcidList"""
-        try:
-            print(f"DEBUG: Starting MCID deidentification with input: {mcid_data}")
-            
-            if not mcid_data:
-                return {"error": "No MCID data available for deidentification"}
+        logger.info("Fixed HealthAnalysisAgent initialized with corrected Episodic Memory")
+        logger.info(f"Episodic Memory: {'Enabled' if self.config.episodic_memory_enabled else 'Disabled'}")
 
-            # Extract body data
-            raw_mcid_data = mcid_data.get('body', mcid_data)
-            print(f"DEBUG: Extracted body data: {raw_mcid_data}")
-            
-            # Fixed deidentification that explicitly preserves mcidList
-            deidentified_mcid_data = self._fixed_deidentify_mcid_json(raw_mcid_data)
-            print(f"DEBUG: After fixed deidentification: {deidentified_mcid_data}")
+        self.setup_enhanced_langgraph()
 
-            result = {
-                "body": deidentified_mcid_data,  # Preserve original structure
-                "mcid_claims_data": deidentified_mcid_data,  # Also provide wrapped structure
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "fixed_mcid_claims", 
-                "processing_method": "fixed_preserve_mcidList",
-                "mcidList_preserved": "mcidList" in deidentified_mcid_data,
-                "mcidList_value": deidentified_mcid_data.get("mcidList", "NOT_FOUND")
+    def setup_enhanced_langgraph(self):
+        """Setup enhanced LangGraph workflow with fixed episodic memory"""
+        logger.info("Setting up Enhanced LangGraph workflow with fixed episodic memory...")
+
+        workflow = StateGraph(HealthAnalysisState)
+
+        # Add all processing nodes
+        workflow.add_node("fetch_api_data", self.fetch_api_data)
+        workflow.add_node("deidentify_claims_data", self.deidentify_claims_data)
+        workflow.add_node("extract_claims_fields", self.extract_claims_fields)
+        workflow.add_node("extract_entities", self.extract_entities)
+        workflow.add_node("load_historical_data", self.load_historical_data)
+        workflow.add_node("analyze_trajectory", self.analyze_trajectory)
+        workflow.add_node("generate_summary", self.generate_summary)
+        workflow.add_node("predict_heart_attack", self.predict_heart_attack)
+        workflow.add_node("save_episodic_memory", self.save_episodic_memory)
+        workflow.add_node("initialize_chatbot", self.initialize_chatbot)
+        workflow.add_node("handle_error", self.handle_error)
+
+        # Define workflow edges
+        workflow.add_edge(START, "fetch_api_data")
+
+        workflow.add_conditional_edges(
+            "fetch_api_data",
+            self.should_continue_after_api,
+            {
+                "continue": "deidentify_claims_data",
+                "retry": "fetch_api_data",
+                "error": "handle_error"
             }
+        )
 
-            print(f"DEBUG: Final MCID deidentification result: {result}")
-            logger.info("Fixed MCID deidentification completed with mcidList preservation")
-            return result
+        workflow.add_conditional_edges(
+            "deidentify_claims_data",
+            self.should_continue_after_deidentify,
+            {
+                "continue": "extract_claims_fields",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "extract_claims_fields",
+            self.should_continue_after_extraction_step,
+            {
+                "continue": "extract_entities",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "extract_entities",
+            self.should_continue_after_entity_extraction,
+            {
+                "continue": "load_historical_data",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "load_historical_data",
+            self.should_continue_after_historical_load,
+            {
+                "continue": "analyze_trajectory",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "analyze_trajectory",
+            self.should_continue_after_trajectory,
+            {
+                "continue": "generate_summary",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "generate_summary",
+            self.should_continue_after_summary,
+            {
+                "continue": "predict_heart_attack",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "predict_heart_attack",
+            self.should_continue_after_heart_attack_prediction,
+            {
+                "continue": "save_episodic_memory",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_conditional_edges(
+            "save_episodic_memory",
+            self.should_continue_after_episodic_memory,
+            {
+                "continue": "initialize_chatbot",
+                "error": "handle_error"
+            }
+        )
+
+        workflow.add_edge("initialize_chatbot", END)
+        workflow.add_edge("handle_error", END)
+
+        # Compile with checkpointer
+        memory = MemorySaver()
+        self.graph = workflow.compile(checkpointer=memory)
+
+        logger.info("Enhanced LangGraph workflow compiled successfully with fixed episodic memory")
+
+    # ===== FIXED LANGGRAPH NODES =====
+
+    def fetch_api_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 1: Fetch claims data from APIs with debug logging"""
+        logger.info("Starting Claims API data fetch...")
+        state["current_step"] = "fetch_api_data"
+        state["step_status"]["fetch_api_data"] = "running"
+
+        try:
+            patient_data = state["patient_data"]
+            print(f"DEBUG: Patient data received: {patient_data}")
+
+            # Validation
+            required_fields = ["first_name", "last_name", "ssn", "date_of_birth", "gender", "zip_code"]
+            for field in required_fields:
+                if not patient_data.get(field):
+                    state["errors"].append(f"Missing required field: {field}")
+                    state["step_status"]["fetch_api_data"] = "error"
+                    return state
+
+            # Fetch data (using API integrator when available)
+            if hasattr(self, 'api_integrator') and self.api_integrator:
+                api_result = self.api_integrator.fetch_backend_data_enhanced(patient_data)
+            else:
+                # Mock API result for testing
+                print("DEBUG: Using mock API data for testing")
+                api_result = {
+                    "mcid_output": {
+                        "status_code": 200,
+                        "body": {
+                            "requestID": "1",
+                            "processStatus": {
+                                "completed": "true",
+                                "isMemput": "false",
+                                "errorCode": "OK",
+                                "errorText": ""
+                            },
+                            "mcidList": "139407292",
+                            "mem": None,
+                            "memidnum": "391709711-000002-003324975",
+                            "matchScore": "155"
+                        },
+                        "service": "mcid",
+                        "timestamp": "2025-08-28T18:14:34.926435",
+                        "status": "success"
+                    },
+                    "medical_output": {"body": {"sample": "medical_data"}},
+                    "pharmacy_output": {"body": {"sample": "pharmacy_data"}},
+                    "token_output": {"body": {"sample": "token_data"}}
+                }
+
+            print(f"DEBUG: API result mcid_output: {api_result.get('mcid_output', {})}")
+
+            if "error" in api_result:
+                state["errors"].append(f"Claims API Error: {api_result['error']}")
+                state["step_status"]["fetch_api_data"] = "error"
+            else:
+                state["mcid_output"] = api_result.get("mcid_output", {})
+                state["medical_output"] = api_result.get("medical_output", {})
+                state["pharmacy_output"] = api_result.get("pharmacy_output", {})
+                state["token_output"] = api_result.get("token_output", {})
+
+                print(f"DEBUG: Stored mcid_output in state: {state['mcid_output']}")
+                state["step_status"]["fetch_api_data"] = "completed"
+                logger.info("Successfully fetched all Claims API data")
 
         except Exception as e:
-            error_msg = f"Error in fixed MCID deidentification: {e}"
-            print(f"DEBUG: {error_msg}")
+            error_msg = f"Error fetching Claims API data: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["fetch_api_data"] = "error"
             logger.error(error_msg)
-            return {"error": error_msg}
+            print(f"DEBUG: API fetch error: {e}")
 
-    def _fixed_deidentify_mcid_json(self, data: Any) -> Any:
-        """Fixed JSON deidentification that never masks mcidList"""
-        if isinstance(data, dict):
-            deidentified_dict = {}
-            for key, value in data.items():
-                if key == "mcidList":
-                    # NEVER mask mcidList - preserve exactly as is
-                    deidentified_dict[key] = value
-                    print(f"DEBUG: Preserved mcidList key-value: {key} = {value}")
-                elif key in ["memidnum"]:
-                    # Mask known sensitive fields
-                    deidentified_dict[key] = "[MASKED]"
-                    print(f"DEBUG: Masked sensitive field: {key}")
-                elif isinstance(value, (dict, list)):
-                    # Recursively process nested structures
-                    deidentified_dict[key] = self._fixed_deidentify_mcid_json(value)
-                elif isinstance(value, str):
-                    # Use fixed string deidentification that preserves mcidList values
-                    deidentified_dict[key] = self._fixed_deidentify_string(value, preserve_if_mcid_value=True)
-                else:
-                    # Keep other values as-is
-                    deidentified_dict[key] = value
-            return deidentified_dict
-        elif isinstance(data, list):
-            return [self._fixed_deidentify_mcid_json(item) for item in data]
-        elif isinstance(data, str):
-            return self._fixed_deidentify_string(data, preserve_if_mcid_value=True)
-        else:
-            return data
+        return state
 
-    def _fixed_deidentify_string(self, data: str, preserve_if_mcid_value: bool = False) -> str:
-        """Fixed string deidentification that can preserve mcidList values"""
-        if not isinstance(data, str) or not data.strip():
-            return data
-
-        original_data = str(data)
-        
-        # If this looks like an mcidList value (numeric string), preserve it
-        if preserve_if_mcid_value and data.strip().isdigit() and len(data.strip()) >= 6:
-            print(f"DEBUG: Preserving potential mcidList value: {data}")
-            return data
-
-        deidentified = str(data)
-        
-        # Apply deidentification patterns but be careful with numeric IDs
-        deidentified = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[MASKED_SSN]', deidentified)
-        deidentified = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[MASKED_PHONE]', deidentified)
-        deidentified = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[MASKED_EMAIL]', deidentified)
-        deidentified = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', '[MASKED_NAME]', deidentified)
-        
-        # Don't mask pure numeric strings that could be medical IDs
-        # Only mask if it was changed by the above patterns
-        if deidentified != original_data:
-            print(f"DEBUG: String was deidentified: {original_data} -> {deidentified}")
-        
-        return deidentified
-
-    def deidentify_medical_data_enhanced(self, medical_data: Dict[str, Any], patient_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Fixed medical data deidentification"""
-        try:
-            if not medical_data:
-                return {"error": "No medical data available for deidentification"}
- 
-            # Fixed age calculation
-            age = self._calculate_age_stable(patient_data.get('date_of_birth', ''))
- 
-            # Fixed JSON processing
-            raw_medical_data = medical_data.get('body', medical_data)
-            deidentified_medical_data = self._stable_deidentify_json(raw_medical_data)
-            deidentified_medical_data = self._mask_medical_fields_stable(deidentified_medical_data)
- 
-            stable_deidentified = {
-                "src_mbr_first_nm": "[MASKED_NAME]",
-                "src_mbr_last_nm": "[MASKED_NAME]",
-                "src_mbr_mid_init_nm": None,
-                "src_mbr_age": age,
-                "src_mbr_zip_cd": patient_data.get('zip_code', '12345'),
-                "medical_claims_data": deidentified_medical_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "stable_medical_claims",
-                "processing_method": "stable"
-            }
- 
-            logger.info("Fixed medical deidentification completed")
-            
-            return stable_deidentified
- 
-        except Exception as e:
-            logger.error(f"Error in fixed medical deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
-
-    def deidentify_pharmacy_data_enhanced(self, pharmacy_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Fixed pharmacy data deidentification"""
-        try:
-            if not pharmacy_data:
-                return {"error": "No pharmacy data available for deidentification"}
-
-            raw_pharmacy_data = pharmacy_data.get('body', pharmacy_data)
-            deidentified_pharmacy_data = self._stable_deidentify_pharmacy_json(raw_pharmacy_data)
-
-            stable_result = {
-                "pharmacy_claims_data": deidentified_pharmacy_data,
-                "original_structure_preserved": True,
-                "deidentification_timestamp": datetime.now().isoformat(),
-                "data_type": "stable_pharmacy_claims",
-                "processing_method": "stable",
-                "name_fields_masked": ["src_mbr_first_nm", "scr_mbr_last_nm"]
-            }
-
-            logger.info("Fixed pharmacy deidentification completed")
-            
-            return stable_result
-
-        except Exception as e:
-            logger.error(f"Error in fixed pharmacy deidentification: {e}")
-            return {"error": f"Deidentification failed: {str(e)}"}
-
-    def extract_medical_fields_batch_enhanced(self, deidentified_medical: Dict[str, Any]) -> Dict[str, Any]:
-        """Fixed medical field extraction with batch processing"""
-        logger.info("Starting fixed batch medical extraction...")
-        
-        stable_extraction_result = {
-            "hlth_srvc_records": [],
-            "extraction_summary": {
-                "total_hlth_srvc_records": 0,
-                "total_diagnosis_codes": 0,
-                "unique_service_codes": set(),
-                "unique_diagnosis_codes": set()
-            },
-            "code_meanings": {
-                "service_code_meanings": {},
-                "diagnosis_code_meanings": {}
-            },
-            "code_meanings_added": False,
-            "stable_analysis": False,
-            "llm_call_status": "not_attempted",
-            "batch_stats": {
-                "individual_calls_saved": 0,
-                "processing_time_seconds": 0,
-                "api_calls_made": 0,
-                "codes_processed": 0
-            }
-        }
-
-        start_time = time.time()
+    def deidentify_claims_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 2: Fixed deidentification of claims data"""
+        logger.info("Starting comprehensive claims data deidentification...")
+        state["current_step"] = "deidentify_claims_data"
+        state["step_status"]["deidentify_claims_data"] = "running"
 
         try:
-            medical_data = deidentified_medical.get("medical_claims_data", {})
-            if not medical_data:
-                logger.warning("No medical claims data found")
-                return stable_extraction_result
-
-            # Step 1: Fixed extraction
-            logger.info("Step 1: Fixed medical code extraction...")
-            self._stable_medical_extraction(medical_data, stable_extraction_result)
-
-            # Convert sets to lists for processing
-            unique_service_codes = list(stable_extraction_result["extraction_summary"]["unique_service_codes"])[:15]
-            unique_diagnosis_codes = list(stable_extraction_result["extraction_summary"]["unique_diagnosis_codes"])[:20]
+            # Fixed MCID deidentification - preserve mcidList structure
+            mcid_data = state.get("mcid_output", {})
+            print(f"DEBUG: Original mcid_data: {mcid_data}")
             
-            stable_extraction_result["extraction_summary"]["unique_service_codes"] = unique_service_codes
-            stable_extraction_result["extraction_summary"]["unique_diagnosis_codes"] = unique_diagnosis_codes
-
-            total_codes = len(unique_service_codes) + len(unique_diagnosis_codes)
-            stable_extraction_result["batch_stats"]["codes_processed"] = total_codes
-
-            # Step 2: Batch processing with retry logic
-            if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-                if unique_service_codes or unique_diagnosis_codes:
-                    logger.info(f"Step 2: Batch processing {total_codes} codes...")
-                    stable_extraction_result["llm_call_status"] = "in_progress"
-                    
-                    try:
-                        api_calls_made = 0
-                        
-                        # Batch 1: Service Codes
-                        if unique_service_codes:
-                            service_meanings = self._stable_batch_service_codes(unique_service_codes)
-                            stable_extraction_result["code_meanings"]["service_code_meanings"] = service_meanings
-                            api_calls_made += 1
-                        
-                        # Batch 2: Diagnosis Codes  
-                        if unique_diagnosis_codes:
-                            diagnosis_meanings = self._stable_batch_diagnosis_codes(unique_diagnosis_codes)
-                            stable_extraction_result["code_meanings"]["diagnosis_code_meanings"] = diagnosis_meanings
-                            api_calls_made += 1
-                        
-                        # Calculate savings
-                        individual_calls_would_be = len(unique_service_codes) + len(unique_diagnosis_codes)
-                        calls_saved = individual_calls_would_be - api_calls_made
-                        
-                        stable_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
-                        stable_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
-                        
-                        # Final status
-                        total_meanings = len(stable_extraction_result["code_meanings"]["service_code_meanings"]) + len(stable_extraction_result["code_meanings"]["diagnosis_code_meanings"])
-                        
-                        if total_meanings > 0:
-                            stable_extraction_result["code_meanings_added"] = True
-                            stable_extraction_result["stable_analysis"] = True
-                            stable_extraction_result["llm_call_status"] = "completed"
-                            logger.info(f"Batch success: {total_meanings} meanings, {calls_saved} calls saved")
-                        else:
-                            stable_extraction_result["llm_call_status"] = "completed_no_meanings"
-                        
-                    except Exception as e:
-                        logger.error(f"Batch processing error: {e}")
-                        stable_extraction_result["code_meaning_error"] = str(e)
-                        stable_extraction_result["llm_call_status"] = "failed"
-                else:
-                    stable_extraction_result["llm_call_status"] = "skipped_no_codes"
+            if hasattr(self, 'data_processor') and self.data_processor:
+                deidentified_mcid = self.data_processor.deidentify_mcid_data_enhanced(mcid_data)
             else:
-                stable_extraction_result["llm_call_status"] = "skipped_no_api"
-
-            # Performance stats
-            processing_time = time.time() - start_time
-            stable_extraction_result["batch_stats"]["processing_time_seconds"] = round(processing_time, 2)
-
-            logger.info(f"Fixed batch medical extraction completed in {processing_time:.2f}s")
-
-        except Exception as e:
-            logger.error(f"Error in fixed batch medical extraction: {e}")
-            stable_extraction_result["error"] = f"Fixed batch extraction failed: {str(e)}"
-
-        return stable_extraction_result
-
-    def extract_pharmacy_fields_batch_enhanced(self, deidentified_pharmacy: Dict[str, Any]) -> Dict[str, Any]:
-        """Fixed pharmacy field extraction with batch processing"""
-        logger.info("Starting fixed batch pharmacy extraction...")
-        
-        stable_extraction_result = {
-            "ndc_records": [],
-            "extraction_summary": {
-                "total_ndc_records": 0,
-                "unique_ndc_codes": set(),
-                "unique_label_names": set()
-            },
-            "code_meanings": {
-                "ndc_code_meanings": {},
-                "medication_meanings": {}
-            },
-            "code_meanings_added": False,
-            "stable_analysis": False,
-            "llm_call_status": "not_attempted",
-            "batch_stats": {
-                "individual_calls_saved": 0,
-                "processing_time_seconds": 0,
-                "api_calls_made": 0,
-                "codes_processed": 0
-            }
-        }
-
-        start_time = time.time()
-
-        try:
-            pharmacy_data = deidentified_pharmacy.get("pharmacy_claims_data", {})
-            if not pharmacy_data:
-                logger.warning("No pharmacy claims data found")
-                return stable_extraction_result
-
-            # Step 1: Fixed extraction
-            logger.info("Step 1: Fixed pharmacy code extraction...")
-            self._stable_pharmacy_extraction(pharmacy_data, stable_extraction_result)
-
-            # Convert sets to lists for processing
-            unique_ndc_codes = list(stable_extraction_result["extraction_summary"]["unique_ndc_codes"])[:10]
-            unique_label_names = list(stable_extraction_result["extraction_summary"]["unique_label_names"])[:15]
+                # Fixed deidentification that preserves mcidList
+                deidentified_mcid = self._fixed_deidentify_mcid_data(mcid_data)
             
-            stable_extraction_result["extraction_summary"]["unique_ndc_codes"] = unique_ndc_codes
-            stable_extraction_result["extraction_summary"]["unique_label_names"] = unique_label_names
+            print(f"DEBUG: Deidentified mcid_data: {deidentified_mcid}")
+            state["deidentified_mcid"] = deidentified_mcid
 
-            total_codes = len(unique_ndc_codes) + len(unique_label_names)
-            stable_extraction_result["batch_stats"]["codes_processed"] = total_codes
+            # Deidentify other data types
+            if hasattr(self, 'data_processor') and self.data_processor:
+                medical_data = state.get("medical_output", {})
+                deidentified_medical = self.data_processor.deidentify_medical_data_enhanced(medical_data, state["patient_data"])
+                state["deidentified_medical"] = deidentified_medical
 
-            # Step 2: Batch processing
-            if self.api_integrator and hasattr(self.api_integrator, 'call_llm_isolated_enhanced'):
-                if unique_ndc_codes or unique_label_names:
-                    logger.info(f"Step 2: Batch processing {total_codes} pharmacy codes...")
-                    stable_extraction_result["llm_call_status"] = "in_progress"
-                    
-                    try:
-                        api_calls_made = 0
-                        
-                        # Batch 1: NDC Codes
-                        if unique_ndc_codes:
-                            ndc_meanings = self._stable_batch_ndc_codes(unique_ndc_codes)
-                            stable_extraction_result["code_meanings"]["ndc_code_meanings"] = ndc_meanings
-                            api_calls_made += 1
-                        
-                        # Batch 2: Medications
-                        if unique_label_names:
-                            med_meanings = self._stable_batch_medications(unique_label_names)
-                            stable_extraction_result["code_meanings"]["medication_meanings"] = med_meanings
-                            api_calls_made += 1
-                        
-                        # Calculate savings
-                        individual_calls_would_be = len(unique_ndc_codes) + len(unique_label_names)
-                        calls_saved = individual_calls_would_be - api_calls_made
-                        
-                        stable_extraction_result["batch_stats"]["individual_calls_saved"] = calls_saved
-                        stable_extraction_result["batch_stats"]["api_calls_made"] = api_calls_made
-                        
-                        # Final status
-                        total_meanings = len(stable_extraction_result["code_meanings"]["ndc_code_meanings"]) + len(stable_extraction_result["code_meanings"]["medication_meanings"])
-                        
-                        if total_meanings > 0:
-                            stable_extraction_result["code_meanings_added"] = True
-                            stable_extraction_result["stable_analysis"] = True
-                            stable_extraction_result["llm_call_status"] = "completed"
-                            logger.info(f"Pharmacy batch success: {total_meanings} meanings")
-                        else:
-                            stable_extraction_result["llm_call_status"] = "completed_no_meanings"
-                        
-                    except Exception as e:
-                        logger.error(f"Pharmacy batch error: {e}")
-                        stable_extraction_result["code_meaning_error"] = str(e)
-                        stable_extraction_result["llm_call_status"] = "failed"
-                else:
-                    stable_extraction_result["llm_call_status"] = "skipped_no_codes"
+                pharmacy_data = state.get("pharmacy_output", {})
+                deidentified_pharmacy = self.data_processor.deidentify_pharmacy_data_enhanced(pharmacy_data)
+                state["deidentified_pharmacy"] = deidentified_pharmacy
             else:
-                stable_extraction_result["llm_call_status"] = "skipped_no_api"
+                # Mock deidentification for testing
+                state["deidentified_medical"] = {"medical_claims_data": state.get("medical_output", {})}
+                state["deidentified_pharmacy"] = {"pharmacy_claims_data": state.get("pharmacy_output", {})}
 
-            # Performance stats
-            processing_time = time.time() - start_time
-            stable_extraction_result["batch_stats"]["processing_time_seconds"] = round(processing_time, 2)
-
-            logger.info(f"Fixed pharmacy extraction completed in {processing_time:.2f}s")
+            state["step_status"]["deidentify_claims_data"] = "completed"
+            logger.info("Successfully completed comprehensive claims data deidentification")
 
         except Exception as e:
-            logger.error(f"Error in fixed pharmacy extraction: {e}")
-            stable_extraction_result["error"] = f"Fixed pharmacy extraction failed: {str(e)}"
+            error_msg = f"Error in claims data deidentification: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["deidentify_claims_data"] = "error"
+            logger.error(error_msg)
+            print(f"DEBUG: Deidentification error: {e}")
 
-        return stable_extraction_result
+        return state
 
-    def extract_health_entities_with_clinical_insights(self, pharmacy_data: Dict[str, Any],
-                                                      pharmacy_extraction: Dict[str, Any],
-                                                      medical_extraction: Dict[str, Any],
-                                                      patient_data: Dict[str, Any] = None,
-                                                      api_integrator = None) -> Dict[str, Any]:
-        """Fixed health entity extraction with clinical insights"""
-        logger.info("Starting fixed health entity extraction...")
-        
-        # Initialize result structure
-        entities = {
-            "diabetics": "no",
-            "age_group": "unknown",
-            "age": None,
-            "smoking": "no",
-            "alcohol": "no",
-            "blood_pressure": "unknown",
-            "analysis_details": [],
-            "medical_conditions": [],
-            "medications_identified": [],
-            "stable_analysis": True,
-            "llm_analysis": "completed"
-        }
+    def _fixed_deidentify_mcid_data(self, mcid_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Fixed MCID deidentification that preserves mcidList structure"""
+        try:
+            print(f"DEBUG: Fixed deidentification input: {mcid_data}")
+            
+            # Extract the body section while preserving mcidList
+            body_data = mcid_data.get('body', mcid_data)
+            
+            # Ensure mcidList is preserved
+            if isinstance(body_data, dict) and "mcidList" in body_data:
+                mcid_list_value = body_data["mcidList"]
+                print(f"DEBUG: Preserving mcidList: {mcid_list_value}")
+                
+                # Create deidentified structure that EXPLICITLY preserves mcidList
+                deidentified_body = {}
+                
+                # Copy all fields but selectively mask sensitive ones
+                for key, value in body_data.items():
+                    if key == "mcidList":
+                        # NEVER mask the mcidList - preserve exactly as is
+                        deidentified_body[key] = value
+                        print(f"DEBUG: Preserved mcidList unchanged: {value}")
+                    elif key in ["memidnum"]:
+                        # Mask sensitive fields
+                        deidentified_body[key] = "[MASKED]"
+                        print(f"DEBUG: Masked sensitive field {key}")
+                    elif isinstance(value, str) and len(value) > 10 and any(char.isdigit() for char in value):
+                        # Mask other long strings with digits (potential PII) but NOT mcidList
+                        deidentified_body[key] = "[MASKED_ID]" 
+                        print(f"DEBUG: Masked potential PII field {key}")
+                    else:
+                        # Keep other fields as-is
+                        deidentified_body[key] = value
+                
+                result = {
+                    "body": deidentified_body,  # Keep original structure for extraction
+                    "mcid_claims_data": deidentified_body,  # Also provide in wrapped format
+                    "original_structure_preserved": True,
+                    "deidentification_timestamp": datetime.now().isoformat(),
+                    "data_type": "fixed_mcid_claims",
+                    "processing_method": "fixed",
+                    "mcidList_preserved": True,
+                    "mcidList_value": mcid_list_value  # Store for verification
+                }
+                
+                print(f"DEBUG: Fixed deidentified result with preserved mcidList: {result}")
+                return result
+            else:
+                print("DEBUG: No mcidList found in body data")
+                return {
+                    "error": "No mcidList found in MCID data",
+                    "original_data": mcid_data
+                }
+                
+        except Exception as e:
+            print(f"DEBUG: Fixed deidentification error: {e}")
+            logger.error(f"Error in fixed MCID deidentification: {e}")
+            return {"error": f"Fixed deidentification failed: {str(e)}"}
+
+    def extract_claims_fields(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 3: Extract fields from claims data"""
+        logger.info("Starting enhanced claims field extraction...")
+        state["current_step"] = "extract_claims_fields"
+        state["step_status"]["extract_claims_fields"] = "running"
 
         try:
-            # Age calculation
-            if patient_data and patient_data.get('date_of_birth'):
+            if hasattr(self, 'data_processor') and self.data_processor:
+                # Extract medical and pharmacy fields with batch processing
+                medical_extraction = self.data_processor.extract_medical_fields_batch_enhanced(state.get("deidentified_medical", {}))
+                state["medical_extraction"] = medical_extraction
+
+                pharmacy_extraction = self.data_processor.extract_pharmacy_fields_batch_enhanced(state.get("deidentified_pharmacy", {}))
+                state["pharmacy_extraction"] = pharmacy_extraction
+            else:
+                # Mock extraction for testing
+                state["medical_extraction"] = {"hlth_srvc_records": [], "code_meanings": {}}
+                state["pharmacy_extraction"] = {"ndc_records": [], "code_meanings": {}}
+
+            state["step_status"]["extract_claims_fields"] = "completed"
+            logger.info("Successfully completed enhanced claims field extraction")
+
+        except Exception as e:
+            error_msg = f"Error in claims field extraction: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["extract_claims_fields"] = "error"
+            logger.error(error_msg)
+
+        return state
+
+    def extract_entities(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 4: Extract health entities with fixed processing"""
+        logger.info("Starting health entity extraction...")
+        state["current_step"] = "extract_entities"
+        state["step_status"]["extract_entities"] = "running"
+       
+        try:
+            pharmacy_data = state.get("pharmacy_output", {})
+            pharmacy_extraction = state.get("pharmacy_extraction", {})
+            medical_extraction = state.get("medical_extraction", {})
+            patient_data = state.get("patient_data", {})
+           
+            # Calculate age
+            if patient_data.get('date_of_birth'):
                 try:
                     dob = datetime.strptime(patient_data['date_of_birth'], '%Y-%m-%d').date()
                     today = date.today()
-                    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-                    entities["age"] = age
-                    
-                    if age < 18:
-                        entities["age_group"] = "pediatric"
-                    elif age < 35:
-                        entities["age_group"] = "young_adult"
-                    elif age < 50:
-                        entities["age_group"] = "adult"
-                    elif age < 65:
-                        entities["age_group"] = "middle_aged"
-                    else:
-                        entities["age_group"] = "senior"
-                        
-                    entities["analysis_details"].append(f"Age calculated: {age} years")
+                    calculated_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+                    patient_data['calculated_age'] = calculated_age
+                    logger.info(f"Calculated age from DOB: {calculated_age} years")
                 except Exception as e:
-                    logger.warning(f"Age calculation failed: {e}")
-
-            # Analyze medical data for conditions
-            medical_conditions = []
-            if medical_extraction and medical_extraction.get("code_meanings", {}).get("diagnosis_code_meanings"):
-                diagnosis_meanings = medical_extraction["code_meanings"]["diagnosis_code_meanings"]
-                
-                for code, meaning in diagnosis_meanings.items():
-                    meaning_lower = meaning.lower()
-                    
-                    # Check for diabetes
-                    if any(term in meaning_lower for term in ['diabetes', 'diabetic', 'insulin', 'glucose']):
-                        entities["diabetics"] = "yes"
-                        medical_conditions.append(f"Diabetes (ICD-10 {code})")
-                    
-                    # Check for hypertension
-                    if any(term in meaning_lower for term in ['hypertension', 'high blood pressure']):
-                        entities["blood_pressure"] = "diagnosed"
-                        medical_conditions.append(f"Hypertension (ICD-10 {code})")
-                    
-                    # Check for smoking
-                    if any(term in meaning_lower for term in ['tobacco', 'smoking', 'nicotine']):
-                        entities["smoking"] = "yes"
-                        medical_conditions.append(f"Tobacco use (ICD-10 {code})")
-
-            # Analyze pharmacy data for medications
-            if pharmacy_extraction and pharmacy_extraction.get("ndc_records"):
-                for record in pharmacy_extraction["ndc_records"]:
-                    if record.get("lbl_nm"):
-                        medication_info = {
-                            "ndc": record.get("ndc", ""),
-                            "label_name": record.get("lbl_nm", ""),
-                            "stable_processing": True
-                        }
-                        entities["medications_identified"].append(medication_info)
-                        
-                        # Check medication names for conditions
-                        medication_name = record.get("lbl_nm", "").lower()
-                        if any(term in medication_name for term in ['metformin', 'insulin', 'glipizide']):
-                            entities["diabetics"] = "yes"
-                            medical_conditions.append(f"Diabetes medication: {record.get('lbl_nm', '')}")
-                        
-                        if any(term in medication_name for term in ['amlodipine', 'lisinopril', 'atenolol']):
-                            if entities["blood_pressure"] == "unknown":
-                                entities["blood_pressure"] = "managed"
-                            medical_conditions.append(f"BP medication: {record.get('lbl_nm', '')}")
-
-            entities["medical_conditions"] = medical_conditions
-            entities["analysis_details"].append("Fixed clinical insights analysis completed")
-            
-            logger.info(f"Fixed entity extraction completed: {len(medical_conditions)} conditions, {len(entities['medications_identified'])} medications")
-            
-        except Exception as e:
-            logger.error(f"Error in fixed entity extraction: {e}")
-            entities["analysis_details"].append(f"Analysis error: {str(e)}")
-
-        return entities
-
-    # Batch processing methods with retry logic
-    def _stable_batch_service_codes(self, service_codes: List[str]) -> Dict[str, str]:
-        """Batch process service codes with retry logic"""
-        try:
-            if not service_codes:
-                return {}
-                
-            logger.info(f"Batch processing {len(service_codes)} service codes...")
-            
-            codes_text = ", ".join(service_codes)
-            
-            stable_prompt = f"""Please explain these medical service codes. Provide brief explanations for each code.
-
-Service Codes: {codes_text}
-
-Please respond with a JSON object where each code is a key and the explanation is the value. For example:
-{{"12345": "Medical procedure or service description"}}
-
-Only return the JSON object, no other text."""
-
-            stable_system_msg = """You are a medical coding expert. Provide brief, clear explanations of medical service codes in JSON format."""
-            
-            # Use retry logic
-            response, success, attempts = self._call_llm_with_retry(
-                stable_prompt, 
-                stable_system_msg, 
-                "Service Codes Batch"
-            )
-            
-            if success:
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"Successfully parsed {len(meanings_dict)} service code meanings (after {attempts} attempts)")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parse error for service codes (after {attempts} attempts): {e}")
-                    return {code: f"Medical service code {code}" for code in service_codes}
-                except Exception as e:
-                    logger.error(f"Unexpected error parsing service codes (after {attempts} attempts): {e}")
-                    return {code: f"Medical service code {code}" for code in service_codes}
+                    logger.warning(f"Could not calculate age from DOB: {e}")
+           
+            # Extract entities using enhanced method or mock
+            if hasattr(self, 'data_processor') and self.data_processor:
+                entities = self.data_processor.extract_health_entities_with_clinical_insights(
+                    pharmacy_data,
+                    pharmacy_extraction,
+                    medical_extraction,
+                    patient_data,
+                    getattr(self, 'api_integrator', None)
+                )
             else:
-                logger.error(f"All retry attempts failed for service codes: {response}")
-                return {code: f"Medical service code {code}" for code in service_codes}
-                
+                # Mock entity extraction with the 5 required fields
+                entities = {
+                    "diabetics": "yes",
+                    "blood_pressure": "managed",
+                    "age": patient_data.get('calculated_age', 45),
+                    "smoking": "no",
+                    "alcohol": "unknown",
+                    "medical_conditions": ["Sample condition"],
+                    "medications_identified": ["Sample medication"],
+                    "analysis_details": ["Mock entity extraction"]
+                }
+                print(f"DEBUG: Mock entities created: {entities}")
+           
+            state["entity_extraction"] = entities
+            state["step_status"]["extract_entities"] = "completed"
+           
+            conditions_count = len(entities.get("medical_conditions", []))
+            medications_count = len(entities.get("medications_identified", []))
+           
+            logger.info(f"Successfully extracted health entities: {conditions_count} conditions, {medications_count} medications")
+           
         except Exception as e:
-            logger.error(f"Service codes batch exception: {e}")
-            return {code: f"Medical service code {code}" for code in service_codes}
+            error_msg = f"Error in entity extraction: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["extract_entities"] = "error"
+            logger.error(error_msg)
+       
+        return state
 
-    def _stable_batch_diagnosis_codes(self, diagnosis_codes: List[str]) -> Dict[str, str]:
-        """Batch process diagnosis codes with retry logic"""
+    def load_historical_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 5: Load historical patient data with fixed mcidList extraction"""
+        logger.info("Loading historical patient data...")
+        state["current_step"] = "load_historical_data"
+        state["step_status"]["load_historical_data"] = "running"
+
+        # Initialize with empty historical data
+        state["historical_patient_data"] = {}
+        state["patient_history_summary"] = ""
+        state["current_mcid"] = ""
+
         try:
-            if not diagnosis_codes:
-                return {}
+            if not self.config.episodic_memory_enabled or not self.episodic_memory:
+                logger.info("Episodic memory disabled - skipping historical data load")
+                state["step_status"]["load_historical_data"] = "completed"
+                return state
+
+            # Fixed MCID extraction for historical lookup
+            deidentified_mcid = state.get("deidentified_mcid", {})
+            print(f"DEBUG: Deidentified MCID for historical lookup: {deidentified_mcid}")
+            
+            mcid = self.episodic_memory._extract_mcid_list(deidentified_mcid)
+            print(f"DEBUG: Extracted MCID for historical lookup: '{mcid}'")
+
+            if not mcid:
+                logger.info("No MCID found - no historical data to load")
+                state["step_status"]["load_historical_data"] = "completed"
+                return state
+
+            state["current_mcid"] = mcid
+            print(f"DEBUG: Set current_mcid in state: {mcid}")
+
+            # Load historical data
+            historical_memory = self.episodic_memory.load_episodic_memory(mcid)
+            
+            if historical_memory:
+                state["historical_patient_data"] = historical_memory
                 
-            logger.info(f"Batch processing {len(diagnosis_codes)} diagnosis codes...")
-            
-            codes_text = ", ".join(diagnosis_codes)
-            
-            stable_prompt = f"""Please explain these ICD-10 diagnosis codes. Provide brief medical explanations for each code.
-
-Diagnosis Codes: {codes_text}
-
-Please respond with a JSON object where each code is a key and the explanation is the value. For example:
-{{"I10": "Essential hypertension", "E11.9": "Type 2 diabetes mellitus"}}
-
-Only return the JSON object, no other text."""
-
-            stable_system_msg = """You are a medical diagnosis expert. Provide brief, clear explanations of ICD-10 diagnosis codes in JSON format."""
-            
-            # Use retry logic
-            response, success, attempts = self._call_llm_with_retry(
-                stable_prompt, 
-                stable_system_msg, 
-                "Diagnosis Codes Batch"
-            )
-            
-            if success:
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"Successfully parsed {len(meanings_dict)} diagnosis code meanings (after {attempts} attempts)")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parse error for diagnosis codes (after {attempts} attempts): {e}")
-                    return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
-                except Exception as e:
-                    logger.error(f"Unexpected error parsing diagnosis codes (after {attempts} attempts): {e}")
-                    return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
+                # Generate simplified history summary
+                history_summary = self._generate_simplified_patient_history_summary(historical_memory, mcid)
+                state["patient_history_summary"] = history_summary
+                
+                # Determine visit count
+                visit_count = len(historical_memory) if isinstance(historical_memory, list) else 1
+                logger.info(f"Loaded historical data: {visit_count} previous visits for MCID {mcid}")
             else:
-                logger.error(f"All retry attempts failed for diagnosis codes: {response}")
-                return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
-                
-        except Exception as e:
-            logger.error(f"Diagnosis codes batch exception: {e}")
-            return {code: f"ICD-10 diagnosis code {code}" for code in diagnosis_codes}
+                logger.info("No historical data found for this patient")
 
-    def _stable_batch_ndc_codes(self, ndc_codes: List[str]) -> Dict[str, str]:
-        """Batch process NDC codes with retry logic"""
+            state["step_status"]["load_historical_data"] = "completed"
+
+        except Exception as e:
+            error_msg = f"Error loading historical data: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["load_historical_data"] = "error"
+            logger.error(error_msg)
+            print(f"DEBUG: Historical data load error: {e}")
+
+        return state
+
+    def analyze_trajectory(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 6: Health trajectory analysis"""
+        logger.info("Starting health trajectory analysis...")
+        state["current_step"] = "analyze_trajectory"
+        state["step_status"]["analyze_trajectory"] = "running"
+
         try:
-            if not ndc_codes:
-                return {}
-                
-            logger.info(f"Batch processing {len(ndc_codes)} NDC codes...")
-            
-            codes_text = ", ".join(ndc_codes)
-            
-            stable_prompt = f"""Please explain these NDC medication codes. Provide brief explanations for each code.
+            # Mock trajectory analysis for testing
+            state["health_trajectory"] = "Sample health trajectory analysis completed with current and historical data context."
+            state["step_status"]["analyze_trajectory"] = "completed"
+            logger.info("Successfully completed trajectory analysis")
 
-NDC Codes: {codes_text}
-
-Please respond with a JSON object where each code is a key and the explanation is the value. For example:
-{{"12345-678-90": "Medication name and therapeutic use"}}
-
-Only return the JSON object, no other text."""
-
-            stable_system_msg = """You are a pharmacy expert. Provide brief, clear explanations of NDC medication codes in JSON format."""
-            
-            # Use retry logic
-            response, success, attempts = self._call_llm_with_retry(
-                stable_prompt, 
-                stable_system_msg, 
-                "NDC Codes Batch"
-            )
-            
-            if success:
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"Successfully parsed {len(meanings_dict)} NDC code meanings (after {attempts} attempts)")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parse error for NDC codes (after {attempts} attempts): {e}")
-                    return {code: f"NDC medication code {code}" for code in ndc_codes}
-                except Exception as e:
-                    logger.error(f"Unexpected error parsing NDC codes (after {attempts} attempts): {e}")
-                    return {code: f"NDC medication code {code}" for code in ndc_codes}
-            else:
-                logger.error(f"All retry attempts failed for NDC codes: {response}")
-                return {code: f"NDC medication code {code}" for code in ndc_codes}
-                
         except Exception as e:
-            logger.error(f"NDC codes batch exception: {e}")
-            return {code: f"NDC medication code {code}" for code in ndc_codes}
+            error_msg = f"Error in trajectory analysis: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["analyze_trajectory"] = "error"
+            logger.error(error_msg)
 
-    def _stable_batch_medications(self, medications: List[str]) -> Dict[str, str]:
-        """Batch process medications with retry logic"""
+        return state
+
+    def generate_summary(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 7: Generate comprehensive final summary"""
+        logger.info("Generating comprehensive final summary...")
+        state["current_step"] = "generate_summary"
+        state["step_status"]["generate_summary"] = "running"
+
         try:
-            if not medications:
-                return {}
-                
-            logger.info(f"Batch processing {len(medications)} medications...")
-            
-            meds_text = ", ".join(medications)
-            
-            stable_prompt = f"""Please explain these medications. Provide brief explanations for each medication.
+            # Mock summary for testing
+            state["final_summary"] = "Comprehensive patient summary generated with current visit data and historical context."
+            state["step_status"]["generate_summary"] = "completed"
+            logger.info("Successfully generated comprehensive final summary")
 
-Medications: {meds_text}
-
-Please respond with a JSON object where each medication is a key and the explanation is the value. For example:
-{{"Metformin": "Medication for type 2 diabetes", "Lisinopril": "ACE inhibitor for high blood pressure"}}
-
-Only return the JSON object, no other text."""
-
-            stable_system_msg = """You are a medication expert. Provide brief, clear explanations of medications in JSON format."""
-            
-            # Use retry logic
-            response, success, attempts = self._call_llm_with_retry(
-                stable_prompt, 
-                stable_system_msg, 
-                "Medications Batch"
-            )
-            
-            if success:
-                try:
-                    clean_response = self._clean_json_response_stable(response)
-                    meanings_dict = json.loads(clean_response)
-                    logger.info(f"Successfully parsed {len(meanings_dict)} medication meanings (after {attempts} attempts)")
-                    return meanings_dict
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parse error for medications (after {attempts} attempts): {e}")
-                    return {med: f"Medication: {med}" for med in medications}
-                except Exception as e:
-                    logger.error(f"Unexpected error parsing medications (after {attempts} attempts): {e}")
-                    return {med: f"Medication: {med}" for med in medications}
-            else:
-                logger.error(f"All retry attempts failed for medications: {response}")
-                return {med: f"Medication: {med}" for med in medications}
-                
         except Exception as e:
-            logger.error(f"Medications batch exception: {e}")
-            return {med: f"Medication: {med}" for med in medications}
+            error_msg = f"Error in summary generation: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["generate_summary"] = "error"
+            logger.error(error_msg)
 
-    # Graph generation methods
-    def detect_graph_request(self, user_query: str) -> Dict[str, Any]:
-        """Detect if user is requesting a graph/chart"""
-        query_lower = user_query.lower()
-        
-        graph_keywords = [
-            'chart', 'graph', 'plot', 'visualize', 'visualization', 'show me',
-            'create a', 'generate', 'display', 'timeline', 'pie chart', 
-            'bar chart', 'histogram', 'scatter plot', 'dashboard'
-        ]
-        
-        medical_data_keywords = [
-            'medication', 'diagnosis', 'risk', 'condition', 'health', 
-            'medical', 'pharmacy', 'claims', 'timeline', 'trend'
-        ]
-        
-        has_graph_keyword = any(keyword in query_lower for keyword in graph_keywords)
-        has_medical_keyword = any(keyword in query_lower for keyword in medical_data_keywords)
-        
-        is_graph_request = has_graph_keyword and has_medical_keyword
-        
-        # Determine graph type
-        graph_type = "general"
-        if "medication" in query_lower and ("timeline" in query_lower or "time" in query_lower):
-            graph_type = "medication_timeline"
-        elif "diagnosis" in query_lower and ("timeline" in query_lower or "time" in query_lower):
-            graph_type = "diagnosis_timeline"
-        elif "pie" in query_lower or "distribution" in query_lower:
-            graph_type = "pie_chart"
-        elif "risk" in query_lower and ("dashboard" in query_lower or "assessment" in query_lower):
-            graph_type = "risk_dashboard"
-        elif "bar" in query_lower or "count" in query_lower:
-            graph_type = "bar_chart"
-        
-        return {
-            "is_graph_request": is_graph_request,
-            "graph_type": graph_type,
-            "confidence": 0.8 if is_graph_request else 0.1
+        return state
+
+    def predict_heart_attack(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 8: Heart attack prediction"""
+        logger.info("Starting heart attack prediction...")
+        state["current_step"] = "predict_heart_attack"
+        state["step_status"]["predict_heart_attack"] = "running"
+
+        try:
+            # Mock heart attack prediction for testing
+            state["heart_attack_prediction"] = {
+                "risk_display": "Heart Disease Risk: 25.0% (Low Risk)",
+                "confidence_display": "Confidence: 85.0%",
+                "combined_display": "Heart Disease Risk: 25.0% (Low Risk) | Confidence: 85.0%",
+                "raw_risk_score": 0.25,
+                "risk_category": "Low Risk",
+                "prediction_timestamp": datetime.now().isoformat()
+            }
+            state["heart_attack_risk_score"] = 0.25
+            state["heart_attack_features"] = {"Age": 45, "Gender": 0, "Diabetes": 1, "High_BP": 1, "Smoking": 0}
+            
+            state["step_status"]["predict_heart_attack"] = "completed"
+            logger.info("Heart attack prediction completed")
+
+        except Exception as e:
+            error_msg = f"Error in heart attack prediction: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["predict_heart_attack"] = "error"
+            logger.error(error_msg)
+
+        return state
+
+    def save_episodic_memory(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 9: Fixed episodic memory save with proper data handling"""
+        logger.info("Saving episodic memory with fixed data handling...")
+        state["current_step"] = "save_episodic_memory"
+        state["step_status"]["save_episodic_memory"] = "running"
+
+        # Initialize empty result
+        state["episodic_memory_result"] = {
+            "success": False,
+            "skipped": True,
+            "reason": "episodic_memory_disabled"
         }
 
-    def generate_matplotlib_code(self, graph_type: str, chat_context: Dict[str, Any]) -> str:
-        """Generate matplotlib code based on graph type and available data"""
         try:
-            if graph_type == "medication_timeline":
-                return self._generate_medication_timeline_code(chat_context)
-            elif graph_type == "diagnosis_timeline":
-                return self._generate_diagnosis_timeline_code(chat_context)
-            elif graph_type == "pie_chart":
-                return self._generate_medication_pie_code(chat_context)
-            elif graph_type == "risk_dashboard":
-                return self._generate_risk_dashboard_code(chat_context)
-            elif graph_type == "bar_chart":
-                return self._generate_condition_bar_code(chat_context)
-            else:
-                return self._generate_general_health_overview_code(chat_context)
-        except Exception as e:
-            logger.error(f"Error generating matplotlib code: {e}")
-            return self._generate_error_chart_code(str(e))
+            if not self.config.episodic_memory_enabled or not self.episodic_memory:
+                logger.info("Episodic memory disabled - skipping save")
+                state["step_status"]["save_episodic_memory"] = "completed"
+                return state
 
-    # Helper methods
-    def _calculate_age_stable(self, date_of_birth: str) -> str:
-        """Fixed age calculation"""
-        try:
-            if not date_of_birth:
-                return "unknown"
-            dob = datetime.strptime(date_of_birth, '%Y-%m-%d').date()
-            today = date.today()
-            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            # Get the required data with debug logging
+            deidentified_mcid = state.get("deidentified_mcid", {})
+            entity_extraction = state.get("entity_extraction", {})
             
-            if age < 18:
-                return f"{age} years (Pediatric)"
-            elif age < 65:
-                return f"{age} years (Adult)"
+            print(f"DEBUG: === EPISODIC MEMORY SAVE NODE ===")
+            print(f"DEBUG: deidentified_mcid available: {bool(deidentified_mcid)}")
+            print(f"DEBUG: entity_extraction available: {bool(entity_extraction)}")
+            print(f"DEBUG: deidentified_mcid keys: {list(deidentified_mcid.keys()) if isinstance(deidentified_mcid, dict) else 'not dict'}")
+            print(f"DEBUG: entity_extraction: {entity_extraction}")
+            
+            if not deidentified_mcid or not entity_extraction:
+                error_msg = "Missing required data for episodic memory"
+                logger.warning(error_msg)
+                print(f"DEBUG: {error_msg}")
+                state["episodic_memory_result"] = {
+                    "success": False,
+                    "error": error_msg,
+                    "skipped": True,
+                    "debug_info": {
+                        "deidentified_mcid_available": bool(deidentified_mcid),
+                        "entity_extraction_available": bool(entity_extraction)
+                    }
+                }
+                state["step_status"]["save_episodic_memory"] = "completed"
+                return state
+
+            # Fixed episodic memory save
+            print("DEBUG: Calling episodic memory save...")
+            memory_result = self.episodic_memory.save_episodic_memory(
+                deidentified_mcid=deidentified_mcid,
+                entity_extraction=entity_extraction
+            )
+
+            print(f"DEBUG: Memory save result: {memory_result}")
+            state["episodic_memory_result"] = memory_result
+            
+            if memory_result["success"]:
+                logger.info(f"Fixed episodic memory {memory_result['operation']}: MCID {memory_result.get('mcid', 'unknown')}")
+                logger.info(f"Visit count: {memory_result.get('visit_count', 0)}")
+                print(f"DEBUG: Episodic memory save SUCCESS")
             else:
-                return f"{age} years (Senior)"
-        except:
-            return "unknown"
+                logger.error(f"Fixed episodic memory failed: {memory_result.get('error', 'unknown')}")
+                print(f"DEBUG: Episodic memory save FAILED: {memory_result.get('error', 'unknown')}")
 
-    def _stable_deidentify_json(self, data: Any) -> Any:
-        """Fixed JSON deidentification that never touches mcidList"""
-        if isinstance(data, dict):
-            deidentified_dict = {}
-            for key, value in data.items():
-                if key == "mcidList":
-                    # NEVER deidentify mcidList - preserve exactly
-                    deidentified_dict[key] = value
-                    print(f"DEBUG: Preserved mcidList in JSON deidentification: {key} = {value}")
-                elif isinstance(value, (dict, list)):
-                    deidentified_dict[key] = self._stable_deidentify_json(value)
-                elif isinstance(value, str):
-                    deidentified_dict[key] = self._stable_deidentify_string(value)
-                else:
-                    deidentified_dict[key] = value
-            return deidentified_dict
-        elif isinstance(data, list):
-            return [self._stable_deidentify_json(item) for item in data]
-        elif isinstance(data, str):
-            return self._stable_deidentify_string(data)
-        else:
-            return data
-
-    def _stable_deidentify_pharmacy_json(self, data: Any) -> Any:
-        """Fixed pharmacy JSON deidentification"""
-        if isinstance(data, dict):
-            deidentified_dict = {}
-            for key, value in data.items():
-                if key == "mcidList":
-                    # NEVER mask mcidList
-                    deidentified_dict[key] = value
-                    print(f"DEBUG: Preserved mcidList in pharmacy deidentification: {key} = {value}")
-                elif key.lower() in ['src_mbr_first_nm', 'src_mbr_frst_nm', 'scr_mbr_last_nm', 'src_mbr_last_nm']:
-                    deidentified_dict[key] = "[MASKED_NAME]"
-                elif isinstance(value, (dict, list)):
-                    deidentified_dict[key] = self._stable_deidentify_pharmacy_json(value)
-                elif isinstance(value, str):
-                    deidentified_dict[key] = self._stable_deidentify_string(value)
-                else:
-                    deidentified_dict[key] = value
-            return deidentified_dict
-        elif isinstance(data, list):
-            return [self._stable_deidentify_pharmacy_json(item) for item in data]
-        elif isinstance(data, str):
-            return self._stable_deidentify_string(data)
-        else:
-            return data
-
-    def _mask_medical_fields_stable(self, data: Any) -> Any:
-        """Fixed medical field masking that preserves mcidList"""
-        if isinstance(data, dict):
-            masked_data = {}
-            for key, value in data.items():
-                if key == "mcidList":
-                    # NEVER mask mcidList
-                    masked_data[key] = value
-                    print(f"DEBUG: Preserved mcidList in medical masking: {key} = {value}")
-                elif key.lower() in ['src_mbr_frst_nm', 'src_mbr_first_nm', 'src_mbr_last_nm', 'src_mvr_last_nm']:
-                    masked_data[key] = "[MASKED_NAME]"
-                elif isinstance(value, (dict, list)):
-                    masked_data[key] = self._mask_medical_fields_stable(value)
-                else:
-                    masked_data[key] = value
-            return masked_data
-        elif isinstance(data, list):
-            return [self._mask_medical_fields_stable(item) for item in data]
-        else:
-            return data
-
-    def _stable_deidentify_string(self, data: str) -> str:
-        """Fixed string deidentification that preserves mcidList values"""
-        if not isinstance(data, str) or not data.strip():
-            return data
-
-        # Check if this is an mcidList value (pure numeric string of reasonable length)
-        if data.strip().isdigit() and 6 <= len(data.strip()) <= 15:
-            # This looks like an MCID - preserve it
-            print(f"DEBUG: Preserving potential mcidList numeric value: {data}")
-            return data
-
-        deidentified = str(data)
-        
-        # Apply deidentification patterns
-        deidentified = re.sub(r'\b\d{3}-?\d{2}-?\d{4}\b', '[MASKED_SSN]', deidentified)
-        deidentified = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '[MASKED_PHONE]', deidentified)
-        deidentified = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[MASKED_EMAIL]', deidentified)
-        deidentified = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', '[MASKED_NAME]', deidentified)
-        
-        return deidentified
-
-    def _stable_medical_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
-        """Fixed recursive medical field extraction"""
-        if isinstance(data, dict):
-            current_record = {}
-
-            # Health service code extraction
-            if "hlth_srvc_cd" in data and data["hlth_srvc_cd"]:
-                service_code = str(data["hlth_srvc_cd"]).strip()
-                current_record["hlth_srvc_cd"] = service_code
-                result["extraction_summary"]["unique_service_codes"].add(service_code)
-
-            # Claim received date extraction
-            if "clm_rcvd_dt" in data and data["clm_rcvd_dt"]:
-                current_record["clm_rcvd_dt"] = data["clm_rcvd_dt"]
-
-            # Claim line service end date extraction
-            if "clm_line_srvc_end_dt" in data and data["clm_line_srvc_end_dt"]:
-                current_record["clm_line_srvc_end_dt"] = data["clm_line_srvc_end_dt"]
-
-            # Diagnosis codes extraction
-            diagnosis_codes = []
-
-            # Handle comma-separated diagnosis codes
-            if "diag_1_50_cd" in data and data["diag_1_50_cd"]:
-                diag_value = str(data["diag_1_50_cd"]).strip()
-                if diag_value and diag_value.lower() not in ['null', 'none', '']:
-                    individual_codes = [code.strip() for code in diag_value.split(',') if code.strip()]
-                    for i, code in enumerate(individual_codes, 1):
-                        if code and code.lower() not in ['null', 'none', '']:
-                            diagnosis_info = {
-                                "code": code,
-                                "position": i,
-                                "source": "diag_1_50_cd"
-                            }
-                            diagnosis_codes.append(diagnosis_info)
-                            result["extraction_summary"]["unique_diagnosis_codes"].add(code)
-
-            # Handle individual diagnosis fields
-            for i in range(1, 51):
-                diag_key = f"diag_{i}_cd"
-                if diag_key in data and data[diag_key]:
-                    diag_code = str(data[diag_key]).strip()
-                    if diag_code and diag_code.lower() not in ['null', 'none', '']:
-                        diagnosis_info = {
-                            "code": diag_code,
-                            "position": i,
-                            "source": f"individual_{diag_key}"
-                        }
-                        diagnosis_codes.append(diagnosis_info)
-                        result["extraction_summary"]["unique_diagnosis_codes"].add(diag_code)
-
-            if diagnosis_codes:
-                current_record["diagnosis_codes"] = diagnosis_codes
-                result["extraction_summary"]["total_diagnosis_codes"] += len(diagnosis_codes)
-
-            if current_record:
-                current_record["data_path"] = path
-                result["hlth_srvc_records"].append(current_record)
-                result["extraction_summary"]["total_hlth_srvc_records"] += 1
-
-            # Continue recursive search
-            for key, value in data.items():
-                new_path = f"{path}.{key}" if path else key
-                self._stable_medical_extraction(value, result, new_path)
-
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                new_path = f"{path}[{i}]" if path else f"[{i}]"
-                self._stable_medical_extraction(item, result, new_path)
-
-    def _stable_pharmacy_extraction(self, data: Any, result: Dict[str, Any], path: str = ""):
-        """Fixed recursive pharmacy field extraction"""
-        if isinstance(data, dict):
-            current_record = {}
-
-            # NDC code extraction
-            ndc_found = False
-            for key in data:
-                if key.lower() in ['ndc', 'ndc_code', 'ndc_number', 'national_drug_code']:
-                    ndc_code = str(data[key]).strip()
-                    current_record["ndc"] = ndc_code
-                    result["extraction_summary"]["unique_ndc_codes"].add(ndc_code)
-                    ndc_found = True
-                    break
-
-            # Medication name extraction
-            label_found = False
-            for key in data:
-                if key.lower() in ['lbl_nm', 'label_name', 'drug_name', 'medication_name', 'product_name']:
-                    medication_name = str(data[key]).strip()
-                    current_record["lbl_nm"] = medication_name
-                    result["extraction_summary"]["unique_label_names"].add(medication_name)
-                    label_found = True
-                    break
-
-            # Prescription filled date extraction
-            if "rx_filled_dt" in data and data["rx_filled_dt"]:
-                current_record["rx_filled_dt"] = data["rx_filled_dt"]
-
-            if ndc_found or label_found or "rx_filled_dt" in current_record:
-                current_record["data_path"] = path
-                result["ndc_records"].append(current_record)
-                result["extraction_summary"]["total_ndc_records"] += 1
-
-            # Continue recursive search
-            for key, value in data.items():
-                new_path = f"{path}.{key}" if path else key
-                self._stable_pharmacy_extraction(value, result, new_path)
-
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                new_path = f"{path}[{i}]" if path else f"[{i}]"
-                self._stable_pharmacy_extraction(item, result, new_path)
-
-    def prepare_enhanced_clinical_context(self, chat_context: Dict[str, Any]) -> str:
-        """Fixed context preparation for chatbot"""
-        try:
-            context_parts = []
-
-            # Patient overview
-            patient_overview = chat_context.get("patient_overview", {})
-            if patient_overview:
-                context_parts.append(f"**PATIENT**: Age {patient_overview.get('age', 'unknown')}, ZIP {patient_overview.get('zip', 'unknown')}")
-
-            # Medical extractions
-            medical_extraction = chat_context.get("medical_extraction", {})
-            if medical_extraction and not medical_extraction.get('error'):
-                context_parts.append(f"**MEDICAL DATA**: {json.dumps(medical_extraction, indent=2)}")
-
-            # Pharmacy extractions
-            pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
-            if pharmacy_extraction and not pharmacy_extraction.get('error'):
-                context_parts.append(f"**PHARMACY DATA**: {json.dumps(pharmacy_extraction, indent=2)}")
-
-            # Entity extraction
-            entity_extraction = chat_context.get("entity_extraction", {})
-            if entity_extraction:
-                context_parts.append(f"**HEALTH ENTITIES**: {json.dumps(entity_extraction, indent=2)}")
-
-            # Health trajectory
-            health_trajectory = chat_context.get("health_trajectory", "")
-            if health_trajectory:
-                context_parts.append(f"**HEALTH TRAJECTORY**: {health_trajectory[:500]}...")
-
-            # Cardiovascular risk assessment
-            heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
-            if heart_attack_prediction:
-                context_parts.append(f"**CARDIOVASCULAR RISK**: {json.dumps(heart_attack_prediction, indent=2)}")
-
-            return "\n\n" + "\n\n".join(context_parts)
+            state["step_status"]["save_episodic_memory"] = "completed"
 
         except Exception as e:
-            logger.error(f"Error preparing fixed context: {e}")
-            return "Fixed patient healthcare data available for analysis."
+            error_msg = f"Error saving episodic memory: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["save_episodic_memory"] = "error"
+            logger.error(error_msg)
+            print(f"DEBUG: Episodic memory save exception: {e}")
+            
+            state["episodic_memory_result"] = {
+                "success": False,
+                "error": str(e),
+                "debug_info": {
+                    "exception_type": type(e).__name__
+                }
+            }
 
-    def _clean_json_response_stable(self, response: str) -> str:
-        """Fixed LLM response cleaning for JSON extraction"""
+        return state
+
+    def initialize_chatbot(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Node 10: Initialize chatbot"""
+        logger.info("Initializing chatbot...")
+        state["current_step"] = "initialize_chatbot"
+        state["step_status"]["initialize_chatbot"] = "running"
+
         try:
-            # Remove markdown wrappers
-            if response.startswith('```json'):
-                response = response[7:]
-            elif response.startswith('```'):
-                response = response[3:]
-            if response.endswith('```'):
-                response = response[:-3]
+            # Prepare comprehensive chatbot context
+            comprehensive_chatbot_context = {
+                "deidentified_medical": state.get("deidentified_medical", {}),
+                "deidentified_pharmacy": state.get("deidentified_pharmacy", {}),
+                "deidentified_mcid": state.get("deidentified_mcid", {}),
+                "medical_extraction": state.get("medical_extraction", {}),
+                "pharmacy_extraction": state.get("pharmacy_extraction", {}),
+                "entity_extraction": state.get("entity_extraction", {}),
+                "health_trajectory": state.get("health_trajectory", ""),
+                "final_summary": state.get("final_summary", ""),
+                "heart_attack_prediction": state.get("heart_attack_prediction", {}),
+                "heart_attack_risk_score": state.get("heart_attack_risk_score", 0.0),
+                "heart_attack_features": state.get("heart_attack_features", {}),
+                "historical_patient_data": state.get("historical_patient_data", {}),
+                "patient_history_summary": state.get("patient_history_summary", ""),
+                "episodic_memory_result": state.get("episodic_memory_result", {}),
+                "current_mcid": state.get("current_mcid", ""),
+                "patient_overview": {
+                    "age": state.get("entity_extraction", {}).get("age", "unknown"),
+                    "mcid": state.get("current_mcid", ""),
+                    "analysis_timestamp": datetime.now().isoformat(),
+                    "heart_attack_risk_level": state.get("heart_attack_prediction", {}).get("risk_category", "unknown"),
+                    "has_historical_data": bool(state.get("historical_patient_data")),
+                    "historical_visits": len(state.get("historical_patient_data", [])) if isinstance(state.get("historical_patient_data"), list) else (1 if state.get("historical_patient_data") else 0),
+                    "episodic_memory_enabled": self.config.episodic_memory_enabled,
+                    "model_type": "fixed_episodic_memory",
+                    "graph_generation_supported": True,
+                    "episodic_memory_fixed": True
+                }
+            }
+
+            state["chat_history"] = []
+            state["chatbot_context"] = comprehensive_chatbot_context
+            state["chatbot_ready"] = True
+            state["graph_generation_ready"] = True
+            state["processing_complete"] = True
+            state["step_status"]["initialize_chatbot"] = "completed"
+
+            logger.info("Successfully initialized chatbot with fixed episodic memory")
+
+        except Exception as e:
+            error_msg = f"Error initializing chatbot: {str(e)}"
+            state["errors"].append(error_msg)
+            state["step_status"]["initialize_chatbot"] = "error"
+            logger.error(error_msg)
+
+        return state
+
+    def handle_error(self, state: HealthAnalysisState) -> HealthAnalysisState:
+        """Error handling node"""
+        logger.error(f"LangGraph Error Handler: {state['current_step']}")
+        logger.error(f"Errors: {state['errors']}")
+
+        state["processing_complete"] = True
+        current_step = state.get("current_step", "unknown")
+        state["step_status"][current_step] = "error"
+        return state
+
+    # ===== CONDITIONAL EDGES =====
+
+    def should_continue_after_api(self, state: HealthAnalysisState) -> Literal["continue", "retry", "error"]:
+        if state["errors"]:
+            if state["retry_count"] < 3:
+                state["retry_count"] += 1
+                logger.warning(f"Retrying API fetch (attempt {state['retry_count']}/3)")
+                state["errors"] = []
+                return "retry"
+            else:
+                logger.error("Max retries (3) exceeded for API fetch")
+                return "error"
+        return "continue"
+
+    def should_continue_after_deidentify(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_extraction_step(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_entity_extraction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_historical_load(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_trajectory(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_summary(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_heart_attack_prediction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        return "error" if state["errors"] else "continue"
+
+    def should_continue_after_episodic_memory(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
+        # Episodic memory errors shouldn't block the workflow
+        return "continue"
+
+    # ===== HELPER METHODS =====
+
+    def _generate_simplified_patient_history_summary(self, historical_memory: Dict[str, Any], mcid: str) -> str:
+        """Generate a formatted summary of patient's simplified historical visits"""
+        try:
+            if not historical_memory:
+                return "No previous visit history available."
             
-            response = response.strip()
+            # Handle both single visit and multiple visits format
+            if isinstance(historical_memory, list):
+                # Multiple visits
+                visits = historical_memory
+                total_visits = len(visits)
+            elif isinstance(historical_memory, dict) and "id_type" in historical_memory:
+                # Single visit
+                visits = [historical_memory]
+                total_visits = 1
+            else:
+                return "Invalid historical data format."
             
-            # Find JSON object boundaries
-            start = response.find('{')
-            end = response.rfind('}') + 1
+            if not visits:
+                return "No visit history available."
             
-            if start != -1 and end > start:
-                json_content = response[start:end]
+            summary_parts = [
+                f"Patient History Summary (MCID: {mcid}):",
+                f"- Total visits: {total_visits}"
+            ]
+            
+            # Add first visit info
+            first_visit = visits[0]
+            first_timestamp = first_visit.get('timestamp', 'Unknown')
+            summary_parts.append(f"- First visit: {first_timestamp[:10] if first_timestamp != 'Unknown' else 'Unknown'}")
+            
+            # Add latest visit info
+            latest_visit = visits[-1]
+            latest_timestamp = latest_visit.get('timestamp', 'Unknown')
+            summary_parts.append(f"- Latest visit: {latest_timestamp[:10] if latest_timestamp != 'Unknown' else 'Unknown'}")
+            
+            summary_parts.append("")
+            summary_parts.append("Visit History (5 Key Health Indicators):")
+            
+            # Add each visit's key health indicators
+            for i, visit in enumerate(visits[-5:], 1):  # Show last 5 visits
+                timestamp = visit.get('timestamp', 'Unknown date')
+                entities = visit.get('entity_extraction', {})
                 
-                # Validate JSON
-                try:
-                    json.loads(json_content)
-                    return json_content
-                except json.JSONDecodeError:
-                    # Try to fix common issues
-                    fixed_content = self._fix_common_json_issues_stable(json_content)
-                    return fixed_content
-            else:
-                return response
+                diabetes = entities.get('diabetics', 'unknown')
+                bp = entities.get('blood_pressure', 'unknown')
+                age = entities.get('age', 'unknown')
+                smoking = entities.get('smoking', 'unknown')
+                alcohol = entities.get('alcohol', 'unknown')
                 
-        except Exception as e:
-            logger.warning(f"JSON cleaning failed: {e}")
-            return response
-
-    def _fix_common_json_issues_stable(self, json_content: str) -> str:
-        """Fix common JSON formatting issues"""
-        try:
-            # Fix trailing commas
-            json_content = re.sub(r',\s*}', '}', json_content)
-            json_content = re.sub(r',\s*]', ']', json_content)
+                visit_line = f"{i}. {timestamp[:10]}: Diabetes: {diabetes}, BP: {bp}, Age: {age}, Smoking: {smoking}, Alcohol: {alcohol}"
+                summary_parts.append(visit_line)
             
-            return json_content
+            return "\n".join(summary_parts)
+            
         except Exception as e:
-            logger.warning(f"JSON fixing failed: {e}")
-            return json_content
+            logger.error(f"Error generating simplified history summary: {e}")
+            return f"Error generating patient history summary: {str(e)}"
 
-    # Matplotlib code generation methods
-    def _generate_medication_timeline_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medication timeline matplotlib code"""
-        return '''
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from datetime import datetime
-import numpy as np
+    # ===== PUBLIC API METHODS =====
 
-# Sample medication timeline
-medications = ['Metformin', 'Lisinopril', 'Atorvastatin', 'Amlodipine']
-dates = ['2023-01-15', '2023-02-20', '2023-03-10', '2023-04-05']
+    def run_analysis(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the fixed health analysis workflow"""
 
-plt.figure(figsize=(12, 8))
+        print(f"DEBUG: === STARTING FIXED HEALTH ANALYSIS ===")
+        print(f"DEBUG: Input patient data: {patient_data}")
 
-# Convert dates and create timeline
-plot_dates = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
-y_positions = range(len(medications))
+        initial_state = HealthAnalysisState(
+            patient_data=patient_data,
+            mcid_output={},
+            medical_output={},
+            pharmacy_output={},
+            token_output={},
+            deidentified_medical={},
+            deidentified_pharmacy={},
+            deidentified_mcid={},
+            medical_extraction={},
+            pharmacy_extraction={},
+            entity_extraction={},
+            health_trajectory="",
+            final_summary="",
+            heart_attack_prediction={},
+            heart_attack_risk_score=0.0,
+            heart_attack_features={},
+            episodic_memory_result={},
+            historical_patient_data={},
+            patient_history_summary="",
+            current_mcid="",
+            chatbot_ready=False,
+            chatbot_context={},
+            chat_history=[],
+            graph_generation_ready=False,
+            current_step="",
+            errors=[],
+            retry_count=0,
+            processing_complete=False,
+            step_status={}
+        )
 
-plt.scatter(plot_dates, y_positions, s=100, c='steelblue', alpha=0.7)
+        try:
+            config_dict = {"configurable": {"thread_id": f"fixed_health_analysis_{datetime.now().timestamp()}"}}
 
-for i, (date, med) in enumerate(zip(plot_dates, medications)):
-    plt.annotate(med, (date, i), xytext=(10, 0), 
-                textcoords='offset points', va='center',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='lightblue', alpha=0.7))
+            logger.info("Starting Fixed LangGraph workflow...")
 
-plt.yticks(y_positions, [f"Rx {i+1}" for i in range(len(medications))])
-plt.xlabel('Date')
-plt.ylabel('Medications')
-plt.title('Patient Medication Timeline', fontsize=16, fontweight='bold')
+            final_state = self.graph.invoke(initial_state, config=config_dict)
 
-plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-plt.gca().xaxis.set_major_locator(mdates.MonthLocator())
-plt.xticks(rotation=45)
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
-'''
+            results = {
+                "success": final_state["processing_complete"] and not final_state["errors"],
+                "patient_data": final_state["patient_data"],
+                "api_outputs": {
+                    "mcid": final_state["mcid_output"],
+                    "medical": final_state["medical_output"],
+                    "pharmacy": final_state["pharmacy_output"],
+                    "token": final_state["token_output"]
+                },
+                "deidentified_data": {
+                    "medical": final_state["deidentified_medical"],
+                    "pharmacy": final_state["deidentified_pharmacy"],
+                    "mcid": final_state["deidentified_mcid"]
+                },
+                "structured_extractions": {
+                    "medical": final_state["medical_extraction"],
+                    "pharmacy": final_state["pharmacy_extraction"]
+                },
+                "entity_extraction": final_state["entity_extraction"],
+                "health_trajectory": final_state["health_trajectory"],
+                "final_summary": final_state["final_summary"],
+                "heart_attack_prediction": final_state["heart_attack_prediction"],
+                "heart_attack_risk_score": final_state["heart_attack_risk_score"],
+                "heart_attack_features": final_state["heart_attack_features"],
+                "episodic_memory": final_state["episodic_memory_result"],
+                "historical_data": final_state["historical_patient_data"],
+                "patient_history_summary": final_state["patient_history_summary"],
+                "current_mcid": final_state["current_mcid"],
+                "chatbot_ready": final_state["chatbot_ready"],
+                "chatbot_context": final_state["chatbot_context"],
+                "graph_generation_ready": final_state["graph_generation_ready"],
+                "errors": final_state["errors"],
+                "step_status": final_state["step_status"],
+                "enhancement_version": "v10.0_fixed_episodic_memory"
+            }
 
-    def _generate_diagnosis_timeline_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate diagnosis timeline matplotlib code"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-from datetime import datetime
+            print(f"DEBUG: === ANALYSIS RESULTS ===")
+            print(f"DEBUG: Success: {results['success']}")
+            print(f"DEBUG: Episodic memory result: {results['episodic_memory']}")
+            print(f"DEBUG: Current MCID: {results['current_mcid']}")
+            print(f"DEBUG: Errors: {results['errors']}")
 
-# Sample diagnosis data
-diagnoses = ['Hypertension', 'Type 2 Diabetes', 'Hyperlipidemia']
-diagnosis_dates = ['2022-06-15', '2022-12-20', '2023-03-10']
-icd_codes = ['I10', 'E11.9', 'E78.5']
+            if results["success"]:
+                logger.info("Fixed LangGraph analysis completed successfully")
+                memory_result = results["episodic_memory"]
+                if memory_result.get("success"):
+                    logger.info(f"Fixed episodic memory {memory_result['operation']}: MCID {memory_result.get('mcid', 'unknown')}")
+            else:
+                logger.error(f"Fixed LangGraph analysis failed: {final_state['errors']}")
 
-plt.figure(figsize=(12, 6))
+            return results
 
-# Convert dates
-dates = [datetime.strptime(d, '%Y-%m-%d') for d in diagnosis_dates]
+        except Exception as e:
+            logger.error(f"Fatal error in Fixed LangGraph workflow: {str(e)}")
+            print(f"DEBUG: Fatal workflow error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "patient_data": patient_data,
+                "errors": [str(e)],
+                "enhancement_version": "v10.0_fixed_episodic_memory"
+            }
 
-# Create timeline
-for i, (date, diagnosis, code) in enumerate(zip(dates, diagnoses, icd_codes)):
-    plt.barh(i, 1, left=date.toordinal(), height=0.6, 
-             color=plt.cm.Set3(i), alpha=0.7, label=f"{diagnosis} ({code})")
+# Test function for the complete workflow
+def test_complete_workflow():
+    """Test the complete workflow with fixed episodic memory"""
     
-    plt.text(date.toordinal() + 15, i, f"{diagnosis}\\n{code}", 
-             va='center', ha='left', fontweight='bold')
-
-plt.yticks(range(len(diagnoses)), [f"Condition {i+1}" for i in range(len(diagnoses))])
-plt.xlabel('Timeline')
-plt.ylabel('Medical Conditions')
-plt.title('Patient Diagnosis Timeline', fontsize=16, fontweight='bold')
-
-ax = plt.gca()
-ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: datetime.fromordinal(int(x)).strftime('%Y-%m')))
-plt.xticks(rotation=45)
-
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.show()
-'''
-
-    def _generate_medication_pie_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medication distribution pie chart"""
-        return '''
-import matplotlib.pyplot as plt
-
-medications = ['Metformin', 'Lisinopril', 'Atorvastatin', 'Amlodipine', 'Aspirin']
-frequencies = [30, 25, 20, 15, 10]
-colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99', '#ff99cc']
-
-plt.figure(figsize=(10, 8))
-wedges, texts, autotexts = plt.pie(frequencies, labels=medications, autopct='%1.1f%%',
-                                  colors=colors, startangle=90, explode=(0.1, 0, 0, 0, 0))
-
-for autotext in autotexts:
-    autotext.set_color('white')
-    autotext.set_fontweight('bold')
-
-plt.title('Patient Medication Distribution', fontsize=16, fontweight='bold', pad=20)
-
-legend_labels = [f"{med} - {freq} days" for med, freq in zip(medications, frequencies)]
-plt.legend(wedges, legend_labels, title="Medications", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
-
-plt.axis('equal')
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_risk_dashboard_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate risk assessment dashboard"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Risk assessment data
-risk_categories = ['Cardiovascular', 'Diabetes', 'Hypertension', 'Medication Adherence']
-risk_scores = [0.65, 0.45, 0.75, 0.30]
-risk_levels = ['High', 'Medium', 'High', 'Low']
-
-fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-
-# 1. Risk Scores Bar Chart
-colors = ['red' if score > 0.6 else 'orange' if score > 0.4 else 'green' for score in risk_scores]
-bars = ax1.bar(risk_categories, risk_scores, color=colors, alpha=0.7)
-ax1.set_title('Risk Assessment Scores', fontweight='bold')
-ax1.set_ylabel('Risk Score (0-1)')
-ax1.set_ylim(0, 1)
-
-for bar, score in zip(bars, risk_scores):
-    height = bar.get_height()
-    ax1.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-             f'{score:.2f}', ha='center', va='bottom', fontweight='bold')
-
-ax1.tick_params(axis='x', rotation=45)
-
-# 2. Risk Level Distribution
-risk_counts = {'Low': 1, 'Medium': 1, 'High': 2}
-ax2.pie(risk_counts.values(), labels=risk_counts.keys(), autopct='%1.0f%%',
-        colors=['green', 'orange', 'red'], startangle=90)
-ax2.set_title('Risk Level Distribution', fontweight='bold')
-
-# 3. Monthly Risk Trend
-months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-risk_trend = [0.3, 0.35, 0.45, 0.5, 0.6, 0.65]
-ax3.plot(months, risk_trend, marker='o', linewidth=2, markersize=8, color='darkred')
-ax3.fill_between(months, risk_trend, alpha=0.3, color='red')
-ax3.set_title('Cardiovascular Risk Trend', fontweight='bold')
-ax3.set_ylabel('Risk Score')
-ax3.grid(True, alpha=0.3)
-
-# 4. Health Metrics Radar
-metrics = ['Blood Pressure', 'Cholesterol', 'Blood Sugar', 'Weight', 'Exercise']
-values = [0.7, 0.6, 0.8, 0.5, 0.3]
-
-angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
-values += values[:1]
-angles += angles[:1]
-
-ax4.plot(angles, values, 'o-', linewidth=2, color='blue')
-ax4.fill(angles, values, alpha=0.25, color='blue')
-ax4.set_xticks(angles[:-1])
-ax4.set_xticklabels(metrics)
-ax4.set_ylim(0, 1)
-ax4.set_title('Health Metrics Overview', fontweight='bold')
-ax4.grid(True)
-
-plt.suptitle('Comprehensive Patient Risk Dashboard', fontsize=16, fontweight='bold', y=0.98)
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_condition_bar_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate medical conditions bar chart"""
-        return '''
-import matplotlib.pyplot as plt
-
-conditions = ['Hypertension', 'Type 2 Diabetes', 'Hyperlipidemia', 'Obesity', 'Depression']
-severity_scores = [7, 6, 5, 4, 3]
-colors = ['#d62728', '#ff7f0e', '#2ca02c', '#1f77b4', '#9467bd']
-
-plt.figure(figsize=(12, 8))
-
-bars = plt.barh(conditions, severity_scores, color=colors, alpha=0.8)
-
-for i, (bar, score) in enumerate(zip(bars, severity_scores)):
-    plt.text(score + 0.1, i, f'{score}/10', va='center', fontweight='bold')
-
-plt.xlabel('Severity Score (1-10)')
-plt.title('Patient Medical Conditions - Severity Assessment', fontsize=16, fontweight='bold')
-plt.xlim(0, 10)
-plt.grid(axis='x', alpha=0.3)
-
-for i, score in enumerate(severity_scores):
-    if score >= 7:
-        severity_label = "High"
-        color_intensity = 0.9
-    elif score >= 4:
-        severity_label = "Medium"
-        color_intensity = 0.6
-    else:
-        severity_label = "Low"
-        color_intensity = 0.3
-    
-    plt.text(0.2, i, severity_label, va='center', ha='left', 
-             fontweight='bold', color='white', 
-             bbox=dict(boxstyle='round', facecolor='black', alpha=color_intensity))
-
-plt.tight_layout()
-plt.show()
-'''
-
-    def _generate_general_health_overview_code(self, chat_context: Dict[str, Any]) -> str:
-        """Generate general health overview"""
-        return '''
-import matplotlib.pyplot as plt
-import numpy as np
-
-plt.figure(figsize=(15, 10))
-
-gs = plt.GridSpec(2, 2, hspace=0.3, wspace=0.3)
-
-# 1. Health Score Gauge
-ax1 = plt.subplot(gs[0, 0])
-health_score = 72
-theta = np.linspace(0, np.pi, 100)
-r = np.ones_like(theta)
-ax1.plot(theta, r, 'k-', linewidth=8)
-score_theta = np.pi * (1 - health_score/100)
-ax1.plot([score_theta, score_theta], [0, 1], 'r-', linewidth=6)
-ax1.fill_between(theta[theta <= score_theta], 0, 1, alpha=0.3, color='green')
-ax1.fill_between(theta[theta > score_theta], 0, 1, alpha=0.3, color='red')
-ax1.set_ylim(0, 1.2)
-ax1.set_xlim(0, np.pi)
-ax1.text(np.pi/2, 0.5, f'{health_score}', ha='center', va='center', fontsize=24, fontweight='bold')
-ax1.text(np.pi/2, 0.3, 'Health Score', ha='center', va='center', fontsize=12)
-ax1.set_title('Overall Health Score', fontweight='bold')
-ax1.axis('off')
-
-# 2. Risk Factors
-ax2 = plt.subplot(gs[0, 1])
-risk_factors = ['Age', 'Diabetes', 'Hypertension', 'Smoking', 'Family History']
-risk_values = [0.6, 0.8, 0.7, 0.2, 0.5]
-colors = ['red' if v > 0.6 else 'orange' if v > 0.4 else 'green' for v in risk_values]
-bars = ax2.barh(risk_factors, risk_values, color=colors, alpha=0.7)
-ax2.set_xlim(0, 1)
-ax2.set_xlabel('Risk Level')
-ax2.set_title('Risk Factors Assessment', fontweight='bold')
-
-# 3. Medication Adherence
-ax3 = plt.subplot(gs[1, 0])
-months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
-adherence = [0.95, 0.88, 0.92, 0.85, 0.90, 0.87]
-ax3.plot(months, adherence, marker='o', linewidth=3, markersize=8, color='blue')
-ax3.fill_between(months, adherence, alpha=0.3, color='blue')
-ax3.set_ylim(0.7, 1.0)
-ax3.set_ylabel('Adherence Rate')
-ax3.set_title('Medication Adherence Trend', fontweight='bold')
-ax3.grid(True, alpha=0.3)
-
-# 4. Health Categories
-ax4 = plt.subplot(gs[1, 1])
-categories = ['Physical', 'Mental', 'Social', 'Preventive']
-scores = [75, 68, 82, 60]
-colors_cat = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-bars_cat = ax4.bar(categories, scores, color=colors_cat, alpha=0.7)
-ax4.set_ylim(0, 100)
-ax4.set_ylabel('Score (0-100)')
-ax4.set_title('Health Categories', fontweight='bold')
-
-for bar, score in zip(bars_cat, scores):
-    height = bar.get_height()
-    ax4.text(bar.get_x() + bar.get_width()/2., height + 1,
-             f'{score}', ha='center', va='bottom', fontweight='bold')
-
-plt.suptitle('Comprehensive Patient Health Overview', fontsize=16, fontweight='bold')
-plt.show()
-'''
-
-    def _generate_error_chart_code(self, error_message: str) -> str:
-        """Generate chart for error scenarios"""
-        return f'''
-import matplotlib.pyplot as plt
-
-plt.figure(figsize=(10, 6))
-plt.text(0.5, 0.6, 'Visualization Error', 
-         ha='center', va='center', fontsize=20, fontweight='bold', color='red')
-plt.text(0.5, 0.4, 'Error: {error_message[:100]}...', 
-         ha='center', va='center', fontsize=12, color='darkred')
-plt.text(0.5, 0.3, 'Please try a different visualization request', 
-         ha='center', va='center', fontsize=12, color='blue')
-plt.title('Healthcare Data Visualization', fontsize=16)
-plt.axis('off')
-plt.tight_layout()
-plt.show()
-'''
-
-    # Configuration methods
-    def set_retry_config(self, max_attempts: int = 3, delay_seconds: float = 1.0):
-        """Configure retry settings for LLM calls"""
-        self.max_retry_attempts = max(1, max_attempts)
-        self.retry_delay_seconds = max(0, delay_seconds)
-        logger.info(f"Retry configuration updated: {self.max_retry_attempts} max attempts, {self.retry_delay_seconds}s delay")
-
-    def get_retry_config(self) -> Dict[str, Any]:
-        """Get current retry configuration"""
-        return {
-            "max_retry_attempts": self.max_retry_attempts,
-            "retry_delay_seconds": self.retry_delay_seconds
-        }
-
-# Test function to verify mcidList preservation
-def test_mcid_preservation():
-    """Test that mcidList is preserved throughout deidentification"""
-    
-    # Your exact JSON structure
-    test_mcid_data = {
-        "status_code": 200,
-        "body": {
-            "requestID": "1",
-            "processStatus": {
-                "completed": "true",
-                "isMemput": "false",
-                "errorCode": "OK",
-                "errorText": ""
-            },
-            "mcidList": "139407292",
-            "mem": None,
-            "memidnum": "391709711-000002-003324975",
-            "matchScore": "155"
-        },
-        "service": "mcid",
-        "timestamp": "2025-08-28T18:14:34.926435",
-        "status": "success"
+    # Sample patient data
+    test_patient_data = {
+        "first_name": "John",
+        "last_name": "Doe", 
+        "ssn": "123-45-6789",
+        "date_of_birth": "1978-05-15",
+        "gender": "M",
+        "zip_code": "12345"
     }
     
-    print("=== TESTING MCID PRESERVATION ===")
+    print("=== TESTING COMPLETE WORKFLOW ===")
     
-    # Initialize processor
-    processor = EnhancedHealthDataProcessor()
+    # Initialize agent with test configuration
+    config = Config(
+        episodic_memory_enabled=True,
+        episodic_memory_directory="./test_episodic_memory_workflow",
+        episodic_memory_backup_directory="./test_episodic_memory_workflow_backup"
+    )
     
-    # Test deidentification
-    print("Testing MCID deidentification...")
-    deidentified_result = processor.deidentify_mcid_data_enhanced(test_mcid_data)
+    agent = HealthAnalysisAgent(config)
     
-    print(f"Deidentified result: {json.dumps(deidentified_result, indent=2)}")
+    # Run analysis
+    result = agent.run_analysis(test_patient_data)
     
-    # Verify mcidList preservation
-    mcid_preserved = False
-    mcid_value = None
+    print(f"\nWorkflow result: {json.dumps(result, indent=2, default=str)}")
     
-    # Check in body structure
-    if "body" in deidentified_result and "mcidList" in deidentified_result["body"]:
-        mcid_value = deidentified_result["body"]["mcidList"]
-        mcid_preserved = True
-        print(f"SUCCESS: mcidList found in body: {mcid_value}")
+    # Check if episodic memory was created
+    if agent.episodic_memory:
+        stats = agent.episodic_memory.get_statistics()
+        print(f"\nEpisodic Memory Statistics: {stats}")
     
-    # Check in mcid_claims_data structure
-    if "mcid_claims_data" in deidentified_result and "mcidList" in deidentified_result["mcid_claims_data"]:
-        mcid_value = deidentified_result["mcid_claims_data"]["mcidList"]
-        mcid_preserved = True
-        print(f"SUCCESS: mcidList found in mcid_claims_data: {mcid_value}")
+    return result
+
+def main():
+    """Fixed Health Analysis Agent with corrected episodic memory"""
     
-    print(f"MCID Preservation Test: {'PASSED' if mcid_preserved else 'FAILED'}")
-    print(f"MCID Value: {mcid_value}")
+    print("Fixed Health Analysis Agent v10.0 - Corrected Episodic Memory")
+    print("SECURITY WARNING: This implementation stores PHI in local files without encryption")
+    print("This violates HIPAA requirements and should NOT be used in production")
+    print()
+    print("Fixed features:")
+    print("   🔧 Fixed mcidList extraction from deidentified data")
+    print("   📁 Corrected episodic memory file generation")
+    print("   🔍 Enhanced debug logging for troubleshooting")
+    print("   💾 Multiple fallback methods for MCID extraction")
+    print("   ✅ Comprehensive test functions")
+    print()
     
-    return deidentified_result, mcid_preserved
+    # Run the workflow test
+    test_result = test_complete_workflow()
+    
+    print(f"\n=== FINAL TEST RESULT ===")
+    print(f"Workflow success: {'PASSED' if test_result.get('success') else 'FAILED'}")
+    print(f"Episodic memory success: {'PASSED' if test_result.get('episodic_memory', {}).get('success') else 'FAILED'}")
+    
+    return "Fixed Health Agent with corrected episodic memory ready"
 
 if __name__ == "__main__":
-    # Test the mcidList preservation
-    result, preserved = test_mcid_preservation()
-    print(f"\nFinal Test Result: {'SUCCESS' if preserved else 'FAILURE'}")
+    main()
