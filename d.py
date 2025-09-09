@@ -3,7 +3,8 @@ import yaml
 from datetime import datetime
 from aws_resources import get_boto3_client
 from snowflake.snowpark import Session
-from snowflake.snowpark.functions import col
+from snowflake.snowpark.functions import col, when, lit
+from snowflake.snowpark.types import StringType
 from dependencies import SnowFlakeConnector
 import asyncio
 from llm_client import LLMClient
@@ -114,6 +115,8 @@ def get_result_df(snowpark_session, sf_cfg, paid_start_date, paid_end_date):
         .filter((gb_clm_line["CLM_PAID_DT"] >= paid_start_date) & (gb_clm_line["CLM_PAID_DT"] <= paid_end_date))
         .select(
             claim["CLCL_ID"],
+            claim["PROJ_ID"],
+            claim["CCU_STATUS"],
             gb_clm_line["CLM_PAID_DT"],
             claim["ATXR_SOURCE_ID"],
             attach["ATXR_DEST_ID"],
@@ -123,60 +126,47 @@ def get_result_df(snowpark_session, sf_cfg, paid_start_date, paid_end_date):
         )
     )
  
-#COB Data validation
+#Project details
+def get_project_details(snowpark_session, sf_cfg):
+    project = snowpark_session.table(sf_cfg['project_table'])
+    return project.select(project["PROJ_ID"])
  
+#COB Data validation
+
 def main():
     sf_cfg, s3_cfg = load_config()
     s3, S3_BUCKET, S3_KEY, S3_INPROGRESS_KEY, ctrl_df, last_end_date = handle_batch_control(s3_cfg)
     paid_start_date, paid_end_date = get_paid_dates(last_end_date)
     snowpark_session = get_snowflake_session(sf_cfg)
     result_df = get_result_df(snowpark_session, sf_cfg, paid_start_date, paid_end_date)
+    project_df = get_project_details(snowpark_session, sf_cfg)
 
     #Derive the column CLAIM RECOVERY INDICATOR (clm_rcvr_ind)
-    # Load CCU tables for PROJ_EXISTS logic
-    ccu_claim = snowpark_session.table("P01_EDL.EDL_RAWZ_CMPCT_ALLPHI.CCU_CLAIM_CMPCT")
-    ccu_project = snowpark_session.table("P01_EDL.EDL_RAWZ_CMPCT_ALLPHI.CCU_PROJECT_CMPCT")
-    
-    # Get distinct project IDs
-    project_ids_subquery = ccu_project.select(col("PROJ_ID")).distinct()
-    project_ids_list = [row[0] for row in project_ids_subquery.collect()]
-    
-    # Create PROJ_EXISTS and clm_rcvr_ind logic
-    proj_recovery_df = (
-        ccu_claim
-        .select(
-            col("CLCL_ID"),
-            col("PROJ_ID"),
-            when(
-                (col("PROJ_ID").isin(project_ids_list)) & 
-                (~col("CCU_STATUS").isin(['9', '62', '64'])),
-                lit("Y")
-            ).otherwise(lit("N")).cast(StringType()).alias("PROJ_EXISTS")
-        )
-        .with_column(
-            "clm_rcvr_ind",
-            col("PROJ_EXISTS")
-        )
-    )
-    
-    # Join with original result_df
-    result_df = (
-        result_df
-        .join(
-            proj_recovery_df,
-            result_df["CLCL_ID"] == proj_recovery_df["CLCL_ID"],
-            "left"
-        )
-        .select(
-            result_df["*"],
-            proj_recovery_df["PROJ_EXISTS"],
-            proj_recovery_df["clm_rcvr_ind"]
-        )
-    )
-
     # , CLAIM RECOVERY REASON (clm_rcvr_rsn)
     # , CLAIM RECOVERY NOTES (clm_rcvr_txt)
     #PROJ Exists and Timber
+    result_df = result_df \
+               .join(project_df, result_df["PROJ_ID"] == project_df["PROJ_ID"], "left") \
+               .with_column(
+                   "clm_rcvr_ind",
+                     when(
+                       (project_df["PROJ_ID"].is_not_null()) & 
+                       (~result_df["CCU_STATUS"].isin(['9', '62', '64'])),
+                       lit("Y")
+                   ).otherwise(lit("N")).cast(StringType())
+               ) \
+               .select(
+                   result_df["CLCL_ID"],
+                   result_df["PROJ_ID"], 
+                   result_df["CCU_STATUS"],
+                   result_df["CLM_PAID_DT"],
+                   result_df["ATXR_SOURCE_ID"],
+                   result_df["ATXR_DEST_ID"],
+                   result_df["ATXR_DESC"],
+                   result_df["ATND_SEQ_NO"],
+                   result_df["ATND_TEXT"],
+                   result_df["clm_rcvr_ind"]  # Reference from result_df after with_column
+               )
 
     # Exclution of COB
 
