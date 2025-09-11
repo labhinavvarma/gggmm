@@ -1,5 +1,6 @@
 import json
 import asyncio
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, TypedDict, Literal, Optional
 from dataclasses import dataclass, asdict
@@ -7,7 +8,6 @@ import logging
 from datetime import date
 import requests
 import re
-import uuid
 
 # LangGraph imports
 from langgraph.graph import StateGraph, START, END
@@ -245,12 +245,6 @@ class HealthAnalysisAgent:
         logger.info(f"📡 MCP Server URL: {self.config.fastapi_url}")
         logger.info(f"❤️ Heart Attack ML API: {self.config.heart_attack_api_url}")
         logger.info(f"📊 Graph generation ready for medical data visualizations")
-
-        # Initialize chat methods with enhanced graph support
-        self.chat_with_data = self.chat_with_data
-        self._handle_graph_request_enhanced = self._handle_graph_request_enhanced
-        self._handle_heart_attack_question_enhanced = self._handle_heart_attack_question_enhanced
-        self._handle_general_question_enhanced = self._handle_general_question_enhanced
 
         self.setup_enhanced_langgraph()
 
@@ -803,10 +797,15 @@ class HealthAnalysisAgent:
             return {
                 "success": False,
                 "response": "I encountered an error processing your question. Please try again. I have access to comprehensive deidentified claims data and can generate visualizations for detailed analysis.",
+                "session_id": str(uuid.uuid4()),
                 "graphstart": 0,
                 "graph": False,
                 "graph_type": None,
-                "error": str(e)
+                "error": str(e),
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": "I encountered an error processing your question. Please try again."}
+                ]
             }
 
     def _handle_graph_request_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]], graph_request: Dict[str, Any]) -> Dict[str, Any]:
@@ -972,7 +971,6 @@ COMPREHENSIVE PATIENT DATA AVAILABLE:
 - Compare your clinical assessment with the ML model prediction
 - Explain reasoning using available clinical evidence
 - Include actionable recommendations for risk reduction
-- Generate matplotlib code for risk visualization if relevant
 
 **PROVIDE COMPREHENSIVE CARDIOVASCULAR RISK ANALYSIS:**
 
@@ -1027,17 +1025,16 @@ Use the complete deidentified claims dataset to provide the most accurate and co
                 session_id = str(uuid.uuid4())
 
             if response_text.startswith("Error"):
-                error_response = "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question."
                 return {
                     "success": False,
-                    "response": error_response,
+                    "response": "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question.",
                     "session_id": session_id,
                     "graphstart": 0,
                     "graph": False,
                     "graph_type": None,
                     "updated_chat_history": chat_history + [
                         {"role": "user", "content": user_query},
-                        {"role": "assistant", "content": error_response}
+                        {"role": "assistant", "content": "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question."}
                     ]
                 }
 
@@ -1074,11 +1071,6 @@ Use the complete deidentified claims dataset to provide the most accurate and co
     def _handle_general_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> Dict[str, Any]:
         """Handle general questions with comprehensive context and graph detection"""
         try:
-            # Check if this is a graph-related question
-            graph_request = self.data_processor.detect_graph_request(user_query)
-            if graph_request.get("is_graph_request", False):
-                return self._handle_graph_request_enhanced(user_query, chat_context, chat_history, graph_request)
-                
             # Prepare comprehensive context
             complete_context = self.data_processor.prepare_enhanced_clinical_context(chat_context)
             
@@ -1150,7 +1142,7 @@ Use the complete deidentified claims dataset to provide the most accurate and co
 
             # Call the API integrator with flags support
             api_response = self.api_integrator.call_llm_with_flags(comprehensive_prompt, self.config.chatbot_sys_msg)
-            
+
             # Handle the response based on type
             if isinstance(api_response, dict):
                 response_text = api_response.get("response", "")
@@ -1172,7 +1164,6 @@ Use the complete deidentified claims dataset to provide the most accurate and co
                 success = True
                 session_id = str(uuid.uuid4())
 
-            # Check for error in response
             if response_text.startswith("Error"):
                 error_response = "I encountered an error processing your question. Please try rephrasing it more simply."
                 return {
@@ -1188,7 +1179,6 @@ Use the complete deidentified claims dataset to provide the most accurate and co
                     ]
                 }
 
-            # Return the successful response
             return {
                 "success": success,
                 "response": response_text,
@@ -1204,7 +1194,62 @@ Use the complete deidentified claims dataset to provide the most accurate and co
 
         except Exception as e:
             logger.error(f"Error in enhanced general question: {str(e)}")
-            error_response = "I encountered an error. Please try again with a simpler question or rephrase your request."
+            error_response = "I encountered an error. Please try again with a simpler question."
+            return {
+                "success": False,
+                "response": error_response,
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 0,
+                "graph": False,
+                "graph_type": None,
+                "error": str(e),
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": error_response}
+                ]
+            }
+
+    def format_chat_response(self, api_response: Any, user_query: str, chat_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Format chat response with consistent graph detection flags"""
+        try:
+            if isinstance(api_response, dict):
+                response_text = api_response.get("response", "")
+                graph_flags = {
+                    "graphstart": int(api_response.get("graphstart", 0)),
+                    "graph": bool(api_response.get("graph", False)),
+                    "graph_type": api_response.get("graph_type", None)
+                }
+                success = api_response.get("success", True)
+                session_id = api_response.get("session_id", str(uuid.uuid4()))
+            else:
+                # Handle string response
+                response_text = str(api_response)
+                # Detect graph content in string response
+                graph_detection = self.api_integrator._detect_graph_content(response_text)
+                graph_flags = {
+                    "graphstart": int(graph_detection.get("graphstart", 0)),
+                    "graph": bool(graph_detection.get("graph", False)),
+                    "graph_type": graph_detection.get("graph_type", None)
+                }
+                success = True
+                session_id = str(uuid.uuid4())
+
+            return {
+                "success": success,
+                "response": response_text,
+                "session_id": session_id,
+                "graphstart": graph_flags["graphstart"],
+                "graph": graph_flags["graph"], 
+                "graph_type": graph_flags["graph_type"],
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": response_text}
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"Error formatting chat response: {str(e)}")
+            error_response = "I encountered a formatting error. Please try again."
             return {
                 "success": False,
                 "response": error_response,
