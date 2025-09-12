@@ -352,6 +352,56 @@ class HealthAnalysisAgent:
 
         logger.info("✅ Enhanced LangGraph workflow compiled successfully with JavaScript array visualization!")
 
+    # ===== RESPONSE PARSING UTILITY =====
+    
+    def _safe_parse_response(self, api_response: Any) -> Dict[str, Any]:
+        """Safely parse API response to handle both string and dictionary types"""
+        try:
+            if api_response is None:
+                return {
+                    "response": "No response received from API",
+                    "success": False,
+                    "error": "API returned None"
+                }
+            
+            if isinstance(api_response, dict):
+                # Handle dictionary response
+                response_text = api_response.get("response", "")
+                if not response_text and "content" in api_response:
+                    response_text = api_response.get("content", "")
+                if not response_text:
+                    response_text = str(api_response)
+                    
+                return {
+                    "response": str(response_text),
+                    "success": api_response.get("success", True),
+                    "error": api_response.get("error", None)
+                }
+            
+            elif isinstance(api_response, str):
+                # Handle string response
+                return {
+                    "response": api_response,
+                    "success": not api_response.startswith("Error"),
+                    "error": api_response if api_response.startswith("Error") else None
+                }
+            
+            else:
+                # Handle any other type
+                return {
+                    "response": str(api_response),
+                    "success": True,
+                    "error": None
+                }
+                
+        except Exception as e:
+            logger.error(f"Error parsing API response: {str(e)}")
+            return {
+                "response": f"Error parsing API response: {str(e)}",
+                "success": False,
+                "error": str(e)
+            }
+
     # ===== JAVASCRIPT ARRAY GENERATION METHODS =====
 
     def _generate_javascript_arrays(self, chat_context: Dict[str, Any], graph_type: str) -> Dict[str, Any]:
@@ -666,7 +716,7 @@ class HealthAnalysisAgent:
             } if has_graph else None
         }
 
-    # ===== LANGGRAPH NODES (keeping existing nodes but updating initialize_chatbot) =====
+    # ===== LANGGRAPH NODES =====
 
     def fetch_api_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
         """Node 1: Fetch claims data from APIs"""
@@ -835,13 +885,14 @@ class HealthAnalysisAgent:
 
             logger.info("🤖 Calling Snowflake Cortex for comprehensive trajectory analysis...")
 
-            response = self.api_integrator.call_llm_enhanced(trajectory_prompt, self.config.sys_msg)
+            raw_response = self.api_integrator.call_llm_enhanced(trajectory_prompt, self.config.sys_msg)
+            parsed_response = self._safe_parse_response(raw_response)
 
-            if response.startswith("Error"):
-                state["errors"].append(f"Trajectory analysis failed: {response}")
+            if not parsed_response["success"]:
+                state["errors"].append(f"Trajectory analysis failed: {parsed_response['error']}")
                 state["step_status"]["analyze_trajectory"] = "error"
             else:
-                state["health_trajectory"] = response
+                state["health_trajectory"] = parsed_response["response"]
                 state["step_status"]["analyze_trajectory"] = "completed"
                 logger.info("✅ Successfully completed comprehensive trajectory analysis")
 
@@ -869,13 +920,14 @@ class HealthAnalysisAgent:
 
             logger.info("🤖 Calling Snowflake Cortex for final summary...")
 
-            response = self.api_integrator.call_llm_enhanced(summary_prompt, self.config.sys_msg)
+            raw_response = self.api_integrator.call_llm_enhanced(summary_prompt, self.config.sys_msg)
+            parsed_response = self._safe_parse_response(raw_response)
 
-            if response.startswith("Error"):
-                state["errors"].append(f"Summary generation failed: {response}")
+            if not parsed_response["success"]:
+                state["errors"].append(f"Summary generation failed: {parsed_response['error']}")
                 state["step_status"]["generate_summary"] = "error"
             else:
-                state["final_summary"] = response
+                state["final_summary"] = parsed_response["response"]
                 state["step_status"]["generate_summary"] = "completed"
                 logger.info("✅ Successfully generated comprehensive final summary")
 
@@ -1110,7 +1162,7 @@ class HealthAnalysisAgent:
             
             logger.info(f"📊 Generating {graph_type} JavaScript arrays for user query: {user_query[:50]}...")
             
-            # Generate JavaScript arrays
+            # Generate JavaScript arrays directly
             js_data = self._generate_javascript_arrays(chat_context, graph_type)
             
             # Create response with flags
@@ -1198,10 +1250,14 @@ const data = [percentage1, percentage2, percentage3];
 
             logger.info(f"Processing enhanced heart attack question: {user_query[:50]}...")
 
-            # Call the LLM
-            response = self.api_integrator.call_llm_enhanced(heart_attack_prompt, self.config.chatbot_sys_msg)
+            # Call the LLM with proper response handling
+            raw_response = self.api_integrator.call_llm_enhanced(heart_attack_prompt, self.config.chatbot_sys_msg)
+            parsed_response = self._safe_parse_response(raw_response)
+            
+            response = parsed_response["response"]
+            success = parsed_response["success"]
 
-            if response.startswith("Error"):
+            if not success:
                 error_response = "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question."
                 return {
                     "success": False,
@@ -1304,9 +1360,14 @@ Provide comprehensive analysis using all available deidentified claims data."""
 
             logger.info(f"Processing enhanced general query: {user_query[:50]}...")
 
-            response = self.api_integrator.call_llm_enhanced(comprehensive_prompt, self.config.chatbot_sys_msg)
+            # Call the LLM with proper response handling
+            raw_response = self.api_integrator.call_llm_enhanced(comprehensive_prompt, self.config.chatbot_sys_msg)
+            parsed_response = self._safe_parse_response(raw_response)
+            
+            response = parsed_response["response"]
+            success = parsed_response["success"]
 
-            if response.startswith("Error"):
+            if not success:
                 error_response = "I encountered an error processing your question. Please try rephrasing it."
                 return {
                     "success": False,
@@ -1354,7 +1415,7 @@ Provide comprehensive analysis using all available deidentified claims data."""
                 ]
             }
 
-    # ===== HELPER METHODS (keeping existing helper methods) =====
+    # ===== HELPER METHODS =====
 
     def _create_comprehensive_trajectory_prompt_with_evaluation(self, medical_data: Dict, pharmacy_data: Dict, mcid_data: Dict,
                                                                medical_extraction: Dict, pharmacy_extraction: Dict,
@@ -1644,7 +1705,7 @@ Professional summary, 400-500 words, focusing on actionable insights."""
                 "javascript_array_generation_ready": final_state["javascript_array_generation_ready"],
                 "errors": final_state["errors"],
                 "step_status": final_state["step_status"],
-                "enhancement_version": "v10.0_javascript_array_generation"
+                "enhancement_version": "v10.1_javascript_array_generation_fixed"
             }
 
             if results["success"]:
@@ -1662,13 +1723,13 @@ Professional summary, 400-500 words, focusing on actionable insights."""
                 "patient_data": patient_data,
                 "errors": [str(e)],
                 "javascript_array_generation_ready": False,
-                "enhancement_version": "v10.0_javascript_array_generation"
+                "enhancement_version": "v10.1_javascript_array_generation_fixed"
             }
 
 def main():
-    """Enhanced Health Analysis Agent with JavaScript Array Generation"""
+    """Enhanced Health Analysis Agent with JavaScript Array Generation - FIXED"""
     
-    print("🏥 Enhanced Health Analysis Agent v10.0 - JavaScript Array Generation")
+    print("🏥 Enhanced Health Analysis Agent v10.1 - JavaScript Array Generation (FIXED)")
     print("✅ JavaScript Array features:")
     print("   📊 JavaScript constant array generation instead of matplotlib")
     print("   🎯 Response flags for graph presence detection")
@@ -1676,6 +1737,7 @@ def main():
     print("   📋 Support for diagnosis, medication, risk, and condition charts")
     print("   🔗 Compatible with Chart.js, D3.js, and frontend libraries")
     print("   💬 Enhanced chatbot with structured JavaScript arrays")
+    print("   🔧 FIXED: dict object response parsing error resolved")
     print()
 
     config = Config()
@@ -1688,9 +1750,9 @@ def main():
     print()
     print("⚠️ SECURITY WARNING: API key is hardcoded - move to environment variables!")
     print()
-    print("✅ Enhanced Health Agent ready with JavaScript array generation!")
+    print("✅ Enhanced Health Agent ready with JavaScript array generation - ERROR FIXED!")
 
-    return "Enhanced Health Agent with JavaScript arrays ready"
+    return "Enhanced Health Agent with JavaScript arrays ready - FIXED"
 
 if __name__ == "__main__":
     main()
