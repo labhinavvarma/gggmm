@@ -1,13 +1,13 @@
-
 import json
 import asyncio
-import re
 from datetime import datetime
 from typing import Dict, Any, List, TypedDict, Literal, Optional
 from dataclasses import dataclass, asdict
 import logging
 from datetime import date
 import requests
+import re
+import uuid
 
 # LangGraph imports
 from langgraph.graph import StateGraph, START, END
@@ -31,7 +31,7 @@ class Config:
     aplctn_cd: str = "edagnai"
     model: str = "llama4-maverick"
     
-    # Enhanced system messages with JSON graph generation focus
+    # Enhanced system messages with JavaScript array format focus
     sys_msg: str = """You are Dr. HealthAI, a comprehensive healthcare data analyst and clinical decision support specialist with expertise in:
 
 CLINICAL SPECIALIZATION:
@@ -42,7 +42,7 @@ CLINICAL SPECIALIZATION:
 • Population health management and care coordination
 • Healthcare economics and cost prediction
 • Quality metrics (HEDIS, STAR ratings) and care gap analysis
-• JSON-based healthcare data visualization and charting
+• JavaScript array format data visualization generation
 
 DATA ACCESS CAPABILITIES:
 • Complete deidentified medical claims with ICD-10 diagnosis codes and CPT procedure codes
@@ -56,23 +56,21 @@ DATA ACCESS CAPABILITIES:
 ANALYTICAL RESPONSIBILITIES:
 You provide comprehensive healthcare analysis including clinical insights, risk assessments, predictive modeling, and evidence-based recommendations using ALL available deidentified claims data. Always reference specific data points, codes, dates, and clinical indicators from the provided records when making assessments.
 
-JSON GRAPH GENERATION CAPABILITIES:
-You can generate JSON data structures for healthcare data visualizations including:
-• Diagnosis frequency charts with ICD-10 codes
-• Medication distribution charts with NDC codes
-• Risk assessment dashboards with percentage data
-• Health condition distributions
-• Utilization trend analysis data
-• Timeline data for medical events
+JAVASCRIPT ARRAY GENERATION CAPABILITIES:
+You can generate JavaScript constant arrays for healthcare data visualizations including:
+• Diagnosis frequency arrays with ICD-10 codes as categories
+• Medication distribution arrays with NDC codes or medication names
+• Risk assessment arrays with percentage values
+• Health condition distribution arrays
+• Utilization trend arrays with temporal data
+• Timeline arrays for medical events
 
-JSON OUTPUT FORMAT:
-When generating graph data, always output in this structure:
-{
-  "categories": ["Category1", "Category2", "Category3"],
-  "data": [value1, value2, value3],
-  "chart_type": "specific_chart_type",
-  "additional_metadata": {}
-}
+JAVASCRIPT OUTPUT FORMAT:
+When generating graph data, always output in this EXACT JavaScript format:
+```javascript
+const categories = ["Category1", "Category2", "Category3", "Category4"];
+const data = [value1, value2, value3, value4];
+```
 
 RESPONSE STANDARDS:
 • Use clinical terminology appropriately while ensuring clarity
@@ -81,9 +79,9 @@ RESPONSE STANDARDS:
 • Include risk stratification and predictive insights
 • Reference exact field names and values from the JSON data structure
 • Maintain professional healthcare analysis standards
-• Generate JSON chart data when visualization is requested"""
+• Generate JavaScript constant arrays when visualization is requested"""
 
-    chatbot_sys_msg: str = """You are Dr. ChatAI, a specialized healthcare AI assistant with COMPLETE ACCESS to comprehensive deidentified medical and pharmacy claims data. You serve as a clinical decision support tool for healthcare analysis with advanced JSON-based graph generation capabilities.
+    chatbot_sys_msg: str = """You are Dr. ChatAI, a specialized healthcare AI assistant with COMPLETE ACCESS to comprehensive deidentified medical and pharmacy claims data. You serve as a clinical decision support tool for healthcare analysis with advanced JavaScript array generation capabilities.
 
 COMPREHENSIVE DATA ACCESS:
 ✅ MEDICAL CLAIMS DATA:
@@ -105,11 +103,13 @@ COMPREHENSIVE DATA ACCESS:
    • Clinical complexity scoring and care gap analysis
    • Batch-processed code meanings for all medical and pharmacy codes
 
-✅ JSON GRAPH GENERATION CAPABILITIES:
-   • Generate JSON data structures for healthcare visualizations
-   • Create diagnosis frequency data, medication timeline data, risk dashboard data
-   • Support real-time JSON chart data generation and formatting
-   • Provide complete, structured data with metadata for frontend charting libraries
+✅ JAVASCRIPT ARRAY GENERATION CAPABILITIES:
+   • Generate JavaScript constant arrays for healthcare visualizations
+   • Create diagnosis frequency data with ICD-10 codes
+   • Generate medication distribution data with NDC codes/names
+   • Build risk assessment arrays with percentage values
+   • Support real-time JavaScript array generation and formatting
+   • Provide complete, structured data arrays for frontend chart libraries
 
 ADVANCED CAPABILITIES:
 🔬 CLINICAL ANALYSIS:
@@ -137,20 +137,20 @@ ADVANCED CAPABILITIES:
    • Preventive care opportunity identification
    • Personalized care plan recommendations
 
-📈 JSON VISUALIZATION CAPABILITIES:
-   • Generate JSON data for diagnosis frequency charts
-   • Create risk assessment dashboard data with multiple metrics
-   • Develop diagnosis progression timeline data
-   • Build comprehensive health overview chart data
-   • Support custom JSON structure requests for any chart type
+📈 JAVASCRIPT VISUALIZATION CAPABILITIES:
+   • Generate JavaScript arrays for diagnosis frequency charts
+   • Create medication distribution arrays with proper formatting
+   • Develop risk assessment dashboard arrays
+   • Build comprehensive health overview arrays
+   • Support custom JavaScript array requests for any chart type
 
-JSON GRAPH GENERATION PROTOCOL:
+JAVASCRIPT ARRAY GENERATION PROTOCOL:
 When asked to create a graph or visualization:
 1. **Detect Request**: Identify graph type from user query
 2. **Extract Data**: Pull relevant healthcare data from claims
-3. **Generate JSON**: Create structured JSON with categories and data arrays
-4. **Add Metadata**: Include chart type and additional information
-5. **Format Response**: Provide JSON with clear boundary indicators
+3. **Generate Arrays**: Create JavaScript constant arrays with categories and data
+4. **Format Response**: Provide JavaScript constants with proper syntax
+5. **Add Context**: Include brief explanation of the data
 
 RESPONSE PROTOCOL:
 1. **DATA-DRIVEN ANALYSIS**: Always use specific data from the provided claims records
@@ -158,16 +158,17 @@ RESPONSE PROTOCOL:
 3. **PREDICTIVE INSIGHTS**: Provide forward-looking analysis based on available clinical indicators
 4. **ACTIONABLE RECOMMENDATIONS**: Suggest specific clinical actions and care management strategies
 5. **PROFESSIONAL STANDARDS**: Maintain clinical accuracy while ensuring patient safety considerations
-6. **JSON GRAPH GENERATION**: Provide structured JSON data when visualization is requested
+6. **JAVASCRIPT ARRAYS**: Provide structured JavaScript arrays when visualization is requested
 
-JSON RESPONSE FORMAT:
+JAVASCRIPT RESPONSE FORMAT:
 When generating graphs, respond with:
 ```
 [Brief explanation of what the visualization shows]
 
-[Complete JSON structure with categories and data]
-
-<!-- GRAPH_METADATA: PRESENT=true, JSON_START=[position], JSON_END=[position], TYPE=[graph_type] -->
+```javascript
+const categories = ["Category1", "Category2", "Category3"];
+const data = [value1, value2, value3];
+```
 
 [Clinical insights from the visualization]
 ```
@@ -180,10 +181,11 @@ CRITICAL INSTRUCTIONS:
 • Cite exact field paths and values from the JSON data structure
 • Explain medical terminology and provide clinical context
 • Focus on actionable clinical insights and care management recommendations
-• Generate structured JSON data for visualization requests with proper metadata markers
-• Use actual patient data in JSON structures when available
+• Generate structured JavaScript arrays for visualization requests
+• Use actual patient data in JavaScript arrays when available
+• ALWAYS format JavaScript arrays exactly as: const categories = [...]; const data = [...];
 
-You have comprehensive access to this patient's complete healthcare data - use it to provide detailed, professional medical analysis, clinical decision support, and structured JSON data visualizations."""
+You have comprehensive access to this patient's complete healthcare data - use it to provide detailed, professional medical analysis, clinical decision support, and structured JavaScript data visualizations."""
 
     timeout: int = 30
 
@@ -225,11 +227,11 @@ class HealthAnalysisState(TypedDict):
     heart_attack_risk_score: float
     heart_attack_features: Dict[str, Any]
 
-    # Enhanced chatbot functionality with JSON graph generation
+    # Enhanced chatbot functionality with JavaScript array generation
     chatbot_ready: bool
     chatbot_context: Dict[str, Any]
     chat_history: List[Dict[str, str]]
-    json_graph_generation_ready: bool
+    javascript_array_generation_ready: bool
 
     # Control flow
     current_step: str
@@ -239,7 +241,7 @@ class HealthAnalysisState(TypedDict):
     step_status: Dict[str, str]
 
 class HealthAnalysisAgent:
-    """Enhanced Health Analysis Agent with Comprehensive Clinical Analysis and JSON Graph Generation"""
+    """Enhanced Health Analysis Agent with Comprehensive Clinical Analysis and JavaScript Array Generation"""
 
     def __init__(self, custom_config: Optional[Config] = None):
         self.config = custom_config or Config()
@@ -248,18 +250,18 @@ class HealthAnalysisAgent:
         self.api_integrator = EnhancedHealthAPIIntegrator(self.config)
         self.data_processor = EnhancedHealthDataProcessor(self.api_integrator)
 
-        logger.info("🔧 Enhanced HealthAnalysisAgent initialized with JSON Graph Generation")
+        logger.info("🔧 Enhanced HealthAnalysisAgent initialized with JavaScript Array Generation")
         logger.info(f"🌐 Snowflake API URL: {self.config.api_url}")
         logger.info(f"🤖 Model: {self.config.model}")
         logger.info(f"📡 MCP Server URL: {self.config.fastapi_url}")
         logger.info(f"❤️ Heart Attack ML API: {self.config.heart_attack_api_url}")
-        logger.info(f"📊 JSON graph generation ready for healthcare data visualizations")
+        logger.info(f"📊 JavaScript array generation ready for healthcare data visualizations")
 
         self.setup_enhanced_langgraph()
 
     def setup_enhanced_langgraph(self):
-        """Setup enhanced LangGraph workflow with comprehensive analysis and JSON graph generation support"""
-        logger.info("🔧 Setting up Enhanced LangGraph workflow with JSON-based visualization...")
+        """Setup enhanced LangGraph workflow with comprehensive analysis and JavaScript array generation support"""
+        logger.info("🔧 Setting up Enhanced LangGraph workflow with JavaScript array visualization...")
 
         workflow = StateGraph(HealthAnalysisState)
 
@@ -348,40 +350,35 @@ class HealthAnalysisAgent:
         memory = MemorySaver()
         self.graph = workflow.compile(checkpointer=memory)
 
-        logger.info("✅ Enhanced LangGraph workflow compiled successfully with JSON-based visualization!")
+        logger.info("✅ Enhanced LangGraph workflow compiled successfully with JavaScript array visualization!")
 
-    # ===== JSON GRAPH GENERATION METHODS =====
+    # ===== JAVASCRIPT ARRAY GENERATION METHODS =====
 
-    def _convert_matplotlib_to_json(self, matplotlib_code: str, chat_context: Dict[str, Any], graph_type: str) -> Dict[str, Any]:
-        """Convert healthcare data to JSON chart data structure"""
+    def _generate_javascript_arrays(self, chat_context: Dict[str, Any], graph_type: str) -> Dict[str, Any]:
+        """Generate JavaScript constant arrays for healthcare data visualization"""
         try:
-            # Extract relevant data from chat context based on graph type
-            json_data = {"categories": [], "data": []}
-            
             if graph_type == "diagnosis_timeline" or "diagnosis" in graph_type.lower():
-                json_data = self._extract_diagnosis_json_data(chat_context)
+                return self._extract_diagnosis_javascript_arrays(chat_context)
             elif graph_type == "medication_timeline" or "medication" in graph_type.lower():
-                json_data = self._extract_medication_json_data(chat_context)
+                return self._extract_medication_javascript_arrays(chat_context)
             elif graph_type == "risk_dashboard" or "risk" in graph_type.lower():
-                json_data = self._extract_risk_json_data(chat_context)
+                return self._extract_risk_javascript_arrays(chat_context)
             elif graph_type == "condition_distribution" or "condition" in graph_type.lower():
-                json_data = self._extract_condition_json_data(chat_context)
+                return self._extract_condition_javascript_arrays(chat_context)
             else:
                 # Default to diagnosis data
-                json_data = self._extract_diagnosis_json_data(chat_context)
+                return self._extract_diagnosis_javascript_arrays(chat_context)
                 
-            return json_data
-            
         except Exception as e:
-            logger.error(f"Error converting healthcare data to JSON: {str(e)}")
+            logger.error(f"Error generating JavaScript arrays: {str(e)}")
             return {
                 "categories": ["No Data"],
                 "data": [0],
-                "error": f"Data extraction failed: {str(e)}"
+                "error": f"Array generation failed: {str(e)}"
             }
 
-    def _extract_diagnosis_json_data(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract diagnosis data in JSON format"""
+    def _extract_diagnosis_javascript_arrays(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract diagnosis data in JavaScript array format"""
         try:
             medical_extraction = chat_context.get("medical_extraction", {})
             records = medical_extraction.get("hlth_srvc_records", [])
@@ -398,7 +395,8 @@ class HealthAnalysisAgent:
             if not diagnosis_counts:
                 return {
                     "categories": ["No Diagnoses Found"],
-                    "data": [0]
+                    "data": [0],
+                    "javascript_code": 'const categories = ["No Diagnoses Found"];\nconst data = [0];'
                 }
             
             # Sort by frequency (most common first)
@@ -407,9 +405,15 @@ class HealthAnalysisAgent:
             categories = [item[0] for item in sorted_diagnoses]
             data = [item[1] for item in sorted_diagnoses]
             
+            # Generate JavaScript code
+            categories_js = json.dumps(categories)
+            data_js = str(data)
+            javascript_code = f'const categories = {categories_js};\nconst data = {data_js};'
+            
             return {
                 "categories": categories,
                 "data": data,
+                "javascript_code": javascript_code,
                 "chart_type": "diagnosis_frequency",
                 "total_diagnoses": len(categories),
                 "total_occurrences": sum(data)
@@ -419,11 +423,12 @@ class HealthAnalysisAgent:
             return {
                 "categories": ["Data Error"],
                 "data": [0],
+                "javascript_code": 'const categories = ["Data Error"];\nconst data = [0];',
                 "error": str(e)
             }
 
-    def _extract_medication_json_data(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract medication data in JSON format"""
+    def _extract_medication_javascript_arrays(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract medication data in JavaScript array format"""
         try:
             pharmacy_extraction = chat_context.get("pharmacy_extraction", {})
             records = pharmacy_extraction.get("ndc_records", [])
@@ -434,15 +439,21 @@ class HealthAnalysisAgent:
                 med_name = record.get("lbl_nm", "Unknown Medication")
                 ndc = record.get("ndc", "Unknown")
                 
-                # Use medication name as primary identifier
+                # Use medication name or NDC code as identifier
                 if med_name and med_name != "Unknown Medication":
-                    key = f"{med_name}"
-                    medication_counts[key] = medication_counts.get(key, 0) + 1
+                    key = med_name
+                elif ndc and ndc != "Unknown":
+                    key = ndc
+                else:
+                    key = "Unknown Medication"
+                
+                medication_counts[key] = medication_counts.get(key, 0) + 1
             
             if not medication_counts:
                 return {
                     "categories": ["No Medications Found"],
-                    "data": [0]
+                    "data": [0],
+                    "javascript_code": 'const categories = ["No Medications Found"];\nconst data = [0];'
                 }
             
             # Sort by frequency
@@ -451,9 +462,15 @@ class HealthAnalysisAgent:
             categories = [item[0] for item in sorted_meds]
             data = [item[1] for item in sorted_meds]
             
+            # Generate JavaScript code
+            categories_js = json.dumps(categories)
+            data_js = str(data)
+            javascript_code = f'const categories = {categories_js};\nconst data = {data_js};'
+            
             return {
                 "categories": categories,
                 "data": data,
+                "javascript_code": javascript_code,
                 "chart_type": "medication_frequency",
                 "total_medications": len(categories),
                 "total_fills": sum(data)
@@ -463,11 +480,12 @@ class HealthAnalysisAgent:
             return {
                 "categories": ["Data Error"],
                 "data": [0],
+                "javascript_code": 'const categories = ["Data Error"];\nconst data = [0];',
                 "error": str(e)
             }
 
-    def _extract_risk_json_data(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract risk assessment data in JSON format"""
+    def _extract_risk_javascript_arrays(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract risk assessment data in JavaScript array format"""
         try:
             entity_extraction = chat_context.get("entity_extraction", {})
             heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
@@ -498,9 +516,15 @@ class HealthAnalysisAgent:
             categories.append("Smoking Risk")
             data.append(smoking_risk)
             
+            # Generate JavaScript code
+            categories_js = json.dumps(categories)
+            data_js = str(data)
+            javascript_code = f'const categories = {categories_js};\nconst data = {data_js};'
+            
             return {
                 "categories": categories,
                 "data": data,
+                "javascript_code": javascript_code,
                 "chart_type": "risk_assessment",
                 "risk_scale": "percentage_0_to_100"
             }
@@ -509,11 +533,12 @@ class HealthAnalysisAgent:
             return {
                 "categories": ["Risk Assessment Error"],
                 "data": [0],
+                "javascript_code": 'const categories = ["Risk Assessment Error"];\nconst data = [0];',
                 "error": str(e)
             }
 
-    def _extract_condition_json_data(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract condition distribution data in JSON format"""
+    def _extract_condition_javascript_arrays(self, chat_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract condition distribution data in JavaScript array format"""
         try:
             entity_extraction = chat_context.get("entity_extraction", {})
             medical_conditions = entity_extraction.get("medical_conditions", [])
@@ -538,12 +563,19 @@ class HealthAnalysisAgent:
                 if not categories:
                     return {
                         "categories": ["No Conditions Identified"],
-                        "data": [0]
+                        "data": [0],
+                        "javascript_code": 'const categories = ["No Conditions Identified"];\nconst data = [0];'
                     }
                     
+                # Generate JavaScript code for basic indicators
+                categories_js = json.dumps(categories)
+                data_js = str(data)
+                javascript_code = f'const categories = {categories_js};\nconst data = {data_js};'
+                
                 return {
                     "categories": categories,
                     "data": data,
+                    "javascript_code": javascript_code,
                     "chart_type": "condition_presence"
                 }
             
@@ -562,9 +594,15 @@ class HealthAnalysisAgent:
             categories = list(condition_counts.keys())
             data = list(condition_counts.values())
             
+            # Generate JavaScript code
+            categories_js = json.dumps(categories)
+            data_js = str(data)
+            javascript_code = f'const categories = {categories_js};\nconst data = {data_js};'
+            
             return {
                 "categories": categories,
                 "data": data,
+                "javascript_code": javascript_code,
                 "chart_type": "condition_distribution",
                 "total_conditions": len(categories)
             }
@@ -573,65 +611,62 @@ class HealthAnalysisAgent:
             return {
                 "categories": ["Data Error"],
                 "data": [0],
+                "javascript_code": 'const categories = ["Data Error"];\nconst data = [0];',
                 "error": str(e)
             }
 
-    def _create_json_graph_response(self, graph_json: str, graph_type: str, json_data: Dict[str, Any]) -> str:
-        """Create formatted response with JSON graph data and indicators"""
+    def _create_javascript_response(self, js_data: Dict[str, Any], graph_type: str, user_query: str) -> Dict[str, Any]:
+        """Create formatted response with JavaScript arrays and flags"""
         
-        # Calculate JSON boundaries
-        intro_text = f"## Healthcare Data Visualization - {graph_type.replace('_', ' ').title()}\n\n"
+        # Extract JavaScript code
+        javascript_code = js_data.get("javascript_code", "")
         
-        if json_data.get("error"):
-            intro_text += f"⚠️ Data extraction encountered an issue: {json_data['error']}\n\n"
+        # Check if we have valid data
+        has_graph = len(js_data.get("categories", [])) > 0 and js_data.get("categories")[0] != "No Data"
         
-        intro_text += "**Graph Data:**\n\n"
+        # Create response text
+        response_text = f"## Healthcare Data Visualization - {graph_type.replace('_', ' ').title()}\n\n"
         
-        json_start_pos = len(intro_text)
-        json_end_pos = json_start_pos + len(graph_json)
+        if js_data.get("error"):
+            response_text += f"⚠️ Data extraction encountered an issue: {js_data['error']}\n\n"
+            has_graph = False
         
-        conclusion_text = f"\n\n**Chart Information:**\n"
-        conclusion_text += f"- Chart Type: {json_data.get('chart_type', graph_type)}\n"
-        conclusion_text += f"- Categories: {len(json_data.get('categories', []))}\n"
-        conclusion_text += f"- Data Points: {len(json_data.get('data', []))}\n"
-        
-        if json_data.get('total_diagnoses'):
-            conclusion_text += f"- Total Diagnoses: {json_data['total_diagnoses']}\n"
-        if json_data.get('total_medications'):
-            conclusion_text += f"- Total Medications: {json_data['total_medications']}\n"
-        if json_data.get('total_conditions'):
-            conclusion_text += f"- Total Conditions: {json_data['total_conditions']}\n"
+        if has_graph:
+            response_text += "I'll create the healthcare data visualization using the following JavaScript arrays:\n\n"
+            response_text += f"```javascript\n{javascript_code}\n```\n\n"
             
-        conclusion_text += "\nThis JSON data structure can be used with any charting library (Chart.js, D3.js, etc.) to create interactive healthcare visualizations."
-        
-        # Complete response
-        complete_response = intro_text + graph_json + conclusion_text
-        
-        # Add metadata as special markers in response
-        metadata = f"\n\n<!-- GRAPH_METADATA: PRESENT=true, JSON_START={json_start_pos}, JSON_END={json_end_pos}, TYPE={graph_type} -->"
-        complete_response += metadata
-        
-        return complete_response
+            # Add context about the data
+            response_text += f"**Chart Information:**\n"
+            response_text += f"- Chart Type: {js_data.get('chart_type', graph_type)}\n"
+            response_text += f"- Categories: {len(js_data.get('categories', []))}\n"
+            response_text += f"- Data Points: {len(js_data.get('data', []))}\n"
+            
+            if js_data.get('total_diagnoses'):
+                response_text += f"- Total Diagnoses: {js_data['total_diagnoses']}\n"
+            if js_data.get('total_medications'):
+                response_text += f"- Total Medications: {js_data['total_medications']}\n"
+            if js_data.get('total_conditions'):
+                response_text += f"- Total Conditions: {js_data['total_conditions']}\n"
+                
+            response_text += "\nThese JavaScript constant arrays can be used directly with Chart.js, D3.js, or any frontend charting library to create interactive healthcare visualizations."
+        else:
+            response_text += "No visualization data available for this request. Please try a different chart type or check if patient data is available."
 
-    def _create_error_response(self, error_message: str) -> str:
-        """Create error response with no graph indicator"""
-        response = f"""## Graph Generation Error
+        return {
+            "success": has_graph,
+            "response": response_text,
+            "session_id": str(uuid.uuid4()),
+            "graphstart": 1 if has_graph else 0,
+            "graph": has_graph,
+            "graph_type": "javascript_arrays" if has_graph else None,
+            "javascript_arrays": {
+                "categories": js_data.get("categories", []),
+                "data": js_data.get("data", []),
+                "javascript_code": javascript_code
+            } if has_graph else None
+        }
 
-I encountered an error while generating your requested visualization: {error_message}
-
-Available Graph Types:
-- **Diagnosis Distribution**: "show me diagnosis frequency chart"
-- **Medication Analysis**: "create medication distribution chart"  
-- **Risk Dashboard**: "generate risk assessment visualization"
-- **Condition Overview**: "show condition distribution"
-
-Please try rephrasing your request with one of these specific graph types.
-
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=error -->"""
-        
-        return response
-
-    # ===== LANGGRAPH NODES =====
+    # ===== LANGGRAPH NODES (keeping existing nodes but updating initialize_chatbot) =====
 
     def fetch_api_data(self, state: HealthAnalysisState) -> HealthAnalysisState:
         """Node 1: Fetch claims data from APIs"""
@@ -948,8 +983,8 @@ Please try rephrasing your request with one of these specific graph types.
         return state
 
     def initialize_chatbot(self, state: HealthAnalysisState) -> HealthAnalysisState:
-        """Node 8: Initialize comprehensive chatbot with JSON graph generation"""
-        logger.info("💬 Node 8: Initializing comprehensive chatbot with JSON graph generation...")
+        """Node 8: Initialize comprehensive chatbot with JavaScript array generation"""
+        logger.info("💬 Node 8: Initializing comprehensive chatbot with JavaScript array generation...")
         state["current_step"] = "initialize_chatbot"
         state["step_status"]["initialize_chatbot"] = "running"
 
@@ -971,7 +1006,7 @@ Please try rephrasing your request with one of these specific graph types.
                     "age": state.get("deidentified_medical", {}).get("src_mbr_age", "unknown"),
                     "zip": state.get("deidentified_medical", {}).get("src_mbr_zip_cd", "unknown"),
                     "analysis_timestamp": datetime.now().isoformat(),
-                    "json_graph_generation_supported": True,
+                    "javascript_array_generation_supported": True,
                     "chart_types_available": ["diagnosis_frequency", "medication_frequency", "risk_assessment", "condition_distribution"]
                 }
             }
@@ -979,11 +1014,11 @@ Please try rephrasing your request with one of these specific graph types.
             state["chat_history"] = []
             state["chatbot_context"] = comprehensive_chatbot_context
             state["chatbot_ready"] = True
-            state["json_graph_generation_ready"] = True
+            state["javascript_array_generation_ready"] = True
             state["processing_complete"] = True
             state["step_status"]["initialize_chatbot"] = "completed"
 
-            logger.info("✅ Successfully initialized comprehensive chatbot with JSON graph generation")
+            logger.info("✅ Successfully initialized comprehensive chatbot with JavaScript array generation")
 
         except Exception as e:
             error_msg = f"Error initializing chatbot: {str(e)}"
@@ -1035,10 +1070,10 @@ Please try rephrasing your request with one of these specific graph types.
     def should_continue_after_heart_attack_prediction(self, state: HealthAnalysisState) -> Literal["continue", "error"]:
         return "error" if state["errors"] else "continue"
 
-    # ===== ENHANCED CHATBOT FUNCTIONALITY WITH JSON GRAPH GENERATION =====
+    # ===== ENHANCED CHATBOT FUNCTIONALITY WITH JAVASCRIPT ARRAY GENERATION =====
 
-    def chat_with_data(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
-        """Enhanced chatbot with JSON graph generation instead of matplotlib"""
+    def chat_with_data(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Enhanced chatbot with JavaScript array generation"""
         try:
             # Check if this is a graph request
             graph_request = self.data_processor.detect_graph_request(user_query)
@@ -1057,34 +1092,67 @@ Please try rephrasing your request with one of these specific graph types.
 
         except Exception as e:
             logger.error(f"Error in enhanced chatbot: {str(e)}")
-            return """I encountered an error processing your question. Please try again. I have access to comprehensive deidentified claims data and can generate JSON visualizations for detailed analysis.
-
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=error -->"""
+            return {
+                "success": False,
+                "response": "I encountered an error processing your question. Please try again. I have access to comprehensive deidentified claims data and can generate JavaScript arrays for detailed analysis.",
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 0,
+                "graph": False,
+                "graph_type": None,
+                "error": str(e)
+            }
 
     def _handle_graph_request_enhanced(self, user_query: str, chat_context: Dict[str, Any], 
-                                     chat_history: List[Dict[str, str]], graph_request: Dict[str, Any]) -> str:
-        """Handle graph generation requests with JSON format output"""
+                                     chat_history: List[Dict[str, str]], graph_request: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle graph generation requests with JavaScript array format output"""
         try:
             graph_type = graph_request.get("graph_type", "general")
             
-            logger.info(f"📊 Generating {graph_type} JSON visualization for user query: {user_query[:50]}...")
+            logger.info(f"📊 Generating {graph_type} JavaScript arrays for user query: {user_query[:50]}...")
             
-            # Convert to JSON format
-            json_data = self._convert_matplotlib_to_json("", chat_context, graph_type)
+            # Generate JavaScript arrays
+            js_data = self._generate_javascript_arrays(chat_context, graph_type)
             
-            # Create JSON string
-            graph_json = json.dumps(json_data, indent=2)
+            # Create response with flags
+            response_result = self._create_javascript_response(js_data, graph_type, user_query)
             
-            # Create response with indicators
-            response = self._create_json_graph_response(graph_json, graph_type, json_data)
+            # Add updated chat history
+            response_result["updated_chat_history"] = chat_history + [
+                {"role": "user", "content": user_query},
+                {"role": "assistant", "content": response_result["response"]}
+            ]
             
-            return response
+            return response_result
                 
         except Exception as e:
             logger.error(f"Error handling enhanced graph request: {str(e)}")
-            return self._create_error_response(str(e))
+            fallback_response = f"""## Graph Generation Error
 
-    def _handle_heart_attack_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
+I encountered an error while generating your requested visualization: {str(e)}
+
+Available Graph Types:
+- **Diagnosis Distribution**: "show me diagnosis frequency chart"
+- **Medication Analysis**: "create medication distribution chart"  
+- **Risk Dashboard**: "generate risk assessment visualization"
+- **Condition Overview**: "show condition distribution"
+
+Please try rephrasing your request with one of these specific graph types."""
+
+            return {
+                "success": False,
+                "response": fallback_response,
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 0,
+                "graph": False,
+                "graph_type": None,
+                "error": str(e),
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": fallback_response}
+                ]
+            }
+
+    def _handle_heart_attack_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> Dict[str, Any]:
         """Handle heart attack related questions with comprehensive analysis"""
         try:
             heart_attack_prediction = chat_context.get("heart_attack_prediction", {})
@@ -1122,29 +1190,72 @@ Please try rephrasing your request with one of these specific graph types.
 
 Provide a comprehensive cardiovascular risk assessment using all available data. Reference specific clinical findings and compare with the ML model prediction. Include actionable recommendations.
 
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=heart_attack_analysis -->"""
+If the user requests a chart or visualization, generate JavaScript constant arrays in this format:
+```javascript
+const categories = ["Risk Factor 1", "Risk Factor 2", "Risk Factor 3"];
+const data = [percentage1, percentage2, percentage3];
+```"""
 
             logger.info(f"Processing enhanced heart attack question: {user_query[:50]}...")
 
+            # Call the LLM
             response = self.api_integrator.call_llm_enhanced(heart_attack_prompt, self.config.chatbot_sys_msg)
 
             if response.startswith("Error"):
-                return """I encountered an error analyzing cardiovascular risk. Please try rephrasing your question.
+                error_response = "I encountered an error analyzing cardiovascular risk. Please try rephrasing your question."
+                return {
+                    "success": False,
+                    "response": error_response,
+                    "session_id": str(uuid.uuid4()),
+                    "graphstart": 0,
+                    "graph": False,
+                    "graph_type": None,
+                    "updated_chat_history": chat_history + [
+                        {"role": "user", "content": user_query},
+                        {"role": "assistant", "content": error_response}
+                    ]
+                }
 
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=error -->"""
+            # Check if response contains JavaScript arrays
+            has_js_arrays = "const categories" in response and "const data" in response
 
-            # Add metadata to response
-            return response + "\n\n<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=heart_attack_analysis -->"
+            return {
+                "success": True,
+                "response": response,
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 1 if has_js_arrays else 0,
+                "graph": has_js_arrays,
+                "graph_type": "javascript_arrays" if has_js_arrays else None,
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": response}
+                ]
+            }
 
         except Exception as e:
             logger.error(f"Error in enhanced heart attack question: {str(e)}")
-            return """I encountered an error with cardiovascular analysis. Please try again.
+            error_response = "I encountered an error with cardiovascular analysis. Please try again."
+            return {
+                "success": False,
+                "response": error_response,
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 0,
+                "graph": False,
+                "graph_type": None,
+                "error": str(e),
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": error_response}
+                ]
+            }
 
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=error -->"""
-
-    def _handle_general_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> str:
+    def _handle_general_question_enhanced(self, user_query: str, chat_context: Dict[str, Any], chat_history: List[Dict[str, str]]) -> Dict[str, Any]:
         """Handle general questions with comprehensive context"""
         try:
+            # Check if this is a graph-related question
+            graph_keywords = ['chart', 'graph', 'visualization', 'plot', 'diagram', 'show me', 'display', 'generate']
+            might_be_graph = any(keyword in user_query.lower() for keyword in graph_keywords)
+            
             # Prepare context
             medical_records = len(chat_context.get("medical_extraction", {}).get("hlth_srvc_records", []))
             pharmacy_records = len(chat_context.get("pharmacy_extraction", {}).get("ndc_records", []))
@@ -1160,7 +1271,7 @@ Provide a comprehensive cardiovascular risk assessment using all available data.
                     history_lines.append(f"{role}: {content}")
                 history_text = "\n".join(history_lines)
 
-            comprehensive_prompt = f"""You are Dr. AnalysisAI, a healthcare data analyst with access to comprehensive patient claims data and JSON visualization capabilities.
+            comprehensive_prompt = f"""You are Dr. AnalysisAI, a healthcare data analyst with access to comprehensive patient claims data and JavaScript array generation capabilities.
 
 **COMPREHENSIVE DATA AVAILABLE:**
 - Medical Records: {medical_records} health service records
@@ -1177,11 +1288,17 @@ Provide a comprehensive cardiovascular risk assessment using all available data.
 - Use specific data from claims when relevant
 - Reference exact codes, dates, and clinical findings
 - Explain medical terminology and provide clinical context
-- Generate JSON chart data if visualization would be helpful
+- If the question requests charts/visualizations, generate JavaScript constant arrays
 - Provide evidence-based insights and recommendations
 
-**JSON CHART GENERATION:**
-If the question would benefit from a chart, mention that you can "generate JSON chart data" and specify the type (diagnosis frequency, medication analysis, risk assessment, or condition distribution).
+**JAVASCRIPT CHART GENERATION:**
+If the question would benefit from a chart, generate JavaScript arrays in this EXACT format:
+```javascript
+const categories = ["Category1", "Category2", "Category3", "Category4"];
+const data = [value1, value2, value3, value4];
+```
+
+Available chart types: diagnosis frequency, medication analysis, risk assessment, condition distribution.
 
 Provide comprehensive analysis using all available deidentified claims data."""
 
@@ -1190,20 +1307,54 @@ Provide comprehensive analysis using all available deidentified claims data."""
             response = self.api_integrator.call_llm_enhanced(comprehensive_prompt, self.config.chatbot_sys_msg)
 
             if response.startswith("Error"):
-                return """I encountered an error processing your question. Please try rephrasing it.
+                error_response = "I encountered an error processing your question. Please try rephrasing it."
+                return {
+                    "success": False,
+                    "response": error_response,
+                    "session_id": str(uuid.uuid4()),
+                    "graphstart": 0,
+                    "graph": False,
+                    "graph_type": None,
+                    "updated_chat_history": chat_history + [
+                        {"role": "user", "content": user_query},
+                        {"role": "assistant", "content": error_response}
+                    ]
+                }
 
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=error -->"""
+            # Check if response contains JavaScript arrays
+            has_js_arrays = "const categories" in response and "const data" in response
 
-            # Add metadata to response
-            return response + "\n\n<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=general_analysis -->"
+            return {
+                "success": True,
+                "response": response,
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 1 if has_js_arrays else 0,
+                "graph": has_js_arrays,
+                "graph_type": "javascript_arrays" if has_js_arrays else None,
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": response}
+                ]
+            }
 
         except Exception as e:
             logger.error(f"Error in enhanced general question: {str(e)}")
-            return """I encountered an error. Please try again with a simpler question.
+            error_response = "I encountered an error. Please try again with a simpler question."
+            return {
+                "success": False,
+                "response": error_response,
+                "session_id": str(uuid.uuid4()),
+                "graphstart": 0,
+                "graph": False,
+                "graph_type": None,
+                "error": str(e),
+                "updated_chat_history": chat_history + [
+                    {"role": "user", "content": user_query},
+                    {"role": "assistant", "content": error_response}
+                ]
+            }
 
-<!-- GRAPH_METADATA: PRESENT=false, JSON_START=0, JSON_END=0, TYPE=error -->"""
-
-    # ===== HELPER METHODS =====
+    # ===== HELPER METHODS (keeping existing helper methods) =====
 
     def _create_comprehensive_trajectory_prompt_with_evaluation(self, medical_data: Dict, pharmacy_data: Dict, mcid_data: Dict,
                                                                medical_extraction: Dict, pharmacy_extraction: Dict,
@@ -1466,7 +1617,7 @@ Professional summary, 400-500 words, focusing on actionable insights."""
             chatbot_ready=False,
             chatbot_context={},
             chat_history=[],
-            json_graph_generation_ready=False,
+            javascript_array_generation_ready=False,
             current_step="",
             errors=[],
             retry_count=0,
@@ -1477,7 +1628,7 @@ Professional summary, 400-500 words, focusing on actionable insights."""
         try:
             config_dict = {"configurable": {"thread_id": f"enhanced_health_analysis_{datetime.now().timestamp()}"}}
 
-            logger.info("🚀 Starting Enhanced LangGraph workflow with JSON graph generation...")
+            logger.info("🚀 Starting Enhanced LangGraph workflow with JavaScript array generation...")
 
             final_state = self.graph.invoke(initial_state, config=config_dict)
 
@@ -1490,14 +1641,14 @@ Professional summary, 400-500 words, focusing on actionable insights."""
                 "heart_attack_prediction": final_state["heart_attack_prediction"],
                 "chatbot_ready": final_state["chatbot_ready"],
                 "chatbot_context": final_state["chatbot_context"],
-                "json_graph_generation_ready": final_state["json_graph_generation_ready"],
+                "javascript_array_generation_ready": final_state["javascript_array_generation_ready"],
                 "errors": final_state["errors"],
                 "step_status": final_state["step_status"],
-                "enhancement_version": "v9.0_json_graph_generation"
+                "enhancement_version": "v10.0_javascript_array_generation"
             }
 
             if results["success"]:
-                logger.info("✅ Enhanced LangGraph analysis completed with JSON graph generation!")
+                logger.info("✅ Enhanced LangGraph analysis completed with JavaScript array generation!")
             else:
                 logger.error(f"❌ Enhanced LangGraph analysis failed: {final_state['errors']}")
 
@@ -1510,81 +1661,21 @@ Professional summary, 400-500 words, focusing on actionable insights."""
                 "error": str(e),
                 "patient_data": patient_data,
                 "errors": [str(e)],
-                "json_graph_generation_ready": False,
-                "enhancement_version": "v9.0_json_graph_generation"
+                "javascript_array_generation_ready": False,
+                "enhancement_version": "v10.0_javascript_array_generation"
             }
 
-# Helper functions to parse graph metadata from responses
-def parse_graph_metadata(response: str) -> Dict[str, Any]:
-    """Parse graph metadata from response"""
-    try:
-        metadata_pattern = r'<!-- GRAPH_METADATA: (.*?) -->'
-        match = re.search(metadata_pattern, response)
-        
-        if not match:
-            return {"present": False, "json_start": 0, "json_end": 0, "type": "none"}
-        
-        metadata_str = match.group(1)
-        metadata = {}
-        
-        for pair in metadata_str.split(', '):
-            if '=' in pair:
-                key, value = pair.split('=', 1)
-                key = key.strip().lower()
-                value = value.strip()
-                
-                if value.lower() == 'true':
-                    metadata[key] = True
-                elif value.lower() == 'false':
-                    metadata[key] = False
-                elif value.isdigit():
-                    metadata[key] = int(value)
-                else:
-                    metadata[key] = value
-        
-        return metadata
-        
-    except Exception as e:
-        return {"present": False, "json_start": 0, "json_end": 0, "type": "error", "parse_error": str(e)}
-
-def extract_graph_json_from_response(response: str) -> Dict[str, Any]:
-    """Extract graph JSON data from chatbot response"""
-    try:
-        metadata = parse_graph_metadata(response)
-        
-        if not metadata.get("present", False):
-            return {"has_graph": False, "data": None, "metadata": metadata}
-        
-        json_start = metadata.get("json_start", 0)
-        json_end = metadata.get("json_end", 0)
-        
-        if json_start == 0 and json_end == 0:
-            return {"has_graph": False, "data": None, "error": "Invalid JSON boundaries"}
-        
-        json_str = response[json_start:json_end]
-        graph_data = json.loads(json_str)
-        
-        return {
-            "has_graph": True,
-            "data": graph_data,
-            "metadata": metadata,
-            "json_boundaries": {"start": json_start, "end": json_end}
-        }
-        
-    except Exception as e:
-        return {"has_graph": False, "data": None, "error": str(e)}
-
 def main():
-    """Enhanced Health Analysis Agent with JSON Graph Generation"""
+    """Enhanced Health Analysis Agent with JavaScript Array Generation"""
     
-    print("🏥 Enhanced Health Analysis Agent v9.0 - JSON Graph Generation")
-    print("✅ New JSON-based features:")
-    print("   📊 JSON chart data generation instead of matplotlib code")
-    print("   🎯 Response indicators for graph presence detection")
-    print("   📍 JSON boundary markers for precise data extraction")
+    print("🏥 Enhanced Health Analysis Agent v10.0 - JavaScript Array Generation")
+    print("✅ JavaScript Array features:")
+    print("   📊 JavaScript constant array generation instead of matplotlib")
+    print("   🎯 Response flags for graph presence detection")
+    print("   📍 Exact format: const categories = [...]; const data = [...];")
     print("   📋 Support for diagnosis, medication, risk, and condition charts")
-    print("   🔗 Compatible with Chart.js, D3.js, and other frontend libraries")
-    print("   💬 Enhanced chatbot with structured data visualization")
+    print("   🔗 Compatible with Chart.js, D3.js, and frontend libraries")
+    print("   💬 Enhanced chatbot with structured JavaScript arrays")
     print()
 
     config = Config()
@@ -1593,13 +1684,13 @@ def main():
     print(f"   🤖 Model: {config.model}")
     print(f"   📡 Server: {config.fastapi_url}")
     print(f"   ❤️ Heart Attack ML API: {config.heart_attack_api_url}")
-    print(f"   📊 JSON Graph Generation: Active")
+    print(f"   📊 JavaScript Array Generation: Active")
     print()
     print("⚠️ SECURITY WARNING: API key is hardcoded - move to environment variables!")
     print()
-    print("✅ Enhanced Health Agent ready with JSON graph generation!")
+    print("✅ Enhanced Health Agent ready with JavaScript array generation!")
 
-    return "Enhanced Health Agent with JSON graphs ready"
+    return "Enhanced Health Agent with JavaScript arrays ready"
 
 if __name__ == "__main__":
     main()
