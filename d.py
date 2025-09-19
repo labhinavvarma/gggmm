@@ -1,59 +1,58 @@
-# Use official Node.js LTS image
-FROM node:20-alpine AS base
+# Dependencies
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# Install dependencies only when needed
-FROM base AS deps
-# Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
-RUN apk add --no-cache libc6-compat
-WORKDIR /app
+# Build outputs
+.next
+out
+dist
+build
 
-# Copy package files
-COPY package*.json ./
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Install dependencies with legacy peer deps to handle React version conflicts
-RUN npm ci --legacy-peer-deps
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
 
-# Rebuild the source code only when needed
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Create .env.local if it doesn't exist (add environment variables as needed)
-RUN touch .env.local
+# Git
+.git
+.gitignore
 
-# Build the application
-RUN npm run build
+# Docker
+Dockerfile
+.dockerignore
 
-# Production image, copy all the files and run next
-FROM base AS runner
-WORKDIR /app
+# Documentation
+README.md
+*.md
 
-ENV NODE_ENV production
-# Uncomment the following line in case you want to disable telemetry during runtime.
-# ENV NEXT_TELEMETRY_DISABLED 1
+# Logs
+logs
+*.log
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Testing
+coverage
+.nyc_output
 
-# Copy the public folder
-COPY --from=builder /app/public ./public
-
-# Set the correct permission for prerender cache
-RUN mkdir .next
-RUN chown nextjs:nodejs .next
-
-# Automatically leverage output traces to reduce image size
-# https://nextjs.org/docs/advanced-features/output-file-tracing
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-USER nextjs
-
-EXPOSE 3000
-
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
-
-# Start the application
-CMD ["node", "server.js"]
+# Cache
+.cache
+.eslintcache
