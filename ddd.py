@@ -32,6 +32,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV VERCEL_ENV=""
 
 # Build the application
 RUN npm run build
